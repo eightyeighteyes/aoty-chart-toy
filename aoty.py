@@ -50,7 +50,8 @@ LASTFM_USERS = [u.strip() for u in os.environ.get("LASTFM_USERS", "").split(",")
 ALBUMS_PER_USER = 100
 
 # Albums per MusicBrainz search. MB allows 1 request/second, so batching is
-# the only way to go faster. Each album can pull in a few near-miss results
+# the only way to go faster. AOTY-10 measured 10/20/40: 20 was fastest in both runs
+# (10 needs twice the requests; a failed 40-album batch dumps 40 singles). Each album can pull in a few near-miss results
 # ("1989 [nightcore]"), and a search returns at most 100, so keep this well
 # under 100. Albums that a batch misses get retried one at a time.
 MB_BATCH_SIZE = 20
@@ -62,11 +63,14 @@ MB_HEADERS = {
     "User-Agent": f"kamp-aoty/0.1.0 ( {os.environ.get('MB_CONTACT') or 'contact@example.com'} )"
 }
 MB_MIN_INTERVAL = 1.1
-# What to do after a 503. "exponential": wait MB_MIN_INTERVAL * 2**attempt.
-# "retry-after": wait what the 503's Retry-After header says (at least MB_MIN_INTERVAL),
-# plus up to MB_JITTER seconds so retries don't line up.
-MB_BACKOFF = "exponential"
-MB_MAX_ATTEMPTS = 4
+# What to do after a 503. "retry-after": wait what the 503's Retry-After header says
+# (at least MB_MIN_INTERVAL), plus up to MB_JITTER seconds so retries don't line up.
+# "exponential": wait MB_MIN_INTERVAL * 2**attempt (the old behaviour).
+# AOTY-10 benchmark: ~half of all requests get a 503 whatever our pacing, always with
+# Retry-After: 1, so retry-after x8 resolved albums ~2x faster than exponential x4 and
+# lost none, where exponential x4 gave up on ~1% of albums. Details in CLAUDE.md.
+MB_BACKOFF = "retry-after"
+MB_MAX_ATTEMPTS = 8
 MB_JITTER = 0.5
 
 # Edition suffixes Last.fm often has but MusicBrainz release-group titles don't,
