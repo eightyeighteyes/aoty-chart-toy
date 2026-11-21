@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Scratch notes (fmbot dumps etc. carry Discord names)
+.scratch/
+
+# Build output and local caches (rankings, MusicBrainz/cover caches, the page).
+# The CSV and page also contain members' usernames and play counts.
+data/
+site/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor
+.vscode/
+
+# macOS
+.DS_Store
