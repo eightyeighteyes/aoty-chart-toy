@@ -35,6 +35,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `tools/mb_cold_run.py` | MusicBrainz benchmark (AOTY-10). Cold lookups of a frozen, shuffled candidate list (`data/mb_bench/candidates.json`, no usernames) into `data/mb_bench/run-<ts>/`, rotating batch-size / interval arms. Never touches the real caches (path assert + checksum). `--limit 40 --chunk 10` is a 30 s dry run. Don't run anything else that hits MusicBrainz at the same time. |
 | `tools/mb_analyze.py` | Per-arm markdown tables for one or more `run-*` folders: 503 rate, server p50/p95, sleep vs server, retry cost, albums/s, rate-limit headers, years diff vs the real cache. |
 | `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
+| `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
 | `.env` | `LASTFM_API_KEY`, `LASTFM_USERS`, `MB_CONTACT` — git-ignored. `.env.example` documents it. |
 
 ## Running
@@ -122,6 +123,26 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
   - `mb_report` prints a per-run summary and appends per-attempt rows (status, timing, rate-limit
     headers) to `data/mb_requests.csv`.
 - `MB_HEADERS` User-Agent falls back to a placeholder contact (`contact@example.com`) unless `MB_CONTACT` is set in `.env`; MB asks for a real one.
+
+## Last.fm data cost (AOTY-11 spike, 2026-11-21, 19 members)
+
+- Year to date, members have 3.4k–34k scrobbles (mean 11.3k), which is 17–170 `getRecentTracks` pages
+  at 200 per page. Each page takes about 1 s, so a heavy backfill is 3 min single-threaded. There were
+  no error-29 rate limits at 4 req/s.
+- **`user.getWeeklyAlbumChart` takes arbitrary `from`/`to`**, not only `getWeeklyChartList` boundaries
+  (Sunday 12:00 UTC). Shifted weeks, a calendar month and the current partial week match counted
+  scrobbles exactly. It is live, with no lag. **Each response is capped at about 1,000 album rows**
+  (`limit` doesn't lift it), so the year-to-date range comes back short. Split any range whose result
+  is near the cap.
+- **Charts group by album artist; scrobbles carry only the track artist.** Compilations ("Various
+  Artists") and featured-artist tracks split into many keys when you count scrobbles. Weekly play totals
+  are still identical. Charts match `getTopAlbums`/M0's grouping; counting scrobbles doesn't.
+- Charts have album MBIDs (69–83% of rows) but **no images**. Recent tracks have covers for about 94%
+  of albums and MBIDs for about 84%. `extended=1` adds nothing for either and makes pages 61% bigger,
+  so don't use it.
+- The now-playing track is returned even for a pinned window in the past, so drop rows with no `date`.
+  A nonexistent user returns error 6. The private-account error (17?) wasn't tested, because no member
+  hides their listening.
 
 ## Page — design decisions
 
