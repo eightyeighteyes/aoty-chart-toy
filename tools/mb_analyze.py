@@ -82,7 +82,8 @@ def table(title, labelled):
 
 def arm_label(meta, arm):
   a = next(x for x in meta["arms"] if x["arm"] == arm)
-  return f"{arm} (b{a['batch_size']}, {a['interval']}s)"
+  backoff = "retry-after" if a.get("backoff") == "retry-after" else "exp"
+  return f"{arm} (b{a['batch_size']}, {a['interval']}s, {backoff} x{a.get('max_attempts', 4)})"
 
 
 def main(paths):
@@ -145,9 +146,11 @@ def main(paths):
     print("Years vs real cache: " + ", ".join(f"{k} {n}" for k, n in diff.most_common()))
 
   if len(runs) > 1:
-    meta = runs[0]["meta"]
+    def label(a):
+      meta = next(r["meta"] for r in runs if any(x["arm"] == a for x in r["meta"]["arms"]))
+      return arm_label(meta, a)
     table(f"All {len(runs)} runs pooled",
-          [(arm_label(meta, a), arm_stats(pooled_rows[a], pooled_chunks[a])) for a in sorted(pooled_rows)])
+          [(label(a), arm_stats(pooled_rows[a], pooled_chunks[a])) for a in sorted(pooled_rows)])
 
 
 if __name__ == "__main__":

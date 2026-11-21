@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import random
 import re
 import time
 import unicodedata
@@ -61,6 +62,12 @@ MB_HEADERS = {
     "User-Agent": f"kamp-aoty/0.1.0 ( {os.environ.get('MB_CONTACT') or 'contact@example.com'} )"
 }
 MB_MIN_INTERVAL = 1.1
+# What to do after a 503. "exponential": wait MB_MIN_INTERVAL * 2**attempt.
+# "retry-after": wait what the 503's Retry-After header says (at least MB_MIN_INTERVAL),
+# plus up to MB_JITTER seconds so retries don't line up.
+MB_BACKOFF = "exponential"
+MB_MAX_ATTEMPTS = 4
+MB_JITTER = 0.5
 
 # Edition suffixes Last.fm often has but MusicBrainz release-group titles don't,
 # e.g. "Album (Deluxe Edition)" or "Album [Remastered 2011]".
@@ -178,9 +185,14 @@ def mb_search(query, limit, entity="release-group", n_albums=1):
   global _last_mb_request
   url = f"https://musicbrainz.org/ws/2/{entity}/"
   params = {"query": query, "fmt": "json", "limit": limit}
-  for attempt in range(4):
+  retry_after = MB_MIN_INTERVAL
+  for attempt in range(MB_MAX_ATTEMPTS):
     # Respect MusicBrainz rate limit (max 1 request per second), backing off on 503
-    wait = MB_MIN_INTERVAL * (2 ** attempt) - (time.monotonic() - _last_mb_request)
+    if attempt and MB_BACKOFF == "retry-after":
+      gap = max(MB_MIN_INTERVAL, retry_after) + random.uniform(0, MB_JITTER)
+    else:
+      gap = MB_MIN_INTERVAL * (2 ** attempt)
+    wait = gap - (time.monotonic() - _last_mb_request)
     slept = max(wait, 0.0)
     if slept:
       time.sleep(slept)
@@ -201,7 +213,11 @@ def mb_search(query, limit, entity="release-group", n_albums=1):
     for column, header in _MB_HEADER_COLUMNS.items():
       stat[column] = response.headers.get(header, "")
     if response.status_code == 503:
-      print(f"  MusicBrainz 503 (throttled) on attempt {attempt + 1}/4, backing off")
+      try:
+        retry_after = float(response.headers.get("Retry-After", MB_MIN_INTERVAL))
+      except ValueError:
+        retry_after = MB_MIN_INTERVAL
+      print(f"  MusicBrainz 503 (throttled) on attempt {attempt + 1}/{MB_MAX_ATTEMPTS}, backing off")
       continue
     if response.status_code != 200:
       print(f"  MusicBrainz HTTP {response.status_code}")

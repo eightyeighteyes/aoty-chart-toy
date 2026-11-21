@@ -26,14 +26,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import aoty  # noqa: E402  (patched as a module object below, never `from aoty import`)
 
-# (arm, batch size, min interval). Back-off is MB_MIN_INTERVAL * 2**attempt, so the
-# slower interval also tests a gentler back-off.
-ARMS = [
-    ("A", 20, 1.1),  # current settings
-    ("B", 10, 1.1),
-    ("C", 40, 1.1),
-    ("D", 20, 2.0),
-]
+# arm: (batch size, min interval, back-off, max attempts). With "exponential" back-off
+# the wait is MB_MIN_INTERVAL * 2**attempt, so D's slower interval also backs off slower.
+ARMS = {
+    "A": (20, 1.1, "exponential", 4),  # settings before AOTY-10
+    "B": (10, 1.1, "exponential", 4),
+    "C": (40, 1.1, "exponential", 4),
+    "D": (20, 2.0, "exponential", 4),  # run 1 only: slower was strictly worse
+    "E": (20, 1.1, "retry-after", 8),  # honour Retry-After (always 1 s in run 1), more tries
+}
+DEFAULT_ARMS = "A,B,C,E"
 
 BENCH_DIR = aoty.DATA_DIR / "mb_bench"
 CANDIDATES_FILE = BENCH_DIR / "candidates.json"
@@ -65,7 +67,12 @@ def main():
   parser.add_argument("--chunk", type=int, default=100, help="albums per chunk (default 100)")
   parser.add_argument("--limit", type=int, help="only the first N shuffled albums (dry run)")
   parser.add_argument("--refresh", action="store_true", help="refetch candidates from Last.fm")
+  parser.add_argument("--arms", default=DEFAULT_ARMS,
+                      help=f"comma-separated arms from {','.join(ARMS)} (default {DEFAULT_ARMS})")
   args = parser.parse_args()
+  arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+  if not arms or any(a not in ARMS for a in arms):
+    raise SystemExit(f"--arms must be a comma-separated subset of {','.join(ARMS)}")
 
   real_cache = aoty.CACHE_FILE.resolve()
   real_paths = {real_cache, aoty.OUTPUT_CSV.resolve(), aoty.MB_STATS_CSV.resolve()}
@@ -87,16 +94,23 @@ def main():
 
   meta = {"run_dir": str(run_dir), "seed": args.seed, "chunk_size": args.chunk,
           "limit": args.limit, "albums": len(albums), "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
-          "arms": [{"arm": a, "batch_size": b, "interval": i} for a, b, i in ARMS], "chunks": []}
+          "arms": [{"arm": a, "batch_size": ARMS[a][0], "interval": ARMS[a][1],
+                    "backoff": ARMS[a][2], "max_attempts": ARMS[a][3]} for a in arms],
+          "chunks": []}
   cache = {}
   try:
     for n, start in enumerate(range(0, len(albums), args.chunk)):
       chunk = albums[start:start + args.chunk]
-      arm, batch_size, interval = ARMS[n % len(ARMS)]
+      arm = arms[n % len(arms)]
+      batch_size, interval, backoff, max_attempts = ARMS[arm]
       aoty.MB_BATCH_SIZE = batch_size
       aoty.MB_MIN_INTERVAL = interval
-      aoty.MB_TAG = {"arm": arm, "chunk": n, "batch_size": batch_size, "interval": interval}
-      print(f"\n== chunk {n} arm {arm}: {len(chunk)} albums, batch {batch_size}, interval {interval}s")
+      aoty.MB_BACKOFF = backoff
+      aoty.MB_MAX_ATTEMPTS = max_attempts
+      aoty.MB_TAG = {"arm": arm, "chunk": n, "batch_size": batch_size, "interval": interval,
+                     "backoff": backoff}
+      print(f"\n== chunk {n} arm {arm}: {len(chunk)} albums, batch {batch_size},"
+            f" interval {interval}s, {backoff} back-off x{max_attempts}")
       chunk_start = time.monotonic()
       aoty.lookup_years(chunk, cache)
       keys = [aoty.cache_key(*p) for p in chunk]
