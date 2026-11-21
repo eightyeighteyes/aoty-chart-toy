@@ -72,11 +72,23 @@ _EDITION_RE = re.compile(
 
 _last_mb_request = 0.0
 
-# One row per mb_search attempt (status, server time, sleep), summarised by mb_report
-# and appended to MB_STATS_CSV, to explain where a run's MusicBrainz time goes.
+# One row per mb_search attempt (status, server time, sleep, rate-limit headers),
+# summarised by mb_report and appended to MB_STATS_CSV, to explain where a run's
+# MusicBrainz time goes.
 MB_STATS = []
 MB_STATS_CSV = DATA_DIR / "mb_requests.csv"
 _RUN_STARTED = time.strftime("%Y-%m-%dT%H:%M:%S")
+_RUN_T0 = time.monotonic()
+# Extra columns merged into every MB_STATS row. Empty in normal runs; a benchmark
+# harness (tools/mb_cold_run.py) sets e.g. {"arm": "A", "chunk": 3} to label rows.
+MB_TAG = {}
+# Response headers worth keeping: MusicBrainz's rate-limit state and back-off hint.
+_MB_HEADER_COLUMNS = {
+    "retry_after": "Retry-After",
+    "rl_limit": "X-RateLimit-Limit",
+    "rl_remaining": "X-RateLimit-Remaining",
+    "rl_reset": "X-RateLimit-Reset",
+}
 
 
 def norm(s):
@@ -173,8 +185,10 @@ def mb_search(query, limit, entity="release-group", n_albums=1):
     if slept:
       time.sleep(slept)
     _last_mb_request = time.monotonic()
-    stat = {"entity": entity, "n_albums": n_albums, "limit": limit, "attempt": attempt + 1,
-            "slept": slept, "status": "error", "elapsed": 0.0, "results": ""}
+    stat = {**MB_TAG, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "t": _last_mb_request - _RUN_T0, "entity": entity, "n_albums": n_albums,
+            "limit": limit, "attempt": attempt + 1, "slept": slept, "status": "error",
+            "elapsed": 0.0, "results": ""}
     MB_STATS.append(stat)
     try:
       response = requests.get(url, params=params, headers=MB_HEADERS, timeout=30)
@@ -184,6 +198,8 @@ def mb_search(query, limit, entity="release-group", n_albums=1):
       continue
     stat["elapsed"] = time.monotonic() - _last_mb_request
     stat["status"] = response.status_code
+    for column, header in _MB_HEADER_COLUMNS.items():
+      stat[column] = response.headers.get(header, "")
     if response.status_code == 503:
       print(f"  MusicBrainz 503 (throttled) on attempt {attempt + 1}/4, backing off")
       continue
@@ -225,16 +241,25 @@ def mb_report(script):
           f" server p50 {_pct(ok, 50):.2f}s p95 {_pct(ok, 95):.2f}s max {max(ok):.2f}s,"
           f" slept {sum(s['slept'] for s in rows):.0f}s")
 
-  DATA_DIR.mkdir(exist_ok=True)
-  fields = ["run", "script", "entity", "n_albums", "limit", "attempt", "status",
-            "slept", "elapsed", "results"]
+  base = ["run", "script", "ts", "t", "entity", "n_albums", "limit", "attempt", "status",
+          "slept", "elapsed", "results", *_MB_HEADER_COLUMNS]
+  fields = base + sorted({k for s in MB_STATS for k in s} - set(base))
+  MB_STATS_CSV.parent.mkdir(parents=True, exist_ok=True)
+  # Appending under a different header would misalign columns, so set an old-format
+  # file aside rather than mixing the two.
+  if MB_STATS_CSV.exists():
+    with open(MB_STATS_CSV, encoding="utf-8") as f:
+      header = f.readline().strip().split(",")
+    if header != fields:
+      MB_STATS_CSV.rename(MB_STATS_CSV.with_name(
+          f"{MB_STATS_CSV.stem}.{time.strftime('%Y%m%d-%H%M%S')}{MB_STATS_CSV.suffix}"))
   new_file = not MB_STATS_CSV.exists()
   with open(MB_STATS_CSV, "a", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=fields)
+    writer = csv.DictWriter(f, fieldnames=fields, restval="")
     if new_file:
       writer.writeheader()
     for s in MB_STATS:
-      writer.writerow({**s, "run": _RUN_STARTED, "script": script,
+      writer.writerow({**s, "run": _RUN_STARTED, "script": script, "t": f"{s['t']:.3f}",
                        "slept": f"{s['slept']:.3f}", "elapsed": f"{s['elapsed']:.3f}"})
   print(f"  Per-request rows appended to {MB_STATS_CSV}")
 
@@ -305,19 +330,26 @@ def lookup_years(pairs, cache):
   save_cache(cache)
 
 
-def main():
+def require_config():
   if not LASTFM_API_KEY:
     raise SystemExit("Set LASTFM_API_KEY in .env (see .env.example)")
   if not LASTFM_USERS:
     raise SystemExit("Set LASTFM_USERS in .env (comma-separated Last.fm usernames; see .env.example)")
-  DATA_DIR.mkdir(exist_ok=True)
 
+
+def fetch_plays_and_candidates(users):
+  """Each user's full 12-month album list from Last.fm.
+
+  Returns (plays, candidates): plays is [(user, artist, album, playcount)] over every
+  album; candidates is [(artist, album)] from each user's top ALBUMS_PER_USER, with
+  repeats (one per user who has it there).
+  """
   # Last.fm has a much looser rate limit than MusicBrainz, so fetch users in parallel.
   with ThreadPoolExecutor(max_workers=4) as pool:
-    results = list(pool.map(lambda u: (u, get_user_top_albums(u, period="12month")), LASTFM_USERS))
+    results = list(pool.map(lambda u: (u, get_user_top_albums(u, period="12month")), users))
 
-  plays = []  # (user, artist, album, playcount), from each user's full list
-  candidates = []  # (artist, album) in some user's top ALBUMS_PER_USER
+  plays = []
+  candidates = []
   for user, albums in results:
     print(f"{user}: {len(albums)} albums")
     for rank, item in enumerate(albums):
@@ -327,6 +359,13 @@ def main():
         plays.append((user, artist, album_name, int(item["playcount"])))
         if rank < ALBUMS_PER_USER:
           candidates.append((artist, album_name))
+  return plays, candidates
+
+
+def main():
+  require_config()
+  DATA_DIR.mkdir(exist_ok=True)
+  plays, candidates = fetch_plays_and_candidates(LASTFM_USERS)
 
   # Look up every distinct candidate once, up front, so they can be batched.
   # Only candidates are looked up: the long tail would cost ~10x the MB requests.
