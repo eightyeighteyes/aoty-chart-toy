@@ -37,6 +37,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
 | `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
 | `.env` | `LASTFM_API_KEY`, `LASTFM_USERS`, `MB_CONTACT` — git-ignored. `.env.example` documents it. |
+| `infra/` | Terraform for M1 (AOTY-14): `global/` (GitHub OIDC provider, CI roles, admin-only), `envs/{staging,prod}/` (thin roots), `modules/stack/` (one environment). `infra/README.md` has the layout, ownership rules and bootstrap. |
 
 ## Running
 
@@ -160,6 +161,22 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
   carries `data-fallbacks` (`ar0/` original, then `174s/`); `coverFallback` in `<head>`
   walks those, then swaps in the initials tile. A 200 from curl here doesn't mean the
   user's browser or CDN edge gets one.
+
+## Infrastructure (AOTY-14, 2026-11-21)
+
+Details are in `infra/README.md`. Things to keep in mind when changing it:
+
+- **Never give the PR plan role broad reads.** The repo is public, any same-repo PR can use the
+  role, and kamp-site's state (`site/` in the same bucket) holds the kamp deploy user's secret key.
+- **A blanket `kms:Decrypt` deny hides Lambda environment variables** from `GetFunction` and makes
+  a permanent diff. Deny decryption through SSM only.
+- **Assumed-role sessions outlive a trust change.** The CLI caches them for up to 1 h, so to test
+  that a trust was removed, use a fresh `aws sts assume-role`.
+- **The Lambda concurrency limit was 10**, so reserved concurrency is impossible until the quota
+  increase is granted (requested 2026-11-21).
+- The deploy roles only allow what's in use. New resource types mean editing
+  `global/ci_roles.tf` and having the admin apply `global` first.
+- Testing role policies from the laptop uses `admin_assume_principal`. Turn it off afterwards.
 
 ## Open items
 
