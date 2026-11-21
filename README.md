@@ -37,6 +37,11 @@ years are cached in `data/mb_release_year_cache.json`, so later runs only look u
 Both scripts print a MusicBrainz timing summary and append per-request rows to
 `data/mb_requests.csv`.
 
+## Web app infrastructure
+
+The M1 web app (kamp.fm/toys/aoty/) runs serverless on AWS, managed by Terraform in `infra/`.
+See [infra/README.md](infra/README.md).
+
 ## MusicBrainz benchmark
 
 `tools/mb_cold_run.py` re-runs the MusicBrainz lookups cold, against a scratch cache, comparing
