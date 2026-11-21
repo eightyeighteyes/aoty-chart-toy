@@ -391,8 +391,22 @@ data "aws_iam_policy_document" "plan" {
   statement {
     sid       = "NeverSecrets"
     effect    = "Deny"
-    actions   = ["ssm:GetParameter*", "kms:Decrypt", "secretsmanager:GetSecretValue"]
+    actions   = ["ssm:GetParameter*", "secretsmanager:GetSecretValue"]
     resources = ["*"]
+  }
+  # Only decryption through SSM. A blanket kms:Decrypt deny also hides Lambda environment
+  # variables (GetFunction returns them only to callers that can decrypt them), and that shows up
+  # as a permanent diff. Lambda env vars hold no secrets by design.
+  statement {
+    sid       = "NeverDecryptParams"
+    effect    = "Deny"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${local.region}.amazonaws.com"]
+    }
   }
 }
 
