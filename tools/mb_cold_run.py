@@ -34,51 +34,57 @@ ARMS = {
     "C": (40, 1.1, "exponential", 4),
     "D": (20, 2.0, "exponential", 4),  # run 1 only: slower was strictly worse
     "E": (20, 1.1, "retry-after", 8),  # honour Retry-After (always 1 s in run 1), more tries
+    "L": (20, 1.1, "retry-after", 8),  # E's settings, labelled apart for AWS Lambda runs (AOTY-12)
 }
 DEFAULT_ARMS = "A,B,C,E"
 
 BENCH_DIR = aoty.DATA_DIR / "mb_bench"
 CANDIDATES_FILE = BENCH_DIR / "candidates.json"
+# The real files, captured at import so a run (or a warm Lambda's next run) can't
+# mistake a patched scratch path for them.
+REAL_PATHS = {"CACHE_FILE": aoty.CACHE_FILE, "OUTPUT_CSV": aoty.OUTPUT_CSV,
+              "MB_STATS_CSV": aoty.MB_STATS_CSV}
 
 
 def sha256(path):
   return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
-def load_candidates(refresh):
-  if CANDIDATES_FILE.exists() and not refresh:
-    data = json.loads(CANDIDATES_FILE.read_text(encoding="utf-8"))
-    print(f"Using {len(data['albums'])} frozen candidates from {CANDIDATES_FILE} ({data['fetched']})")
+def load_candidates(candidates_file=CANDIDATES_FILE, refresh=False):
+  if candidates_file.exists() and not refresh:
+    data = json.loads(candidates_file.read_text(encoding="utf-8"))
+    print(f"Using {len(data['albums'])} frozen candidates from {candidates_file} ({data['fetched']})")
     return [tuple(p) for p in data["albums"]]
   aoty.require_config()
   _, candidates = aoty.fetch_plays_and_candidates(aoty.LASTFM_USERS)
   albums = list(dict.fromkeys(candidates))  # unique, first-seen order; no usernames kept
-  BENCH_DIR.mkdir(parents=True, exist_ok=True)
-  CANDIDATES_FILE.write_text(json.dumps(
+  candidates_file.parent.mkdir(parents=True, exist_ok=True)
+  candidates_file.write_text(json.dumps(
       {"fetched": time.strftime("%Y-%m-%dT%H:%M:%S"), "albums": albums},
       ensure_ascii=False, indent=0), encoding="utf-8")
-  print(f"Froze {len(albums)} candidates to {CANDIDATES_FILE}")
+  print(f"Froze {len(albums)} candidates to {candidates_file}")
   return albums
 
 
-def main():
-  parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-  parser.add_argument("--seed", type=int, default=2026, help="shuffle seed (default 2026)")
-  parser.add_argument("--chunk", type=int, default=100, help="albums per chunk (default 100)")
-  parser.add_argument("--limit", type=int, help="only the first N shuffled albums (dry run)")
-  parser.add_argument("--refresh", action="store_true", help="refetch candidates from Last.fm")
-  parser.add_argument("--arms", default=DEFAULT_ARMS,
-                      help=f"comma-separated arms from {','.join(ARMS)} (default {DEFAULT_ARMS})")
-  args = parser.parse_args()
-  arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+def parse_arms(text):
+  arms = [a.strip() for a in text.split(",") if a.strip()]
   if not arms or any(a not in ARMS for a in arms):
     raise SystemExit(f"--arms must be a comma-separated subset of {','.join(ARMS)}")
+  return arms
 
-  real_cache = aoty.CACHE_FILE.resolve()
-  real_paths = {real_cache, aoty.OUTPUT_CSV.resolve(), aoty.MB_STATS_CSV.resolve()}
+
+def run(arms, *, bench_dir=BENCH_DIR, candidates_file=CANDIDATES_FILE, seed=2026, chunk=100,
+        limit=None, offset=0, refresh=False, deadline=None, extra_meta=None):
+  """Benchmark `arms` on the shuffled candidates[offset:offset+limit]; returns the run folder.
+
+  `deadline`, if given, is called before each chunk; when it returns True no more chunks
+  start and the run is marked interrupted (AWS Lambda stops at 15 minutes).
+  """
+  real_cache = REAL_PATHS["CACHE_FILE"].resolve()
+  real_paths = {p.resolve() for p in REAL_PATHS.values()}
   real_sum = sha256(real_cache)
 
-  run_dir = BENCH_DIR / f"run-{time.strftime('%Y%m%d-%H%M%S')}"
+  run_dir = bench_dir / f"run-{time.strftime('%Y%m%d-%H%M%S')}"
   run_dir.mkdir(parents=True)
   aoty.CACHE_FILE = run_dir / "cache.json"
   aoty.OUTPUT_CSV = run_dir / "unused.csv"
@@ -87,20 +93,24 @@ def main():
     if path.resolve() in real_paths or run_dir.resolve() not in path.resolve().parents:
       raise SystemExit(f"Refusing to run: {path} is not a scratch path under {run_dir}")
 
-  albums = load_candidates(args.refresh)
-  random.Random(args.seed).shuffle(albums)
-  if args.limit:
-    albums = albums[:args.limit]
+  albums = load_candidates(candidates_file, refresh)
+  random.Random(seed).shuffle(albums)
+  albums = albums[offset:offset + limit if limit else None]
 
-  meta = {"run_dir": str(run_dir), "seed": args.seed, "chunk_size": args.chunk,
-          "limit": args.limit, "albums": len(albums), "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+  meta = {"run_dir": str(run_dir), "seed": seed, "chunk_size": chunk, "offset": offset,
+          "limit": limit, "albums": len(albums), "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+          **(extra_meta or {}),
           "arms": [{"arm": a, "batch_size": ARMS[a][0], "interval": ARMS[a][1],
                     "backoff": ARMS[a][2], "max_attempts": ARMS[a][3]} for a in arms],
-          "chunks": []}
+          "chunks": [], "interrupted": False}
   cache = {}
   try:
-    for n, start in enumerate(range(0, len(albums), args.chunk)):
-      chunk = albums[start:start + args.chunk]
+    for n, start in enumerate(range(0, len(albums), chunk)):
+      if deadline and deadline():
+        print(f"\nDeadline reached: stopping before chunk {n}")
+        meta["interrupted"] = True
+        break
+      chunk_albums = albums[start:start + chunk]
       arm = arms[n % len(arms)]
       batch_size, interval, backoff, max_attempts = ARMS[arm]
       aoty.MB_BATCH_SIZE = batch_size
@@ -109,13 +119,13 @@ def main():
       aoty.MB_MAX_ATTEMPTS = max_attempts
       aoty.MB_TAG = {"arm": arm, "chunk": n, "batch_size": batch_size, "interval": interval,
                      "backoff": backoff}
-      print(f"\n== chunk {n} arm {arm}: {len(chunk)} albums, batch {batch_size},"
+      print(f"\n== chunk {n} arm {arm}: {len(chunk_albums)} albums, batch {batch_size},"
             f" interval {interval}s, {backoff} back-off x{max_attempts}")
       chunk_start = time.monotonic()
-      aoty.lookup_years(chunk, cache)
-      keys = [aoty.cache_key(*p) for p in chunk]
+      aoty.lookup_years(chunk_albums, cache)
+      keys = [aoty.cache_key(*p) for p in chunk_albums]
       meta["chunks"].append({
-          "chunk": n, "arm": arm, "albums": len(chunk),
+          "chunk": n, "arm": arm, "albums": len(chunk_albums),
           "answered": sum(1 for k in keys if k in cache),
           "with_year": sum(1 for k in keys if cache.get(k)),
           "wall_s": round(time.monotonic() - chunk_start, 3),
@@ -131,6 +141,24 @@ def main():
     print(f"\nRun folder: {run_dir}")
     print("Real cache unchanged" if meta["real_cache_unchanged"]
           else "WARNING: the real release-year cache CHANGED during this run")
+    for name, path in REAL_PATHS.items():
+      setattr(aoty, name, path)
+  return run_dir
+
+
+def main():
+  parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+  parser.add_argument("--seed", type=int, default=2026, help="shuffle seed (default 2026)")
+  parser.add_argument("--chunk", type=int, default=100, help="albums per chunk (default 100)")
+  parser.add_argument("--offset", type=int, default=0,
+                      help="skip the first N shuffled albums (default 0)")
+  parser.add_argument("--limit", type=int, help="only N shuffled albums after --offset (dry run)")
+  parser.add_argument("--refresh", action="store_true", help="refetch candidates from Last.fm")
+  parser.add_argument("--arms", default=DEFAULT_ARMS,
+                      help=f"comma-separated arms from {','.join(ARMS)} (default {DEFAULT_ARMS})")
+  args = parser.parse_args()
+  run(parse_arms(args.arms), seed=args.seed, chunk=args.chunk, limit=args.limit,
+      offset=args.offset, refresh=args.refresh)
 
 
 if __name__ == "__main__":

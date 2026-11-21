@@ -102,7 +102,9 @@ def main(paths):
     flags = " (INTERRUPTED)" if meta.get("interrupted") else ""
     flags += "" if meta.get("real_cache_unchanged", True) else " (REAL CACHE CHANGED!)"
     print(f"\n## {run['name']}: {meta['started']} to {meta['finished']}, "
-          f"{meta['albums']} albums, seed {meta['seed']}{flags}")
+          f"{meta['albums']} albums, seed {meta['seed']}, offset {meta.get('offset', 0)}{flags}")
+    if meta.get("outbound_ip"):
+      print(f"\nOutbound IP {meta['outbound_ip']} ({meta.get('where', '?')})")
     table("Per arm", [(arm_label(meta, a), arm_stats(by_arm[a], chunks[a])) for a in sorted(by_arm)])
     for a in by_arm:
       pooled_rows[a] += by_arm[a]
@@ -120,7 +122,8 @@ def main(paths):
     limits = Counter(r.get("rl_limit", "") for r in rows if r["status"] == "200")
     remaining = [int(r["rl_remaining"]) for r in rows if r["status"] == "200" and r.get("rl_remaining")]
     print("X-RateLimit-Limit on 200s: " + ", ".join(f"{v or 'none'} x{n}" for v, n in limits.most_common())
-          + f"; X-RateLimit-Remaining min {min(remaining, default=0)}"
+          + f"; X-RateLimit-Remaining first {remaining[0] if remaining else '-'}"
+          f" min {min(remaining, default=0)}"
           f" p50 {pct(remaining, 50)} max {max(remaining, default=0)}")
     # The bucket's level on the last 200 before each 503: low = we drained it, high = not us.
     before, last = [], None
