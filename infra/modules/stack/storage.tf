@@ -30,6 +30,23 @@ data "aws_iam_policy_document" "site" {
       values   = [var.cloudfront_distribution_arn]
     }
   }
+  # With ListBucket, a missing key is a 404 rather than a 403, so the browser can tell
+  # "no chart yet" from "forbidden" (AOTY-15). CloudFront only ever sends GETs for paths under
+  # the base path, never a bucket listing.
+  statement {
+    sid       = "CloudFrontOACMissingAs404"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.site.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [var.cloudfront_distribution_arn]
+    }
+  }
   statement {
     sid       = "TLSOnly"
     effect    = "Deny"
