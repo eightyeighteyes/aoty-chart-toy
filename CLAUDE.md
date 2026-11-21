@@ -32,6 +32,9 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `data/mb_release_year_cache.json` | Persistent MusicBrainz cache. Precious: rebuilding it from empty takes ~13 min. |
 | `data/mb_track_count_cache.json` | Track count per album (MusicBrainz release search, Last.fm tracklist fallback), filled by `build_page.py`. ~2 min to rebuild for ~570 albums. |
 | `site/index.html` | Generated, self-contained page (only external deps: Google Fonts, Last.fm cover CDN). |
+| `tools/mb_cold_run.py` | MusicBrainz benchmark (AOTY-10). Cold lookups of a frozen, shuffled candidate list (`data/mb_bench/candidates.json`, no usernames) into `data/mb_bench/run-<ts>/`, rotating batch-size / interval arms. Never touches the real caches (path assert + checksum). `--limit 40 --chunk 10` is a 30 s dry run. Don't run anything else that hits MusicBrainz at the same time. |
+| `tools/mb_analyze.py` | Per-arm markdown tables for one or more `run-*` folders: 503 rate, server p50/p95, sleep vs server, retry cost, albums/s, rate-limit headers, years diff vs the real cache. |
+| `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
 | `.env` | `LASTFM_API_KEY`, `LASTFM_USERS`, `MB_CONTACT` — git-ignored. `.env.example` documents it. |
 
 ## Running
@@ -95,14 +98,29 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
 - **Rate limit is 1 req/s per client and is the bottleneck.** The only real speedup is fewer requests: lookups are batched as one Lucene query `(artist:"A" AND releasegroup:"B") OR ...` of `MB_BATCH_SIZE` (20) albums, `limit=100`. Misses get one individual retry each.
 - **A search hit is not a match.** The phrase `"1989"` also returns `1989 [nightcore]`, `1989 (Taylor's Version)`, live bootlegs. `pick_year` compares normalized title *and* artist credit itself, prefers primary type Album > EP > other, then earliest date.
 - **Normalization (`norm`)**: NFKC + casefold, curly→straight quotes, punctuation collapsed. `base_title` strips Last.fm edition suffixes (`(Deluxe Edition)`, `[Remastered 2011]`) because MB release-group titles don't carry them — query with the base title, match against either.
-- **503 = throttled.** `mb_search` backs off exponentially (up to 4 tries) and never caches a failure, so the next run retries it. Confirmed misses (a 200 with no match) *are* cached as `null`.
-- **Slow runs are mostly 503 back-off, not slow queries** (AOTY-9, 2026-11-21). The first full run
-  averaged ~2.9 s/request vs 1.1 s expected. A 100-album sample (5 batches of 20) had 3 503s
-  in 8 attempts, including on the very first request, so it's not only our pacing. Back-off sleep
-  was 9 s vs 5 s of server time, and 20-album batches answered in ~0.5 s (p95 1.1 s).
-  `mb_search` now logs each 503, and `mb_report` prints a per-run summary and appends per-attempt
-  rows to `data/mb_requests.csv`. Use that data (ideally from a full cold run) before tuning
-  `MB_BATCH_SIZE` or `MB_MIN_INTERVAL`.
+- **503 = throttled.** `mb_search` waits the 503's `Retry-After` (at least `MB_MIN_INTERVAL`, plus up to `MB_JITTER` 0.5 s), up to `MB_MAX_ATTEMPTS` (8) tries. It never caches a failure, so the next run retries it. Confirmed misses (a 200 with no match) *are* cached as `null`. `MB_BACKOFF = "exponential"` restores the old `MB_MIN_INTERVAL * 2**attempt` x4.
+- **Throughput is set by MusicBrainz's 503s, not by our pacing or the queries** (AOTY-10,
+  two cold runs of 1,536 albums, 2026-11-21 ~10:00 and ~12:00 ET, `tools/mb_cold_run.py`):
+  - ~45–55% of *all* attempts got a 503, steady minute to minute (not bursts), whatever the
+    batch size or interval. A slower 2.0 s interval made it worse (61%), not better.
+  - Every 503 carried `Retry-After: 1`. `X-RateLimit-Limit` is 400 and `-Remaining` had
+    15–399 (median ~230) left on the 200 before each 503, so we aren't draining it. It's
+    shared load on MusicBrainz's side.
+  - Server time is small: p50 ~0.6 s, p95 ~1.4 s, for batches of 10–40.
+  - With the old exponential x4 back-off, ~80% of a run was spent asleep, and 1–2% of albums
+    gave up after four straight 503s (dropped, then retried next run).
+  - Albums answered per second (run 1 / run 2): batch 20 1.53 / 1.14, batch 40 1.07 / 1.10,
+    batch 10 0.79 / 0.62, batch 20 at 2.0 s 0.20 / -, and **Retry-After x8: - / 2.34, with
+    no albums lost**. That's why the defaults are now Retry-After x8, batch 20, 1.1 s.
+  - Retry-After was only in run 2. Re-run the benchmark if MusicBrainz's behaviour seems
+    to change.
+  - Expect a full cold `aoty.py` (~1,540 candidates) to take ~11 min at 2.3 albums/s, and up to
+    ~20 min on a bad day.
+  - For M1 (AOTY-2): one client warms ~2 albums/s at best, and half its requests are refused,
+    so a shared, persistent release-year cache is mandatory. A cold user with ~100 new albums
+    is ~45 s of lookups.
+  - `mb_report` prints a per-run summary and appends per-attempt rows (status, timing, rate-limit
+    headers) to `data/mb_requests.csv`.
 - `MB_HEADERS` User-Agent falls back to a placeholder contact (`contact@example.com`) unless `MB_CONTACT` is set in `.env`; MB asks for a real one.
 
 ## Page — design decisions
