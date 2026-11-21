@@ -133,7 +133,8 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
   usernames out of code comments and docs (use `alice`/`bob`).
 - Release years verified: Star Moles "Highway to Hell" is a genuine 2026 Star Moles release, not
   the AC/DC album (user, 2026-11-21). Don't re-flag it.
-- AOTY-1 leftovers are tickets: AOTY-8 (real `MB_CONTACT`), AOTY-9 (instrument `mb_search`).
+- AOTY-1 (M0) is prototype work only; AOTY-10 (full cold MusicBrainz run) is its last open task.
+  M1 (AOTY-2) is the first production milestone: all deployment / architecture stories go there.
 
 ## Working with this user
 
