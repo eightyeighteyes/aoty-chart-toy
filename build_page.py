@@ -129,7 +129,8 @@ def lookup_releases(rows):
   for i in range(0, len(todo), MB_TRACK_BATCH_SIZE):
     batch = todo[i:i + MB_TRACK_BATCH_SIZE]
     print(f"  MusicBrainz batch {i // MB_TRACK_BATCH_SIZE + 1}/{-(-len(todo) // MB_TRACK_BATCH_SIZE)}")
-    rels = aoty.mb_search(" OR ".join(_release_clause(a, b) for a, b in batch), 100, "release")
+    rels = aoty.mb_search(" OR ".join(_release_clause(a, b) for a, b in batch), 100, "release",
+                          n_albums=len(batch))
     for artist, album in batch:
       info = pick_release(artist, album, rels or [])
       if info:
@@ -772,6 +773,7 @@ def main():
   OUTPUT_HTML.parent.mkdir(exist_ok=True)
   OUTPUT_HTML.write_text(render(page_data(*build_rankings(TOP_N))), encoding="utf-8")
   print(f"\nWrote {OUTPUT_HTML}")
+  aoty.mb_report("build_page")
 
 
 if __name__ == "__main__":

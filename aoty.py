@@ -58,7 +58,7 @@ MB_BATCH_SIZE = 20
 # MusicBrainz requires a descriptive User-Agent header with a way to reach you.
 # The contact comes from .env (MB_CONTACT) so a real email isn't committed.
 MB_HEADERS = {
-    "User-Agent": f"DiscordServerAOTYAggregator/1.0 ( {os.environ.get('MB_CONTACT') or 'contact@example.com'} )"
+    "User-Agent": f"kamp-aoty/0.1.0 ( {os.environ.get('MB_CONTACT') or 'contact@example.com'} )"
 }
 MB_MIN_INTERVAL = 1.1
 
@@ -71,6 +71,12 @@ _EDITION_RE = re.compile(
 )
 
 _last_mb_request = 0.0
+
+# One row per mb_search attempt (status, server time, sleep), summarised by mb_report
+# and appended to MB_STATS_CSV, to explain where a run's MusicBrainz time goes.
+MB_STATS = []
+MB_STATS_CSV = DATA_DIR / "mb_requests.csv"
+_RUN_STARTED = time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def norm(s):
@@ -150,11 +156,12 @@ def _clause(artist, album):
   return f'(artist:"{_lucene_escape(artist)}" AND releasegroup:"{_lucene_escape(base_title(album))}")'
 
 
-def mb_search(query, limit, entity="release-group"):
+def mb_search(query, limit, entity="release-group", n_albums=1):
   """One MusicBrainz search, rate limited, retrying on 503.
 
   Returns the result list (e.g. release groups) or None on failure. `entity` must be
-  named in the URL: a bare /ws/2/ 301s and looks like zero results.
+  named in the URL: a bare /ws/2/ 301s and looks like zero results. `n_albums` is how
+  many albums the query covers; it's only recorded, for `mb_report`.
   """
   global _last_mb_request
   url = f"https://musicbrainz.org/ws/2/{entity}/"
@@ -162,24 +169,74 @@ def mb_search(query, limit, entity="release-group"):
   for attempt in range(4):
     # Respect MusicBrainz rate limit (max 1 request per second), backing off on 503
     wait = MB_MIN_INTERVAL * (2 ** attempt) - (time.monotonic() - _last_mb_request)
-    if wait > 0:
-      time.sleep(wait)
+    slept = max(wait, 0.0)
+    if slept:
+      time.sleep(slept)
     _last_mb_request = time.monotonic()
+    stat = {"entity": entity, "n_albums": n_albums, "limit": limit, "attempt": attempt + 1,
+            "slept": slept, "status": "error", "elapsed": 0.0, "results": ""}
+    MB_STATS.append(stat)
     try:
       response = requests.get(url, params=params, headers=MB_HEADERS, timeout=30)
     except requests.RequestException as e:
-      print(f"  MusicBrainz request failed: {e}")
+      stat["elapsed"] = time.monotonic() - _last_mb_request
+      print(f"  MusicBrainz request failed after {stat['elapsed']:.1f}s: {e}")
       continue
+    stat["elapsed"] = time.monotonic() - _last_mb_request
+    stat["status"] = response.status_code
     if response.status_code == 503:
+      print(f"  MusicBrainz 503 (throttled) on attempt {attempt + 1}/4, backing off")
       continue
     if response.status_code != 200:
       print(f"  MusicBrainz HTTP {response.status_code}")
       return None
     try:
-      return response.json().get(entity + "s", [])
+      found = response.json().get(entity + "s", [])
     except ValueError:
       return None
+    stat["results"] = len(found)
+    return found
   return None
+
+
+def _pct(values, p):
+  """The p-th percentile (0-100) of a non-empty list, nearest-rank."""
+  ordered = sorted(values)
+  return ordered[min(len(ordered) - 1, max(0, round(p / 100 * len(ordered)) - 1))]
+
+
+def mb_report(script):
+  """Print where this run's MusicBrainz time went, and append the rows to MB_STATS_CSV."""
+  if not MB_STATS:
+    return
+  total_sleep = sum(s["slept"] for s in MB_STATS)
+  total_server = sum(s["elapsed"] for s in MB_STATS)
+  throttled = sum(1 for s in MB_STATS if s["status"] == 503)
+  errors = sum(1 for s in MB_STATS if s["status"] not in (200, 503))
+  print(f"\nMusicBrainz: {len(MB_STATS)} attempts, {throttled} throttled (503), {errors} other failures")
+  print(f"  {total_sleep + total_server:.0f}s total = {total_server:.0f}s waiting on the server"
+        f" + {total_sleep:.0f}s sleeping (rate limit / back-off)")
+  groups = defaultdict(list)
+  for s in MB_STATS:
+    groups[(s["entity"], "batch" if s["n_albums"] > 1 else "single")].append(s)
+  for (entity, kind), rows in sorted(groups.items()):
+    ok = [s["elapsed"] for s in rows if s["status"] == 200] or [0.0]
+    print(f"  {entity} {kind}: {len(rows)} attempts, {sum(1 for s in rows if s['status'] == 503)} 503s,"
+          f" server p50 {_pct(ok, 50):.2f}s p95 {_pct(ok, 95):.2f}s max {max(ok):.2f}s,"
+          f" slept {sum(s['slept'] for s in rows):.0f}s")
+
+  DATA_DIR.mkdir(exist_ok=True)
+  fields = ["run", "script", "entity", "n_albums", "limit", "attempt", "status",
+            "slept", "elapsed", "results"]
+  new_file = not MB_STATS_CSV.exists()
+  with open(MB_STATS_CSV, "a", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=fields)
+    if new_file:
+      writer.writeheader()
+    for s in MB_STATS:
+      writer.writerow({**s, "run": _RUN_STARTED, "script": script,
+                       "slept": f"{s['slept']:.3f}", "elapsed": f"{s['elapsed']:.3f}"})
+  print(f"  Per-request rows appended to {MB_STATS_CSV}")
 
 
 def credit_names(rg):
@@ -222,7 +279,7 @@ def lookup_years(pairs, cache):
   for i in range(0, len(todo), MB_BATCH_SIZE):
     batch = todo[i:i + MB_BATCH_SIZE]
     print(f"MusicBrainz batch {i // MB_BATCH_SIZE + 1}/{-(-len(todo) // MB_BATCH_SIZE)}")
-    rgs = mb_search(" OR ".join(_clause(a, b) for a, b in batch), limit=100)
+    rgs = mb_search(" OR ".join(_clause(a, b) for a, b in batch), limit=100, n_albums=len(batch))
     if rgs is None:
       misses.extend(batch)  # failed request: retry these individually
       continue
@@ -275,6 +332,7 @@ def main():
   # Only candidates are looked up: the long tail would cost ~10x the MB requests.
   cache = load_cache()
   lookup_years(candidates, cache)
+  mb_report("aoty")
   candidate_keys = {cache_key(a, b) for a, b in candidates}
 
   # Store aggregated stats: {key: {"artist", "album", "plays", "listeners": {user: plays}}}.

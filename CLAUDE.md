@@ -6,13 +6,20 @@ the result as a shareable web page.
 
 ## Milestones
 
-0. Last.fm / musicbrainz scraper that builds a pretty page of a Discord server's top albums for 2026 <-- WE ARE HERE
-1. Single page app that lets someone put in a last.fm user ID and get the top albums for that person for 2026
-2. Single page app that lets someone put in multiple last.fm user IDs and get the top albums for that group in 2026, with filters by person
-3. Sharing features: 4:3/1:1 graphics
-4. Album of any year: let the user choose what year to show album rankings for
-5. Monetization: Introduce a monetized "Supporter" tier (the cost of compute and storage for a user for a year)
-6. Persistence: A Supporter feature that remembers the last.fm users the chart is for, so someone can come back to it over and over and watch the top list change by year.
+Milestones are Jira epics in project **AOTY** (eightyeighteyes.atlassian.net); the epics hold the
+detail, so read them rather than restating it here.
+
+| Epic | Milestone |
+|------|-----------|
+| AOTY-1 | M0: Discord server AOTY page (this repo's scraper + page) <-- WE ARE HERE |
+| AOTY-2 | M1: Single-user web app |
+| AOTY-3 | M2: Group charts with per-person filter |
+| AOTY-4 | M3: Sharing graphics (4:3, 1:1) |
+| AOTY-5 | M4: Albums of any year |
+| AOTY-6 | M5: Monetization (Supporter tier) |
+| AOTY-7 | M6: Persistence (saved groups, chart over time) |
+
+Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commits (releases will be cut from history).
 
 ## Layout
 
@@ -89,7 +96,13 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
 - **A search hit is not a match.** The phrase `"1989"` also returns `1989 [nightcore]`, `1989 (Taylor's Version)`, live bootlegs. `pick_year` compares normalized title *and* artist credit itself, prefers primary type Album > EP > other, then earliest date.
 - **Normalization (`norm`)**: NFKC + casefold, curly→straight quotes, punctuation collapsed. `base_title` strips Last.fm edition suffixes (`(Deluxe Edition)`, `[Remastered 2011]`) because MB release-group titles don't carry them — query with the base title, match against either.
 - **503 = throttled.** `mb_search` backs off exponentially (up to 4 tries) and never caches a failure, so the next run retries it. Confirmed misses (a 200 with no match) *are* cached as `null`.
-- **Unexplained:** the first full run averaged ~2.9 s/request, not 1.1 s (281 requests, 13.5 min, ~1,560 unique albums, 571 from 2026). Either big batched queries are slow server-side or there were silent 503 back-offs. Instrument `mb_search` (log status + elapsed) before tuning `MB_BATCH_SIZE`.
+- **Slow runs are mostly 503 back-off, not slow queries** (AOTY-9, 2026-11-21). The first full run
+  averaged ~2.9 s/request vs 1.1 s expected. A 100-album sample (5 batches of 20) had 3 503s
+  in 8 attempts, including on the very first request, so it's not only our pacing. Back-off sleep
+  was 9 s vs 5 s of server time, and 20-album batches answered in ~0.5 s (p95 1.1 s).
+  `mb_search` now logs each 503, and `mb_report` prints a per-run summary and appends per-attempt
+  rows to `data/mb_requests.csv`. Use that data (ideally from a full cold run) before tuning
+  `MB_BATCH_SIZE` or `MB_MIN_INTERVAL`.
 - `MB_HEADERS` User-Agent falls back to a placeholder contact (`contact@example.com`) unless `MB_CONTACT` is set in `.env`; MB asks for a real one.
 
 ## Page — design decisions
@@ -111,14 +124,16 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
 
 ## Open items
 
-- **Publishing is undecided.** Options discussed: a Claude artifact (private claude.ai page, shareable link, update in place — recommended), Netlify Drop, or GitHub Pages (would serve `site/`). If publishing as an artifact, load the `artifact-design` skill first; the page is dark-only and the artifact contract wants light/dark tokens.
+- **Hosting:** the prototype page is on Netlify (shared with the server). The real app will
+  live at **kamp.fm/toys/aoty/** (the user's domain), so build for that base path.
 - **Privacy (done 2026-11-20):** `LASTFM_USERS` and `MB_CONTACT` live in `.env`. The generated
   CSV and `site/` contain usernames + per-member play counts, and `.scratch/` has Discord names,
   so all three are git-ignored. All of `data/` (caches included) is ignored too: it's build-level
   state, and production will likely cache differently (user decision 2026-11-20). Keep
   usernames out of code comments and docs (use `alice`/`bob`).
-- Spot-check suspicious years — e.g. Star Moles "Highway to Hell" (#2) shares a title with the 1979 AC/DC album; the artist match is exact, so it's probably a genuine 2026 release, but unverified.
-- No remote and no commits yet.
+- Release years verified: Star Moles "Highway to Hell" is a genuine 2026 Star Moles release, not
+  the AC/DC album (user, 2026-11-21). Don't re-flag it.
+- AOTY-1 leftovers are tickets: AOTY-8 (real `MB_CONTACT`), AOTY-9 (instrument `mb_search`).
 
 ## Working with this user
 
