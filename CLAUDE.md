@@ -43,7 +43,9 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `tools/record_mb_fixtures.py` | Re-records the MusicBrainz fixtures with the scripts' own query builders (4 requests). Only to refresh them; never during a benchmark. |
 | `.github/workflows/ci.yml` | CI (AOTY-16): `lint`, `test`, `terraform` (fmt + validate), `terraform-plan` (staging + prod via the OIDC plan role, one PR comment edited in place). All four are required on `main`. |
 | `.github/workflows/cd.yml`, `deploy.yml` | CD (AOTY-17): after CI passes on `main`, deploy staging, then release-please; a `v*` tag deploys prod; `workflow_dispatch` for rollback. Flow, rollback and the release App setup are in `infra/README.md`, "Deploys and releases". |
-| `lambdas/{api,sync,mb}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/`, runtime deps in `lambdas/requirements.txt`. `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`. |
+| `lambdas/{api,sync,mb}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`. |
+| `lambdas/sync/` | Sync worker (AOTY-18). `sync_core.py` is pure (week ranges, settle rule, merging, mb selection, covers); `handler.py` does the S3/DynamoDB/SQS I/O behind an injectable `Deps`. Contract and store format are in the module docstrings. |
+| `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
 | `pyproject.toml`, `requirements-dev.txt` | ruff (2-space indent, 110 columns, `tools/` excluded until AOTY-12 merges) and pytest config; pinned dev tools. |
 
@@ -178,6 +180,34 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
 - The now-playing track is returned even for a pinned window in the past, so drop rows with no `date`.
   A nonexistent user returns error 6. The private-account error (17?) wasn't tested, because no member
   hides their listening.
+
+## Sync worker (AOTY-18, 2026-11-21)
+
+Following the AOTY-11 spike, it stores **per-(album, chart week) totals from `getWeeklyAlbumChart`**,
+not daily totals from paging scrobbles (the story text was revised to match).
+
+- **Weeks:** the first range is `[Jan 1 00:00 UTC, first Sunday 12:00)`, then Last.fm's Sunday-12:00
+  weeks, clipped to the year end. A bucket's id is its `from`.
+- **Settle rule, not a high-water mark:** a week is refetched and **overwritten** until it has
+  been fetched at least 3 weeks after it closed. With regular syncs, that's the current week plus
+  the last 3 closed ones (4 calls). A monthly full pass (`full_started_at` in the store) catches
+  older back-dated imports and resumes after a kill.
+- **Checkpoint** = the store object, written every 8 weeks. There are no continuation messages:
+  the sync queue is FIFO with content-based dedup, so an identical body sent within 5 minutes is
+  dropped. When time runs short, the worker sets the message's visibility to 0 instead.
+- **mb queueing:** albums with no `albums` item go to mb-hot (the user's top 150) or mb-cold, at
+  most once a week per album (`queued_at`). Albums found in the table are marked `resolved` in the
+  store and never re-checked. A crash can still send duplicates, so AOTY-19 must be idempotent.
+- **Errors:** 6, confirmed by `user.getInfo`, and 17 end as `not_found` / `private` without an SQS
+  retry; a new message always tries again. The last of 5 receives writes `state=error` first.
+- **Covers:** recent tracks give covers, matched by album MBID, then by key. Compilations rarely
+  match, because scrobbles carry the track artist, so AOTY-21 needs an `album.getInfo` fallback.
+- **Rate:** 0.5 s per call per worker, with `maximum_concurrency` 2 on the event source mapping
+  (the AWS minimum). Reserved concurrency still waits on the quota increase.
+- Logs carry a 10-character hash of the username, never the name.
+- **Charts leave out scrobbles that have no album name** (`tools/sync_check.py`, 2026-11-21). For the
+  lightest member, the chart total was 3,254 against 3,373 scrobbles: exactly the 119 with no album.
+  Compare chart totals with scrobbles *that have an album*. Album-less plays can't rank as albums anyway.
 
 ## Page — design decisions
 

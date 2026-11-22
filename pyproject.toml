@@ -8,6 +8,8 @@ target-version = "py313"
 # tools/ is excluded until the AOTY-12 branch (which rewrites tools/mb_cold_run.py) merges,
 # so the first reformat doesn't conflict with it. Remove this exclude then.
 extend-exclude = ["tools", "infra/**/build"]
+# lambdas/ is a path root too: the Lambdas (and aoty.py) import shared code as `common.*`.
+src = [".", "lambdas", "lambdas/sync"]
 
 [tool.ruff.format]
 quote-style = "preserve"
@@ -18,5 +20,6 @@ extend-select = ["I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# lambdas/sync: its zip puts sync_core.py at the root, so the handler imports it bare.
+pythonpath = [".", "lambdas", "lambdas/sync"]
 addopts = "-ra --strict-markers"

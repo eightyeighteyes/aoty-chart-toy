@@ -1,5 +1,5 @@
 # Two buckets: "site" is what kamp.fm's CloudFront serves (shell, data/ charts and status);
-# "store" is private Lambda state (per-user daily totals, the release index, checkpoints).
+# "store" is private Lambda state (per-user weekly album totals, the release index).
 # Keeping them apart means no CloudFront behaviour can ever expose private data.
 # Both use the S3 default encryption (SSE-S3); no KMS keys, which would cost $1/mo each.
 

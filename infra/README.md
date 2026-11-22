@@ -21,13 +21,13 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | Resource | Notes |
 |----------|-------|
 | `kamp-aoty-<env>-site` bucket | Shell + `data/`. kamp.fm's CloudFront reads it through Origin Access Control (`s3:GetObject` on the key prefix only). Keys mirror the public path: prod stores `toys/aoty/...`, staging `toys/aoty-staging/...`. |
-| `kamp-aoty-<env>-store` bucket | Private Lambda state (daily totals, index, checkpoints). Never readable by CloudFront. Versioned; old versions expire after 7 days. |
+| `kamp-aoty-<env>-store` bucket | Private Lambda state: `users/<username>/<year>/weeks.json.gz` (weekly album totals, AOTY-18) and the release index. Never readable by CloudFront. Versioned; old versions expire after 7 days. |
 | `users` table | `username` (lowercased). Deletion protection in prod. |
 | `albums` table | `artist_key` + `title_key` (`norm(album artist)`, `norm(base_title(album))`). Deletion protection **and** `prevent_destroy` in both envs; PITR in prod. |
-| `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). |
+| `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` 2. |
 | `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
-| `api`, `sync`, `mb` Lambdas | python3.13 / arm64 placeholders. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
+| `api`, `sync`, `mb` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
 | HTTP API | `$default` route → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttled to burst 20 / 10 req/s. |
 | Log groups | 14-day retention, including API access logs. |
 
@@ -73,8 +73,9 @@ How CI is kept from escalating:
 Fork PRs get no OIDC token, so the plan role works only for branches in this repo.
 
 The deploy policies list only what this skeleton uses. A story that adds a new resource type
-(EventBridge rules, SNS, alarms, event source mappings, reserved concurrency) extends
-`global/ci_roles.tf` and the admin applies `global` first.
+(EventBridge rules, SNS, alarms, reserved concurrency) extends `global/ci_roles.tf` and the
+admin applies `global` first. Event source mappings (AOTY-18) are scoped by the
+`lambda:FunctionArn` condition, because their ARNs are random UUIDs.
 
 ### Testing the roles from a laptop
 
@@ -179,11 +180,26 @@ commits, so every branch commit becomes a changelog line: keep them Conventional
 
 5. Smoke test: `curl https://<api_domain_name>/toys/aoty-staging/api/health` → 200.
 
+## Running a sync by hand (until AOTY-22)
+
+The API doesn't enqueue syncs yet. To sync a user in staging, send the message the API will
+send. The group id must be the lowercased username (one sync per user at a time), and the
+dedup id must be unique, because content-based dedup would drop a repeat within 5 minutes:
+
+```sh
+aws sqs send-message --queue-url "$(aws sqs get-queue-url --queue-name kamp-aoty-staging-sync.fifo --query QueueUrl --output text)" \
+  --message-group-id alice --message-deduplication-id "alice-$(date +%s)" \
+  --message-body '{"username": "alice", "full": false}'
+```
+
+Then check `users` (`state`, `progress`) and `s3://kamp-aoty-staging-store/users/alice/2026/weeks.json.gz`.
+`"full": true` refetches every week; `"year"` defaults to 2026.
+
 ## Follow-ups outside Terraform
 
 - **Lambda concurrency quota:** the account limit was 10, and AWS always keeps 10 unreserved, so
   no function can have reserved concurrency (needed by AOTY-19's single MusicBrainz client and
-  AOTY-26's caps). An increase to 1000 was requested on 2026-11-21 (Service Quotas, `L-B99A9384`).
+  AOTY-26's caps; the sync worker uses its event source mapping's `maximum_concurrency` instead). An increase to 1000 was requested on 2026-11-21 (Service Quotas, `L-B99A9384`).
   Check it with `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384`.
 - **Cost allocation tags:** activate `Project` and `Environment` in Billing once they appear (about 24 h
   after first use): `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Environment,Status=Active`.

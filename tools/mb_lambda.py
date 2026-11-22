@@ -74,6 +74,9 @@ def build_zip():
   for src in (REPO / "aoty.py", REPO / "tools" / "mb_cold_run.py",
               REPO / "tools" / "mb_lambda" / "handler.py", CANDIDATES):
     shutil.copy(src, pkg / src.name)
+  # aoty.py imports common.albumkey; at the zip root, common/ is already on the path.
+  (pkg / "common").mkdir()
+  shutil.copy(REPO / "lambdas" / "common" / "albumkey.py", pkg / "common" / "albumkey.py")
   zip_path = BUILD / "function.zip"
   with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
     for path in sorted(pkg.rglob("*")):
