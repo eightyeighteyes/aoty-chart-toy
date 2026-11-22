@@ -1,0 +1,233 @@
+{
+ "recorded": "2026-11-21",
+ "entity": "release",
+ "query": "(artist:\"Sleep\" AND release:\"Dopesmoker\")",
+ "limit": 100,
+ "results": [
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2003-04-22",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2012-05-07",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2012-05-07",
+   "track-count": 5,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2013-04-20",
+   "track-count": 4,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2003-04-23",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2012-05-08",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2022-07",
+   "track-count": 10,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2022-08-26",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2021-12-03",
+   "track-count": 1,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2012",
+   "track-count": 5,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2004",
+   "track-count": 4,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2023",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2022-07-26",
+   "track-count": 2,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Dopesmoker",
+   "status": "Official",
+   "date": "2012-05-09",
+   "track-count": 3,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Sexy Dopesmoker Zippy Kid",
+   "status": null,
+   "date": "2023-12-26",
+   "track-count": 1,
+   "release-group": {
+    "primary-type": "Album"
+   },
+   "artist-credit": [
+    {
+     "name": "Sleep",
+     "joinphrase": ""
+    }
+   ]
+  }
+ ]
+}
