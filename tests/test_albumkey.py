@@ -14,6 +14,13 @@ def test_album_key_strips_editions_and_normalizes_both_halves():
   assert albumkey.album_key("Sigur Rós", "Takk… [Remastered 2015]") == ("sigur rós", "takk")
 
 
+def test_all_punctuation_names_keep_a_key_instead_of_going_blank():
+  assert albumkey.album_key("Sigur Rós", "( )") == ("sigur rós", "( )")
+  assert albumkey.album_key("!!!", "...") == ("!!!", "...")
+  assert albumkey.album_key("  ", "") == ("", "")
+  assert not albumkey.is_complete(albumkey.album_key("Artist", "   "))
+
+
 def test_join_and_split_round_trip_and_keep_the_halves_apart():
   # Without a separator these two would be the same string.
   a, b = ("ab", "c"), ("a", "bc")

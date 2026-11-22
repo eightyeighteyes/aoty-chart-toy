@@ -167,6 +167,9 @@ class FakeDDB:
     (table, req), = RequestItems.items()  # fmt: skip
     keys = req["Keys"]
     assert len(keys) <= 100
+    if any(not v["S"] for k in keys for v in k.values()):
+      # What real DynamoDB answered on staging (AOTY-18's first real sync).
+      raise ValueError("ValidationException: key attribute cannot contain an empty string value")
     if self.unprocessed_once:
       self.unprocessed_once = False
       return {"Responses": {table: []}, "UnprocessedKeys": RequestItems}
@@ -361,16 +364,52 @@ def test_an_unconfirmed_not_found_is_retried(h):
   env = Env(h, make_world(5))
   out, _ = env.record(chart_error=lastfm.NOT_FOUND, exists=True)
   assert out == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
-  assert env.ddb.users["alice"]["state"] == "syncing"
+  assert env.ddb.users["alice"]["state"] == "retrying"
+
+
+def test_a_failed_sync_is_retried_within_minutes_not_after_the_visibility_timeout(h):
+  env = Env(h, make_world(5))
+  for receives in (1, 2, 3, 4):
+    env.record(receives=receives, chart_error=16)
+    assert env.ddb.users["alice"]["state"] == "retrying"
+  assert [v["VisibilityTimeout"] for v in env.sqs.visibility] == [60, 120, 240, 480]
+  assert {v["ReceiptHandle"] for v in env.sqs.visibility} == {"r1"}
 
 
 def test_the_last_receive_marks_the_user_as_errored_before_the_dlq(h):
   env = Env(h, make_world(5))
-  out, _ = env.record(receives=4, chart_error=16)
-  assert env.ddb.users["alice"]["state"] == "syncing"
   out, _ = env.record(receives=5, chart_error=16)
   assert out == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
   assert env.ddb.users["alice"]["state"] == "error"
+  assert env.sqs.visibility == []  # off to the DLQ; no point shortening the wait
+
+
+def test_all_punctuation_titles_and_artists_are_keyed_and_queued(h):
+  # The staging crash: an album titled "( )" normalized to an empty title_key.
+  scrobbles = make_world(5) + [
+    {"uts": NOW - 3 * 86400, "album_artist": "Sigur Rós", "artist": "Sigur Rós", "album": "( )"},
+    {"uts": NOW - 3 * 86400, "album_artist": "!!!", "artist": "!!!", "album": "Shake the Shudder"},
+  ]
+  env = Env(h, scrobbles)
+  assert env.run()[0] == "done"
+  sent = env.sqs.all_sent()
+  assert join_key(("sigur rós", "( )")) in sent
+  assert join_key(("!!!", "shake the shudder")) in sent
+
+
+def test_a_store_written_before_the_fix_still_syncs(h):
+  env = Env(h, make_world(5))
+  env.run()
+  store = env.s3.store()
+  legacy = join_key(("sigur rós", ""))
+  week = next(iter(store["weeks"].values()))
+  week["plays"][legacy] = 3
+  store["albums"][legacy] = {"artist": "Sigur Rós", "album": "( )", "mbid": "", "image": ""}
+  env.s3.put_object(Bucket="store", Key="users/alice/2026/weeks.json.gz",
+                    Body=gzip.compress(json.dumps(store).encode()))  # fmt: skip
+  env.now += 8 * 86400
+  assert env.run()[0] == "done"
+  assert legacy not in env.sqs.all_sent()
 
 
 def test_a_new_request_retries_a_user_marked_not_found(h):

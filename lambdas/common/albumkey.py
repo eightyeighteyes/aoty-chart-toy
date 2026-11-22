@@ -35,9 +35,25 @@ def base_title(album):
   return _EDITION_RE.sub("", album).strip() or album
 
 
+def _key_part(s):
+  """norm(s), or for an all-punctuation name ("!!!", "( )", "...") the casefolded name itself.
+
+  norm strips punctuation, so those would become "", which DynamoDB rejects as a key and which
+  would merge unrelated albums. Returns "" only for a blank name.
+  """
+  return norm(s) or " ".join(unicodedata.normalize("NFKC", s).casefold().split())
+
+
 def album_key(artist, album):
-  """The (artist_key, title_key) pair for an album artist and a Last.fm album title."""
-  return norm(artist), norm(base_title(album))
+  """The (artist_key, title_key) pair for an album artist and a Last.fm album title.
+
+  Both halves are non-empty unless the name itself is blank; callers skip those.
+  """
+  return _key_part(artist), _key_part(base_title(album))
+
+
+def is_complete(pair):
+  return bool(pair[0]) and bool(pair[1])
 
 
 def join_key(pair):

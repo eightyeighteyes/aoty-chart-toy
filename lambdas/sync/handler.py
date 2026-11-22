@@ -19,8 +19,9 @@ One sync:
   4. Mark the users row done. The chart builder hook is a no-op until AOTY-21.
 
 Error 6 (confirmed by user.getInfo) and 17 mark the user not_found / private and delete the
-message; a new request always tries again. Other errors fail the message for an SQS retry;
-on the last receive the users row is set to error first, so it doesn't sit in "syncing".
+message; a new request always tries again. Other errors fail the message for an SQS retry
+after retry_delay (60 s doubling, not the queue's 90-min visibility timeout), with the users
+row set to "retrying"; on the last receive it is set to "error" before the DLQ.
 """
 
 import gzip
@@ -47,6 +48,8 @@ DELTA_COVER_PAGES = 5
 BATCH_GET = 100  # DynamoDB BatchGetItem limit
 SEND_BATCH = 10  # SQS SendMessageBatch limit
 RETRIES = 4
+RETRY_BASE_S = 60  # a failed sync is retried after 60 s, then 120, 240, 480
+RETRY_MAX_S = 900
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 
@@ -92,15 +95,18 @@ def handler(event, context, deps=None):
       result = sync_user(msg, context, deps)
     except Exception as e:
       log.exception("sync failed for %s", _tag(msg.get("username")))
-      if int((rec.get("attributes") or {}).get("ApproximateReceiveCount", 1)) >= MAX_RECEIVES:
-        _mark_failed(deps, msg, e)
+      receives = int((rec.get("attributes") or {}).get("ApproximateReceiveCount", 1))
+      last = receives >= MAX_RECEIVES
+      _mark_failed(deps, msg, e, "error" if last else "retrying")
+      if not last:
+        # Without this, a failed message waits out the queue's whole visibility timeout
+        # (6 x the function timeout, 90 min) and blocks the user's FIFO group meanwhile.
+        _set_visibility(deps, rec, retry_delay(receives))
       failures.append({"itemIdentifier": rec["messageId"]})
       continue
     if result == "partial":
       # Out of time with weeks left: checkpointed, so make it visible again right away.
-      deps.sqs.change_message_visibility(
-        QueueUrl=deps.env["SYNC_QUEUE_URL"], ReceiptHandle=rec["receiptHandle"], VisibilityTimeout=0
-      )
+      _set_visibility(deps, rec, 0)
       failures.append({"itemIdentifier": rec["messageId"]})
   return {"batchItemFailures": failures}
 
@@ -353,14 +359,29 @@ def _update_user(deps, username, fields, remove=()):
   )
 
 
-def _mark_failed(deps, msg, err):
+def _mark_failed(deps, msg, err, state):
   username = str(msg.get("username") or "").strip().lower()
   if not USERNAME_RE.match(username):
     return
   try:
-    _update_user(deps, username, {"state": "error", "error_code": type(err).__name__})
+    _update_user(deps, username, {"state": state, "error_code": type(err).__name__})
   except Exception:
-    log.exception("could not mark %s as failed", _tag(username))
+    log.exception("could not mark %s as %s", _tag(username), state)
+
+
+def retry_delay(receives):
+  """Seconds before a failed message is retried: 60, 120, 240, 480 for receives 1-4."""
+  return min(RETRY_BASE_S * 2 ** (max(receives, 1) - 1), RETRY_MAX_S)
+
+
+def _set_visibility(deps, rec, seconds):
+  try:
+    deps.sqs.change_message_visibility(
+      QueueUrl=deps.env["SYNC_QUEUE_URL"], ReceiptHandle=rec["receiptHandle"], VisibilityTimeout=seconds
+    )
+  except Exception:
+    # The message still comes back, just after the queue's full visibility timeout.
+    log.exception("could not change message visibility")
 
 
 # ---- helpers --------------------------------------------------------------------------
