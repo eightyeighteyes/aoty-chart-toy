@@ -34,6 +34,9 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `site/index.html` | Generated, self-contained page (only external deps: Google Fonts, Last.fm cover CDN). |
 | `tools/mb_cold_run.py` | MusicBrainz benchmark (AOTY-10). Cold lookups of a frozen, shuffled candidate list (`data/mb_bench/candidates.json`, no usernames) into `data/mb_bench/run-<ts>/`, rotating batch-size / interval arms. Never touches the real caches (path assert + checksum). `--limit 40 --chunk 10` is a 30 s dry run. Don't run anything else that hits MusicBrainz at the same time. |
 | `tools/mb_lambda.py` | AOTY-12 harness: deploys a throwaway us-east-1 Lambda (`tools/mb_lambda/handler.py`), runs `mb_cold_run` arm L there in 250-album slices (`sweep`), and unpacks each slice into `data/mb_bench/run-<ts>-lambda/`. `teardown` removes the function, role and log group. `mb_cold_run.py --offset/--limit` takes the same slices locally. |
+| `tools/mb_index_dump.py` | AOTY-13: downloads the MusicBrainz JSON dump's `release-group.tar.xz` (resumable, SHA256-checked) into `data/mb_index/dump-<name>/`. Writes `index_2026.json` and the all-years `keymap.json`. `release-probe` times the first 1 GB of `release.tar.xz`. Doesn't use the rate-limited API. |
+| `tools/mb_index_crawl.py` | AOTY-13: crawls every 2026 release group through search, split into id ranges of one page each (`crawl`, about 85 min), into `data/mb_index/crawl-<ts>/`. `offset-probe` records the 500-result cap. Run it on its own. |
+| `tools/mb_index_eval.py` | AOTY-13: `report` scores the indexes against every album M0 looked up, explains misses, compares crawl and dump, and writes `report.md`. `track-probe` prices live track-count lookups. |
 | `tools/mb_analyze.py` | Per-arm markdown tables for one or more `run-*` folders: 503 rate, server p50/p95, sleep vs server, retry cost, albums/s, rate-limit headers, years diff vs the real cache. |
 | `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
 | `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
@@ -158,6 +161,76 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
   - `mb_lambda.py deploy | run | sweep | teardown` uses the `aws` CLI. Invokes use no CLI
     retries and a 910 s read timeout. The handler resets warm-container state
     (`aoty.reset_run_state`) and stops 150 s before the 15-min cap.
+
+## 2026 release index (AOTY-13 spike, 2026-11-21)
+
+Tools: `tools/mb_index_dump.py`, `tools/mb_index_crawl.py`, `tools/mb_index_eval.py`.
+Output goes to `data/mb_index/`.
+
+- **Search can't page past 500 results.** If `offset + limit > 500`, MusicBrainz returns
+  HTTP 400 "Must retrieve at most 500 search results".
+- **Paging is unreliable even below 500.** Results with equal scores move between pages: a
+  3-page partition came back 4% short.
+- **Day ranges overlap.** A partial date `2026-01` matches every day in January, and `"2026"`
+  matches the whole year.
+- **What does work: split by release-group id range.** Take the whole-year query
+  `firstreleasedate:[2026 TO 2026-12-31]` and add `rgid:[lo TO hi]`; UUIDs compare as
+  strings. Halve each range until it fits on one page of 100. The ranges don't overlap, so
+  the per-range counts must add up to the total, and they did exactly. `aoty.mb_get`
+  returns `count`/`offset` for this.
+- **Counts:** 2026 has about 159.7k release groups:
+
+  | Type | Count |
+  |---|---|
+  | Single | 82k |
+  | Album | 51k |
+  | EP | 21k |
+  | No type | 2.7k |
+  | Broadcast | 1.1k |
+  | Other | 1.2k |
+
+  About 2.1k have only a partial date (`2026` or `2026-MM`).
+- **Full search crawl:** 79–84 min and 3,600–3,700 attempts, 42–44% of them 503s. The index is
+  41 MB of JSON (9.6 MB gzipped).
+  - Two back-to-back crawls (21:15 and 22:40 ET) both returned exactly their range counts, with
+    no failed pages.
+  - The second crawl contains all of the first, plus 25 new release groups, which is exactly how
+    much the count grew. No record changed between the two, so the crawl is repeatable.
+- **JSON dump:** `release-group.tar.xz` is 1.24 GB. A new dump comes out twice a week.
+  - Download: 14.5 min at 1.4 MB/s from the laptop.
+  - Parse: 4.66M records take 8 min of CPU, with a peak RSS of 5.4 GB. This builder holds
+    every dated title in memory.
+  - Records have type, date, credits and aliases, but **no releases or track counts**.
+- **Hit rate, scored against all 1,530 albums M0 looked up:**
+  - The dump keymap plus `pick_year` found **568/568** of M0's 2026 albums, with **0**
+    false positives.
+  - It also found Marmozets "CO.WAR.DICE.", which M0's live search had missed (a null
+    there).
+  - **A 2026-only index isn't enough.** The crawl and the 2026 subset of the dump both call
+    Weezer "Weezer" a 2026 album, because a 2026 release group of that name exists. The
+    1994 album only wins when release groups from all years are candidates.
+  - That's why `keymap.json` holds every release group, of any year, whose `norm(title)`
+    matches a 2026 one: 137k titles, 809k candidates, 173 MB (39 MB gzipped).
+- **The dump goes stale quickly.** The crawl found 687 release groups from 2026 that weren't
+  in a dump made about 22 h earlier. Only 57% of those are dated within the last 30 days or
+  later; the rest are older releases being backfilled. So an index miss doesn't prove an
+  album isn't from 2026.
+- **Track counts:**
+  - The release-group dump doesn't have them.
+  - `release.tar.xz` (23 GB, about 5M releases) has per-medium `track-count`, `status` and
+    the release group's type and date. A full pass is about 3.5 h, mostly download time at
+    1.8 MB/s, plus about 2 h of CPU.
+  - A live lookup costs 1.8 s per release group (one `release` search on `rgid:`). That's
+    about 36 h for all 72k 2026 Albums and EPs.
+- **Recommendation for AOTY-20:**
+  - **Year index:** build the keymap from the dump twice a week, as a Fargate Spot task.
+    Lambda's 15 min and 10 GB can't fit the download plus the parse.
+  - **Lookup order:** keymap → `albums` table → live `pick_year` queued in the `mb` lane.
+    Do the live step first for a user's top albums that the keymap and the table miss,
+    because the dump is days behind.
+  - **Track counts:** keep M0's lazy, cached live lookup with the Last.fm fallback. If the
+    `mb` lane can't keep up, consider a weekly `release.tar.xz` pass filtered to 2026
+    release groups.
 
 ## Last.fm data cost (AOTY-11 spike, 2026-11-21, 19 members)
 

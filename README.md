@@ -81,3 +81,16 @@ CLI credentials required), to compare it with the laptop. Run `teardown` when yo
 .venv/bin/python tools/mb_lambda.py sweep       # all candidates, 250 per invocation
 .venv/bin/python tools/mb_lambda.py teardown    # remove the function, role and log group
 ```
+
+## 2026 release index spike
+
+The AOTY-13 tools build an index of every release group first released in 2026, either from
+the MusicBrainz JSON dump or from a search crawl, and score it against M0's release years.
+The output goes to `data/mb_index/`. The crawl uses the rate-limited API, so run it alone.
+
+```sh
+.venv/bin/python tools/mb_index_dump.py rg              # ~25 min: 1.2 GB download + parse
+.venv/bin/python tools/mb_index_crawl.py crawl          # ~85 min of search requests
+.venv/bin/python tools/mb_index_eval.py report --dump data/mb_index/dump-<name> \
+    --crawl data/mb_index/crawl-<ts>                    # writes report.md
+```
