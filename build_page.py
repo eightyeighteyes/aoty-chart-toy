@@ -43,9 +43,17 @@ WEIGHTED_MIN_LISTENERS = 3
 
 # The three rankings: (key, button label, how the page explains the order).
 MODES = [
-    ("track", "By Track", "ranked by how many of our {total} members played them, then total plays"),
-    ("album", "By Album", "ranked by album plays: track plays divided by the album's track count (singles left out)"),
-    ("weighted", "Weighted", "ranked by album plays per listener, among albums at least {min_listeners} members played"),
+  ("track", "By Track", "ranked by how many of our {total} members played them, then total plays"),
+  (
+    "album",
+    "By Album",
+    "ranked by album plays: track plays divided by the album's track count (singles left out)",
+  ),
+  (
+    "weighted",
+    "Weighted",
+    "ranked by album plays per listener, among albums at least {min_listeners} members played",
+  ),
 ]
 
 
@@ -78,13 +86,15 @@ def pick_release(artist, album, releases):
     if want_artist not in aoty.credit_names(rel):
       continue
     rg_type = rel.get("release-group", {}).get("primary-type")
-    matches.append((
+    matches.append(
+      (
         _STATUS_RANK.get(rel.get("status"), 1),
         aoty._TYPE_RANK.get(rg_type, 2),
         rel.get("date") or "9999",
         count,
         rg_type or "",
-    ))
+      )
+    )
   if not matches:
     return None
   best = min(matches)
@@ -100,12 +110,16 @@ def lastfm_track_count(artist, album):
   """Fallback when MusicBrainz has no match: the length of Last.fm's tracklist (often empty)."""
   try:
     data = requests.get(
-        "https://ws.audioscrobbler.com/2.0/",
-        params={
-            "method": "album.getinfo", "artist": artist, "album": album, "autocorrect": 1,
-            "api_key": aoty.LASTFM_API_KEY, "format": "json",
-        },
-        timeout=15,
+      "https://ws.audioscrobbler.com/2.0/",
+      params={
+        "method": "album.getinfo",
+        "artist": artist,
+        "album": album,
+        "autocorrect": 1,
+        "api_key": aoty.LASTFM_API_KEY,
+        "format": "json",
+      },
+      timeout=15,
     ).json()
   except (requests.RequestException, ValueError):
     return None
@@ -119,18 +133,21 @@ def lookup_releases(rows):
   """{cache key: {"tracks", "type"}} for every CSV row, using and filling the cache."""
   # Entries from before the type was stored are bare ints: look those up again.
   cache = {k: v for k, v in load_json(TRACK_CACHE_FILE).items() if isinstance(v, dict)}
-  save = lambda: TRACK_CACHE_FILE.write_text(
-      json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+
+  def save():
+    TRACK_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+
   pairs = [(r["Artist"], r["Album"]) for r in rows]
   todo = [p for p in dict.fromkeys(pairs) if aoty.cache_key(*p) not in cache]
   print(f"Track counts: {len(pairs)} albums, {len(todo)} not cached yet")
 
   misses = []
   for i in range(0, len(todo), MB_TRACK_BATCH_SIZE):
-    batch = todo[i:i + MB_TRACK_BATCH_SIZE]
+    batch = todo[i : i + MB_TRACK_BATCH_SIZE]
     print(f"  MusicBrainz batch {i // MB_TRACK_BATCH_SIZE + 1}/{-(-len(todo) // MB_TRACK_BATCH_SIZE)}")
-    rels = aoty.mb_search(" OR ".join(_release_clause(a, b) for a, b in batch), 100, "release",
-                          n_albums=len(batch))
+    rels = aoty.mb_search(
+      " OR ".join(_release_clause(a, b) for a, b in batch), 100, "release", n_albums=len(batch)
+    )
     for artist, album in batch:
       info = pick_release(artist, album, rels or [])
       if info:
@@ -179,16 +196,16 @@ def album_art(artist, album):
       time.sleep(2 * attempt)
     try:
       data = requests.get(
-          "https://ws.audioscrobbler.com/2.0/",
-          params={
-              "method": "album.getinfo",
-              "artist": artist,
-              "album": album,
-              "autocorrect": 1,
-              "api_key": aoty.LASTFM_API_KEY,
-              "format": "json",
-          },
-          timeout=15,
+        "https://ws.audioscrobbler.com/2.0/",
+        params={
+          "method": "album.getinfo",
+          "artist": artist,
+          "album": album,
+          "autocorrect": 1,
+          "api_key": aoty.LASTFM_API_KEY,
+          "format": "json",
+        },
+        timeout=15,
       ).json()
     except (requests.RequestException, ValueError) as e:
       error = e
@@ -248,15 +265,22 @@ def build_rankings(n):
   albums = [r for r in rows if not is_single(releases[r["key"]])]
   print(f"{len(rows) - len(albums)} singles (or no track count) left out of By Album / Weighted")
   scored = {
-      # The CSV is already in this order: listeners, then plays.
-      "track": [(r, r["plays"]) for r in rows],
-      "album": sorted(((r, r["plays"] / r["tracks"]) for r in albums),
-                      key=lambda x: (x[1], x[0]["listeners"]), reverse=True),
-      # Mean album plays across the people who played it. Without a listener floor,
-      # one member looping a record takes #1.
-      "weighted": sorted(((r, r["plays"] / r["tracks"] / r["listeners"]) for r in albums
-                          if r["listeners"] >= WEIGHTED_MIN_LISTENERS),
-                         key=lambda x: (x[1], x[0]["listeners"]), reverse=True),
+    # The CSV is already in this order: listeners, then plays.
+    "track": [(r, r["plays"]) for r in rows],
+    "album": sorted(
+      ((r, r["plays"] / r["tracks"]) for r in albums), key=lambda x: (x[1], x[0]["listeners"]), reverse=True
+    ),
+    # Mean album plays across the people who played it. Without a listener floor,
+    # one member looping a record takes #1.
+    "weighted": sorted(
+      (
+        (r, r["plays"] / r["tracks"] / r["listeners"])
+        for r in albums
+        if r["listeners"] >= WEIGHTED_MIN_LISTENERS
+      ),
+      key=lambda x: (x[1], x[0]["listeners"]),
+      reverse=True,
+    ),
   }
   rankings = {mode: pairs[:n] for mode, pairs in scored.items()}
 
@@ -271,8 +295,8 @@ def build_rankings(n):
   for who in members:
     played = [r for r in rows if who in r["by_user"]]
     for pool, score_of in (
-        (played, lambda r: r["by_user"][who]),
-        ([r for r in played if r["key"] in album_keys], lambda r: r["by_user"][who] / r["tracks"]),
+      (played, lambda r: r["by_user"][who]),
+      ([r for r in played if r["key"] in album_keys], lambda r: r["by_user"][who] / r["tracks"]),
     ):
       pool = sorted(pool, key=score_of, reverse=True)
       cutoff = score_of(pool[n - 1]) if len(pool) > n else float("-inf")
@@ -295,19 +319,31 @@ def build_rankings(n):
 def page_data(kept, rankings, arts, members):
   """What the page script renders from: albums once each, rankings as indexes into them."""
   index = {r["key"]: i for i, r in enumerate(kept)}
-  albums = [{
-      "artist": r["Artist"], "album": r["Album"], "art": arts[r["key"]],
+  albums = [
+    {
+      "artist": r["Artist"],
+      "album": r["Album"],
+      "art": arts[r["key"]],
       "fallbacks": " ".join(art_fallbacks(arts[r["key"]])),
-      "listeners": r["listeners"], "plays": r["plays"], "by": r["by_user"],
-      "tracks": r["tracks"], "single": r["single"],
-  } for r in kept]
+      "listeners": r["listeners"],
+      "plays": r["plays"],
+      "by": r["by_user"],
+      "tracks": r["tracks"],
+      "single": r["single"],
+    }
+    for r in kept
+  ]
   total = len(aoty.LASTFM_USERS)
   return {
-      "year": aoty.TARGET_YEAR, "total": total, "top": TOP_N, "featured": FEATURED_N,
-      "members": members, "albums": albums,
-      # Everyone's rankings; a member's are computed in the page.
-      "rankings": {m: [[index[r["key"]], round(s, 3)] for r, s in pairs] for m, pairs in rankings.items()},
-      "descs": {m: desc.format(total=total, min_listeners=WEIGHTED_MIN_LISTENERS) for m, _, desc in MODES},
+    "year": aoty.TARGET_YEAR,
+    "total": total,
+    "top": TOP_N,
+    "featured": FEATURED_N,
+    "members": members,
+    "albums": albums,
+    # Everyone's rankings; a member's are computed in the page.
+    "rankings": {m: [[index[r["key"]], round(s, 3)] for r, s in pairs] for m, pairs in rankings.items()},
+    "descs": {m: desc.format(total=total, min_listeners=WEIGHTED_MIN_LISTENERS) for m, _, desc in MODES},
   }
 
 
@@ -322,8 +358,6 @@ def art_fallbacks(url):
     return []
   base, name = m.groups()
   return [f"{base}{size}{name}" for size in ("ar0/", "174s/") if f"{base}{size}{name}" != url]
-
-
 
 
 # Renders the chosen ranking for the chosen member from the #aoty-data JSON. A plain
@@ -464,12 +498,10 @@ def render(data):
   e = html.escape
   # "</" would end the <script> early; JSON allows the escaped form.
   data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-  member_options = "\n        ".join(
-      f'<option value="{e(m)}">{e(m)}</option>' for m in data["members"]
-  )
+  member_options = "\n        ".join(f'<option value="{e(m)}">{e(m)}</option>' for m in data["members"])
   rank_buttons = "\n      ".join(
-      f'<button type="button" data-rank="{m}" aria-pressed="{str(i == 0).lower()}">{e(label)}</button>'
-      for i, (m, label, _) in enumerate(MODES)
+    f'<button type="button" data-rank="{m}" aria-pressed="{str(i == 0).lower()}">{e(label)}</button>'
+    for i, (m, label, _) in enumerate(MODES)
   )
 
   return f"""<!doctype html>
