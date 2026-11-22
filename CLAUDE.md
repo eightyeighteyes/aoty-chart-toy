@@ -374,7 +374,7 @@ not daily totals from paging scrobbles (the story text was revised to match).
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
 - User decisions: **Weighted is hidden** on single-user pages (it equals By Album for one
-  listener; it returns with M2). **No analytics** yet (a follow-up). The route is
+  listener; it returns with M2). **No analytics** yet (AOTY-38). The route is
   **`<base>user/<name>`**, so bare `<base><x>` stays free for other pages.
 - Ranking: By Track = plays, ties by key; By Album = plays ÷ tracks, singles out by
   `is_single`, ties by plays then key. A strict top 100 (ties at the cutoff dropped).

@@ -133,7 +133,7 @@ What a deploy (`deploy.yml`) does, as the env's deploy role:
    into `dist/web`. CD uploads its content-hashed `assets/` with a year's immutable cache, never
    deleting old ones (open tabs still ask for them), then `index.html` with `no-cache`, then
    invalidates `<base>*` on kamp.fm's distribution. `data/` belongs to the chart builder and is
-   never touched. Old assets pile up at a few KB per deploy; pruning them is a follow-up.
+   never touched. Old assets pile up at a few KB per deploy; pruning them is AOTY-39.
 5. Smoke test through kamp.fm:
    - `<base>api/health` → 200, and the body must say `"source": "lambdas/api"` (deployed code, not
      the placeholder) and `"sha"` equal to the checked-out commit (not a stale `$LATEST`). A wrong
