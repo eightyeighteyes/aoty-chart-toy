@@ -78,6 +78,7 @@ class Deps:
   @classmethod
   def from_env(cls):
     import boto3  # in the task image (public.ecr.aws/lambda/python); not needed by tests
+    from botocore.config import Config
 
     env = os.environ
     contact = ""
@@ -86,7 +87,8 @@ class Deps:
       param = ssm.get_parameter(Name=f"{env['SSM_PREFIX']}mb_contact", WithDecryption=True)
       contact = param["Parameter"]["Value"]
     return cls(
-      s3=boto3.client("s3"),
+      # One connection per upload thread; the default pool of 10 logs a warning per extra one.
+      s3=boto3.client("s3", config=Config(max_pool_connections=UPLOAD_THREADS)),
       ddb=boto3.client("dynamodb"),
       sqs=boto3.client("sqs"),
       env=env,

@@ -259,6 +259,10 @@ Output goes to `data/mb_index/`.
   - It spills records to 16 files on disk by shard prefix. Peak RSS is 522 MB, against 5.4 GB with
     everything in memory. 10 min wall time on the laptop, plus the download.
   - 4.46M records, 3.1M titles, 280 MB of shards, the largest 195 KB.
+  - First sandbox build (2026-11-22): 18.6 min in all, on 1 vCPU. The download ran at 7.6 MB/s
+    from AWS (2.7 min, against 15 min on the laptop), and the parse took about 13 min.
+  - EMF works from the ECS `awslogs` stream: CloudWatch extracted the build's metrics with no
+    agent and no `PutMetricData`.
   - Daily, because Scheduler doesn't retry a task that started and died. The run exits early
     when the manifest already names the latest dump.
   - It keeps the build it replaced and deletes older ones, rather than using an age-based
