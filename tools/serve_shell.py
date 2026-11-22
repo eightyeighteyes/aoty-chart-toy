@@ -27,11 +27,13 @@ import chart_core  # noqa: E402
 from common.albumkey import album_key, join_key  # noqa: E402
 from scripts import build_shell  # noqa: E402
 
-# As served by kamp.fm (response headers policy kamp-aoty-<env>-headers, checked 2026-11-22).
+# As served by kamp.fm (response headers policy kamp-aoty-<env>-headers in kamp-site's
+# infra/aoty.tf). https://archive.org is CAA's first redirect hop (kamp-site PR #22).
 CSP = (
   "default-src 'self'; script-src 'self' https://www.googletagmanager.com; "
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
-  "img-src 'self' data: https://lastfm.freetls.fastly.net https://coverartarchive.org https://*.archive.org "
+  "img-src 'self' data: https://lastfm.freetls.fastly.net https://coverartarchive.org https://archive.org "
+  "https://*.archive.org "
   "https://*.google-analytics.com https://*.googletagmanager.com; "
   "connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com "
   "https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
