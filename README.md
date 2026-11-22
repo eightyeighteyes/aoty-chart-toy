@@ -56,6 +56,11 @@ read-only `terraform plan` on every PR. `main` requires them to pass.
 The M1 web app (kamp.fm/toys/aoty/) runs serverless on AWS, managed by Terraform in `infra/`.
 See [infra/README.md](infra/README.md).
 
+Deploys are automatic. A merge to `main` that passes CI deploys staging
+(kamp.fm/toys/aoty-staging/), and release-please keeps a release PR open. Merging that PR tags
+a version and deploys it to production. The Lambda code lives in `lambdas/`. Rollback is
+`gh workflow run deploy.yml --ref <older tag> -f environment=production`.
+
 ## MusicBrainz benchmark
 
 `tools/mb_cold_run.py` re-runs the MusicBrainz lookups cold, against a scratch cache, comparing
