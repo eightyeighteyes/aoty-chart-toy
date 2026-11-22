@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="aoty-base" content="{{BASE}}">
+<title>Albums of the Year</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{CSS}}">
+<script src="{{JS}}" defer></script>
+</head>
+<body>
+<main class="poster" data-view="poster" data-rank="track">
+  <header>
+    <div class="eyebrow" id="eyebrow">Albums of the Year</div>
+    <h1 id="title">Albums of the Year</h1>
+    <div class="sub" id="sub"></div>
+    <noscript><div class="sub">This page needs JavaScript to show the rankings.</div></noscript>
+    <div class="controls" id="controls" hidden>
+      <div class="switch" role="group" aria-label="View">
+        <button type="button" data-view="poster" aria-pressed="true">Poster</button>
+        <button type="button" data-view="list" aria-pressed="false">List</button>
+      </div>
+      <div class="switch" role="group" aria-label="Ranking">
+        <button type="button" data-rank="track" aria-pressed="true">By Track</button>
+        <button type="button" data-rank="album" aria-pressed="false">By Album</button>
+      </div>
+    </div>
+  </header>
+  <div id="ranking"></div>
+
+  <footer id="footer">Data from Last.fm scrobbles · release years from MusicBrainz</footer>
+</main>
+</body>
+</html>
