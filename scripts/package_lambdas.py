@@ -1,10 +1,12 @@
-"""Build one deployment zip per Lambda (AOTY-17).
+"""Build one deployment zip per Lambda (AOTY-17) and per Fargate job (AOTY-20).
 
-  .venv/bin/python scripts/package_lambdas.py            # -> dist/api.zip, dist/sync.zip, dist/mb.zip
+  .venv/bin/python scripts/package_lambdas.py   # -> dist/{api,sync,mb}.zip, dist/index.zip
 
-Each zip holds lambdas/<fn>/ at its root, plus lambdas/common/ if present, plus the packages
-from lambdas/requirements.txt. Those are installed as Linux arm64 wheels, because the functions
-run on python3.13 arm64 (infra/modules/stack/functions.tf), not on the machine building them.
+Each zip holds lambdas/<fn>/ (or jobs/<job>/) at its root, plus lambdas/common/ if present,
+plus the packages from lambdas/requirements.txt. Those are installed as Linux arm64 wheels,
+because the functions and the index task run on python3.13 arm64
+(infra/modules/stack/functions.tf, index.tf), not on the machine building them. JOBS names
+each job's entry script; CD uploads job zips to the store bucket's code/ prefix.
 
 Zips are reproducible: sorted entries, a fixed timestamp and mode, no bytecode, so the same
 source always gives the same bytes.
@@ -18,6 +20,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 FUNCTIONS = ("api", "sync", "mb")
+JOBS = {"index": "build.py"}  # jobs/<name>/ -> its entry script
 FIXED_DATE = (1980, 1, 1, 0, 0, 0)  # the earliest date a zip entry can carry
 FILE_MODE = 0o100644
 SKIP_PARTS = {"__pycache__", ".pytest_cache"}
@@ -77,25 +80,26 @@ def install_deps(requirements, target):
   return target
 
 
-def package_all(lambdas_dir, dist_dir, functions=FUNCTIONS, deps_dir=None):
-  """Build dist_dir/<fn>.zip for each function; returns the zip paths."""
+def package_all(lambdas_dir, dist_dir, functions=FUNCTIONS, deps_dir=None, jobs_dir=None, jobs=None):
+  """Build dist_dir/<fn>.zip for each function and job; returns the zip paths."""
   deps = install_deps(lambdas_dir / "requirements.txt", deps_dir or dist_dir / ".deps")
   common = lambdas_dir / "common"
+  sources = [(fn, lambdas_dir / fn, "handler.py") for fn in functions]
+  sources += [(job, jobs_dir / job, entry) for job, entry in (jobs or {}).items()]
   built = []
-  for fn in functions:
-    src = lambdas_dir / fn
-    if not (src / "handler.py").is_file():
-      raise SystemExit(f"{src}/handler.py is missing: every function needs one")
+  for name, src, entry in sources:
+    if not (src / entry).is_file():
+      raise SystemExit(f"{src}/{entry} is missing: it's the entry point")
     roots = [(deps, "")] if deps else []
     if common.is_dir():
       roots.append((common, "common/"))  # importable as `common.<module>`
     roots.append((src, ""))
-    built.append(write_zip(dist_dir / f"{fn}.zip", roots))
+    built.append(write_zip(dist_dir / f"{name}.zip", roots))
   return built
 
 
 def main():
-  for path in package_all(REPO / "lambdas", REPO / "dist"):
+  for path in package_all(REPO / "lambdas", REPO / "dist", jobs_dir=REPO / "jobs", jobs=JOBS):
     print(f"{path.relative_to(REPO)}: {path.stat().st_size} bytes")
 
 

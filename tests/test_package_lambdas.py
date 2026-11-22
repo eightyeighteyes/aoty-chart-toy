@@ -36,6 +36,29 @@ def test_each_function_zip_has_its_handler_and_the_shared_code_at_the_root(tree,
     assert z.read("handler.py").decode().endswith("'sync'\n")
 
 
+def test_a_job_zip_has_its_scripts_and_the_shared_code(tree, tmp_path):
+  jobs = tmp_path / "jobs"
+  (jobs / "index").mkdir(parents=True)
+  (jobs / "index" / "build.py").write_text("print('build')\n")
+  (jobs / "index" / "dump.py").write_text("X = 2\n")
+  built = pkg.package_all(tree, tmp_path / "dist", functions=(), jobs_dir=jobs, jobs={"index": "build.py"})
+  assert [p.name for p in built] == ["index.zip"]
+  assert names(built[0]) == ["build.py", "common/util.py", "dump.py"]
+
+
+def test_a_job_without_its_entry_script_is_an_error(tree, tmp_path):
+  (tmp_path / "jobs" / "index").mkdir(parents=True)
+  with pytest.raises(SystemExit, match="build.py"):
+    pkg.package_all(
+      tree, tmp_path / "dist", functions=(), jobs_dir=tmp_path / "jobs", jobs={"index": "build.py"}
+    )
+
+
+def test_the_repo_packages_the_index_job():
+  assert pkg.JOBS == {"index": "build.py"}
+  assert (pkg.REPO / "jobs" / "index" / "build.py").is_file()
+
+
 def test_bytecode_caches_are_left_out(tree, tmp_path):
   pkg.package_all(tree, tmp_path / "dist", functions=("api",))
   assert not any("__pycache__" in n or n.endswith(".pyc") for n in names(tmp_path / "dist" / "api.zip"))

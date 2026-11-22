@@ -113,6 +113,20 @@ jobs:
             echo "$name -> version $version"
           done
 
+      # The release index build (AOTY-20) is a Fargate task that fetches its code from the store
+      # bucket at start, so this upload is its deploy. The next scheduled run picks it up.
+      - name: index build code
+        run: |
+          set -euo pipefail
+          bucket=$(jq -r .store_bucket_name "$RUNNER_TEMP/stack.json")
+          key=$(jq -r '.index_task.code_key // empty' "$RUNNER_TEMP/stack.json")
+          if [ -z "$key" ]; then
+            echo "no index task in this env's state yet: code upload skipped"
+            exit 0
+          fi
+          aws s3 cp dist/index.zip "s3://$bucket/$key" --only-show-errors
+          echo "dist/index.zip -> s3://$bucket/$key"
+
       # No shell yet (later stories add web/): skip, so /toys/aoty/ keeps returning 404 and the
       # --delete pass below can never empty the prefix. Never for sandbox, which kamp.fm doesn't
       # serve (and whose role has no CloudFront access).
