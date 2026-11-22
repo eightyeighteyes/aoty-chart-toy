@@ -5,9 +5,9 @@ No I/O here (handler.py does it), so tests and tools/sync_check.py drive it dire
 Data shape (AOTY-11 spike): per-(album, chart week) play totals from user.getWeeklyAlbumChart,
 which groups by album artist like M0's getTopAlbums. One store object per user and year:
 
-  {"version": 1, "year": 2026, "last_seen_uts": int | None,
+  {"version": 1, "year": 2026, "last_seen_uts": int | None, "full_started_at"?: uts,
    "weeks":  {"<from_uts>": {"to": uts, "fetched_at": uts, "plays": {key: n}}},
-   "albums": {key: {"artist", "album", "mbid", "image", "queued_at"}}}
+   "albums": {key: {"artist", "album", "mbid", "image", "queued_at"?, "resolved"?}}}
 
 key is common.albumkey.join_key((artist_key, title_key)), the albums table's identity.
 """
@@ -65,18 +65,35 @@ def new_store(year):
   return {"version": STORE_VERSION, "year": year, "last_seen_uts": None, "weeks": {}, "albums": {}}
 
 
-def weeks_to_fetch(store, ranges, now, full=False):
-  """Ranges never fetched, not yet settled (fetched less than SETTLE after closing), or all if full."""
+def weeks_to_fetch(store, ranges, full_since=None):
+  """Ranges never fetched or not yet settled (fetched less than SETTLE after closing).
+
+  full_since: a full re-sync's start time. Every week fetched before it is refetched too, so a
+  full pass that was killed resumes where it stopped instead of starting over.
+  """
   out = []
   for frm, to in ranges:
     week = store["weeks"].get(str(frm))
-    if full or week is None or week["fetched_at"] < to + SETTLE:
+    if (
+      week is None
+      or week["fetched_at"] < to + SETTLE
+      or (full_since is not None and week["fetched_at"] < full_since)
+    ):
       out.append((frm, to))
   return out
 
 
 def wants_full_resync(last_full_sync_at, now):
   return last_full_sync_at is None or now - last_full_sync_at > FULL_RESYNC_AFTER
+
+
+def full_pass_start(store, now):
+  """When the current full pass began: kept across retries, restarted if a day stale."""
+  started = store.get("full_started_at")
+  if not started or now - started > DAY:
+    started = now
+  store["full_started_at"] = started
+  return started
 
 
 def fetch_range(fetch, frm, to):
@@ -135,9 +152,19 @@ def ranked_keys(store):
 
 
 def mb_candidates(store, now):
-  """Keys in play order, minus those queued for the mb lane within REQUEUE_AFTER."""
+  """Keys in play order that may still need the mb lane.
+
+  Skips albums already in the albums table ("resolved", permanent: a confirmed miss is an
+  item too) and those queued within REQUEUE_AFTER, so a sync doesn't re-check thousands of
+  keys or flood mb-hot with duplicates while AOTY-19 catches up.
+  """
   albums = store["albums"]
-  return [k for k in ranked_keys(store) if now - (albums.get(k, {}).get("queued_at") or 0) >= REQUEUE_AFTER]
+
+  def wanted(k):
+    a = albums.get(k, {})
+    return not a.get("resolved") and now - (a.get("queued_at") or 0) >= REQUEUE_AFTER
+
+  return [k for k in ranked_keys(store) if wanted(k)]
 
 
 def split_hot_cold(store, unresolved):

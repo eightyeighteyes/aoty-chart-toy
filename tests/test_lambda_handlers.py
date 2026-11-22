@@ -39,6 +39,6 @@ def test_unknown_routes_and_other_base_paths_are_404(api):
     assert api({"rawPath": path}, None)["statusCode"] == 404
 
 
-@pytest.mark.parametrize("fn", ["sync", "mb"])
+@pytest.mark.parametrize("fn", ["mb"])  # sync: tests/test_sync_handler.py
 def test_workers_are_no_ops_until_their_stories(fn):
   assert load(fn)({}, None) == {"ok": True, "source": f"lambdas/{fn}"}

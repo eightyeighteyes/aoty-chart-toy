@@ -61,14 +61,13 @@ def _fetched_all(ranges, at):
 
 def test_first_sync_fetches_every_week():
   ranges = core.week_ranges(2026, NOV21)
-  assert core.weeks_to_fetch(core.new_store(2026), ranges, NOV21) == ranges
+  assert core.weeks_to_fetch(core.new_store(2026), ranges) == ranges
 
 
 def test_a_second_sync_refetches_only_the_current_week_and_the_last_three_closed():
   ranges = core.week_ranges(2026, NOV21)
   store = _fetched_all(ranges, NOV21)
-  again = core.weeks_to_fetch(store, ranges, NOV21 + 3600)
-  assert again == ranges[-4:]
+  assert core.weeks_to_fetch(store, ranges) == ranges[-4:]
 
 
 def test_weeks_fetched_too_soon_after_closing_are_refetched_after_a_long_gap():
@@ -78,12 +77,25 @@ def test_weeks_fetched_too_soon_after_closing_are_refetched_after_a_long_gap():
   # weeks 7-9 were fetched too soon and are refetched along with everything since.
   store = _fetched_all(ranges[:10], ranges[9][1])
   assert ranges[9][1] == ranges[6][1] + core.SETTLE
-  assert core.weeks_to_fetch(store, ranges, NOV21) == ranges[7:]
+  assert core.weeks_to_fetch(store, ranges) == ranges[7:]
 
 
-def test_full_refetches_everything():
+def test_full_refetches_every_week_fetched_before_the_pass_began_and_resumes():
   ranges = core.week_ranges(2026, NOV21)
-  assert core.weeks_to_fetch(_fetched_all(ranges, NOV21), ranges, NOV21, full=True) == ranges
+  store = _fetched_all(ranges, NOV21 - core.DAY)
+  started = core.full_pass_start(store, NOV21)
+  assert core.weeks_to_fetch(store, ranges, started) == ranges
+  for rng in ranges[:20]:  # the pass got this far, then was killed
+    core.merge_week(store, rng, {}, {}, NOV21 + 60)
+  restarted = core.full_pass_start(store, NOV21 + 600)
+  assert restarted == started
+  assert core.weeks_to_fetch(store, ranges, restarted) == ranges[20:]
+
+
+def test_a_stale_full_pass_starts_over():
+  store = core.new_store(2026)
+  core.full_pass_start(store, NOV21)
+  assert core.full_pass_start(store, NOV21 + 2 * core.DAY) == NOV21 + 2 * core.DAY
 
 
 def test_full_resync_is_due_monthly_and_on_first_sync():
@@ -173,6 +185,13 @@ def test_hot_is_the_users_top_150_by_plays_and_cold_the_rest():
   hot, cold = core.split_hot_cold(store, unresolved)
   assert hot == ranked[:3] + ranked[140:150]
   assert cold == ranked[150:160]
+
+
+def test_resolved_albums_are_never_candidates_again():
+  store = _store_with_plays(3)
+  first = core.ranked_keys(store)[0]
+  store["albums"][first]["resolved"] = True
+  assert first not in core.mb_candidates(store, NOV21 + 365 * core.DAY)
 
 
 def test_recently_queued_albums_are_not_queued_again_for_a_week():
