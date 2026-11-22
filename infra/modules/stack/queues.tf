@@ -1,7 +1,8 @@
 # sync: FIFO, message group = username, so one user never has two syncs running at once.
 # mb-hot / mb-cold: albums users are waiting on vs the long tail; the mb Lambda polls them
 # itself (hot first), so they have no event source mapping. The sync queue's mapping is in
-# functions.tf (AOTY-18).
+# functions.tf (AOTY-18). Their visibility is the mb function's timeout: a received batch is
+# finished or released within one run, and a run that dies returns it after that.
 
 locals {
   queues = {
@@ -12,11 +13,11 @@ locals {
     }
     mb-hot = {
       fifo       = false
-      visibility = 300
+      visibility = local.functions.mb.timeout
     }
     mb-cold = {
       fifo       = false
-      visibility = 300
+      visibility = local.functions.mb.timeout
     }
   }
 }
