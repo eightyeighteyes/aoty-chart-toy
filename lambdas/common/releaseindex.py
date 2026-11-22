@@ -107,6 +107,7 @@ class Hit:
   id: str
   type: str | None
   trusted: bool
+  candidate_ids: frozenset = frozenset()  # every release group the index had for these titles
 
   def as_match(self):
     """The shape mb_core keeps for a year: pick_release_group's."""
@@ -136,4 +137,5 @@ def lookup(artist, album, load_shard):
     return None
   chosen = next(rg for rg in candidates if rg["id"] == match["id"])
   trusted = title_tier(album, chosen["title"]) == 0 and match["type"] == "Album"
-  return Hit(year=match["year"], id=match["id"], type=match["type"], trusted=trusted)
+  ids = frozenset(rg["id"] for rg in candidates)
+  return Hit(year=match["year"], id=match["id"], type=match["type"], trusted=trusted, candidate_ids=ids)
