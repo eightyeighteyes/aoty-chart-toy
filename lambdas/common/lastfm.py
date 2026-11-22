@@ -14,6 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from common import covers
+
 API = "https://ws.audioscrobbler.com/2.0/"
 USER_AGENT = "kamp-aoty/0.1 (+https://kamp.fm/toys/aoty/)"
 MIN_INTERVAL = 0.5
@@ -124,6 +126,20 @@ class Client:
     tracks = (data.get("album") or {}).get("tracks") or {}
     tracks = tracks.get("track") if isinstance(tracks, dict) else None
     return len(as_list(tracks)) or None
+
+  def album_image(self, artist, album):
+    """album.getInfo's largest cover URL, or "" when Last.fm has none or no such album.
+
+    The chart builder's fallback for albums whose scrobbles carried no cover (AOTY-21). A failed
+    request raises, so the caller can tell "no cover" (cached) from "try again" (not cached).
+    """
+    try:
+      data = self.call("album.getinfo", artist=artist, album=album, autocorrect=1)
+    except LastfmError as e:
+      if e.code == NOT_FOUND:
+        return ""
+      raise
+    return covers.image_url((data.get("album") or {}).get("image"))
 
   def user_info(self, user):
     """The user's name in Last.fm's own casing, or None on a definite "User not found".

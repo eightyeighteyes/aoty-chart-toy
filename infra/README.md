@@ -326,8 +326,9 @@ index), `Rechecks`, `TracksReused`.
 
 After each sync the worker starts the chart Lambda, which writes
 `<prefix>data/users/<u>/chart.json`: the top 100 By Track and By Album, covers with fallbacks
-(Last.fm sizes, then the Cover Art Archive), and how many of the user's albums the mb lane
-hasn't answered yet. While any are pending, the mb lane's pokes rebuild the chart as they
+(the scrobbles' Last.fm image or else `album.getInfo`'s, its other sizes, then the Cover Art
+Archive), and how many of the user's albums the mb lane hasn't answered yet. The getInfo
+answers are cached in the store's `users/<u>/<year>/chart_covers.json`. While any are pending, the mb lane's pokes rebuild the chart as they
 resolve. The page is `kamp.fm<base>user/<name>`, in any casing.
 
 To build one by hand (it skips nothing when `requested_at` is left out):
@@ -338,7 +339,8 @@ aws lambda invoke --function-name kamp-aoty-staging-chart --invocation-type Even
 aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.json -
 ```
 
-Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`.
+Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
+`CoverLookups`.
 
 **Acceptance:** `tools/chart_check.py --env staging --user <name>` compares a deployed chart
 with M0's rules on the same store and albums items, and exits 1 on a difference.

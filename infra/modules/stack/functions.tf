@@ -101,13 +101,17 @@ locals {
     ]
     chart = [
       {
-        # The sync worker's stores, and the pending keys the builder keeps beside them.
+        # The sync worker's stores, and the builder's own files beside them.
         actions   = ["s3:GetObject"]
         resources = ["${aws_s3_bucket.store.arn}/users/*"]
       },
       {
-        actions   = ["s3:PutObject"]
-        resources = ["${aws_s3_bucket.store.arn}/users/*/chart_pending.json"]
+        # Its own files beside them: pending keys, and the album.getInfo cover cache.
+        actions = ["s3:PutObject"]
+        resources = [
+          "${aws_s3_bucket.store.arn}/users/*/chart_pending.json",
+          "${aws_s3_bucket.store.arn}/users/*/chart_covers.json",
+        ]
       },
       {
         # ListBucket makes a missing store a 404 (NoSuchKey) instead of a 403.

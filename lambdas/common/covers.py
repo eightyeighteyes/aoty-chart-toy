@@ -12,6 +12,19 @@ CAA_SIZE = "front-250"
 # lastfm.freetls.fastly.net, the only one kamp.fm's CSP allows. Same paths, same images.
 LASTFM_HOST = "lastfm.freetls.fastly.net"
 _LASTFM_ALIASES = ("lastfm-img.freetls.fastly.net",)
+PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f"  # Last.fm's default "no image" star
+
+
+def image_url(images):
+  """The largest URL in a Last.fm image list, or "" when missing or the placeholder star.
+
+  Last.fm lists sizes small to mega; recent tracks and album.getInfo use the same shape.
+  """
+  url = ""
+  for im in images or []:
+    if im.get("#text"):
+      url = im["#text"]
+  return "" if not url or PLACEHOLDER in url else url
 
 
 def lastfm_host(url):

@@ -191,3 +191,31 @@ def test_chart_shape():
 def test_display_name_falls_back_to_the_username():
   chart, _ = core.build_chart(sync_core.new_store(2026), {}, username="alice", display_name=None, now=NOW)
   assert chart["display_name"] == "alice"
+
+
+def test_cover_lookups_are_for_shown_albums_with_no_scrobble_cover():
+  img = IMG.format("have")
+  store = make_store({("A", "Has"): 9, ("B", "Lacks"): 8, ("C", "Hidden"): 1}, images={("A", "Has"): img})
+  items = {key("A", "Has"): item(), key("B", "Lacks"): item(), key("C", "Hidden"): item()}
+  shown = core.shown_keys(store, items, n=2)
+  assert core.cover_lookups(shown, store, {}, NOW) == [key("B", "Lacks")]
+
+
+def test_cover_lookups_respect_the_cache():
+  store = make_store({("B", "Lacks"): 8, ("D", "None"): 7, ("E", "Old"): 6})
+  items = {k: item() for k in core.year_plays(store)}
+  shown = core.shown_keys(store, items)
+  cache = {
+    key("B", "Lacks"): {"url": "https://x/1.jpg", "at": NOW - 999 * 86400},  # found: kept for good
+    key("D", "None"): {"url": "", "at": NOW - 86400},  # none, recently: not yet
+    key("E", "Old"): {"url": "", "at": NOW - core.COVER_RETRY_AFTER},  # none, a month ago: retry
+  }
+  assert core.cover_lookups(shown, store, cache, NOW) == [key("E", "Old")]
+
+
+def test_looked_up_images_come_before_caa():
+  store = make_store({("B", "Lacks"): 8})
+  chart, _ = build(store, {key("B", "Lacks"): item(rg="rg-b")}, images={key("B", "Lacks"): IMG.format("got")})
+  (a,) = chart["albums"]
+  assert a["art"] == IMG.format("got")
+  assert a["fallbacks"] == [*art_fallbacks(IMG.format("got")), caa_url("rg-b")]

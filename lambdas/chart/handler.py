@@ -15,9 +15,11 @@ read older data can never overwrite a newer chart. Two events:
 A build:
   1. Loads s3://$STORE_BUCKET/users/<u>/<year>/weeks.json.gz (no store: nothing to build).
   2. BatchGets the albums items for every key the user played this year.
-  3. Writes s3://$SITE_BUCKET/$SITE_PREFIX/data/users/<u>/chart.json with Cache-Control no-cache,
+  3. Looks up album.getInfo covers for shown albums whose scrobbles carried none (cached in
+     users/<u>/<year>/chart_covers.json; at most COVER_LOOKUPS per build).
+  4. Writes s3://$SITE_BUCKET/$SITE_PREFIX/data/users/<u>/chart.json with Cache-Control no-cache,
      and users/<u>/<year>/chart_pending.json (the keys still pending) in the store bucket.
-  4. Sets chart_built_at and chart_pending on the users row.
+  5. Sets chart_built_at and chart_pending on the users row.
 
 The pending pass Scans the users table for chart_pending > 0. That's fine at M1's scale (a
 few hundred users); past that, a sparse GSI on chart_pending replaces the Scan.
@@ -35,7 +37,7 @@ import time
 
 import chart_core as core
 
-from common import dynamo
+from common import dynamo, lastfm
 from common.albumkey import join_key, split_key
 from common.config import TARGET_YEAR
 
@@ -46,20 +48,30 @@ NAMESPACE = "kamp-aoty"
 BATCH_GET = 100  # DynamoDB BatchGetItem limit
 RETRIES = 4
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
+# album.getInfo cover lookups per build: at Last.fm's 0.5 s pacing, ~60 s at most. A heavy
+# user's first chart needed ~50; the next build continues where this one stopped.
+COVER_LOOKUPS = 120
+COVER_BUDGET_S = 90
 
 
 class Deps:
-  """Everything a build touches, so tests can pass fakes. from_env() builds the real ones."""
+  """Everything a build touches, so tests can pass fakes. from_env() builds the real ones.
 
-  def __init__(self, *, s3, ddb, env, clock=time.time, mono=time.monotonic, sleep=time.sleep):
-    self.s3, self.ddb, self.env = s3, ddb, env
+  lastfm may be None: covers then come only from the scrobbles and the Cover Art Archive.
+  """
+
+  def __init__(self, *, s3, ddb, env, lastfm_client=None, clock=time.time, mono=time.monotonic,
+               sleep=time.sleep):  # fmt: skip
+    self.s3, self.ddb, self.env, self.lastfm = s3, ddb, env, lastfm_client
     self.clock, self.mono, self.sleep = clock, mono, sleep
 
   @classmethod
   def from_env(cls):
     import boto3  # in the Lambda runtime; not needed by tests
 
-    return cls(s3=boto3.client("s3"), ddb=boto3.client("dynamodb"), env=os.environ)
+    env = os.environ
+    key = lastfm.api_key_from_ssm(boto3.client("ssm"), f"{env['SSM_PREFIX']}lastfm_api_key")
+    return cls(s3=boto3.client("s3"), ddb=boto3.client("dynamodb"), env=env, lastfm_client=lastfm.Client(key))
 
 
 _deps = None
@@ -104,7 +116,7 @@ def _build_requested(deps, username, year, requested_at, totals):
   if requested_at and row.get("chart_built_at", 0) >= requested_at:
     totals["skipped"] += 1
     return
-  _count(totals, build(deps, username, row, year))
+  _count(totals, build(deps, username, row, year, totals))
 
 
 def _rebuild_if_resolved(deps, row, totals):
@@ -113,14 +125,43 @@ def _rebuild_if_resolved(deps, row, totals):
   if keys and not _get_items(deps, keys, keys_only=True):
     totals["skipped"] += 1  # nothing new since the last build
     return
-  _count(totals, build(deps, username, _get_user(deps, username), year))
+  _count(totals, build(deps, username, _get_user(deps, username), year, totals))
 
 
 def _count(totals, built):
   totals["built" if built else "skipped"] += 1
 
 
-def build(deps, username, row, year=TARGET_YEAR):
+def _cover_images(deps, username, year, store, items, now, totals=None):
+  """{key: album.getInfo cover} for shown albums whose scrobbles carried none.
+
+  Looks up at most COVER_LOOKUPS per build and for at most COVER_BUDGET_S, in chart order, so
+  the top of the chart is covered first; the next build continues. Answers ("none" included)
+  are cached in the store's chart_covers.json; a failed request isn't, so it's retried.
+  """
+  cache = _load_covers(deps, username, year)
+  todo = core.cover_lookups(core.shown_keys(store, items), store, cache, now)[:COVER_LOOKUPS]
+  if todo and deps.lastfm is not None:
+    meta, stop_at, changed = store.get("albums", {}), deps.mono() + COVER_BUDGET_S, False
+    for k in todo:
+      if deps.mono() >= stop_at:
+        break
+      m = meta.get(k, {})
+      try:
+        url = deps.lastfm.album_image(m.get("artist", ""), m.get("album", ""))
+      except Exception as e:  # LastfmError or the network: not cached, so the next build retries
+        log.warning("cover lookup failed: %s", getattr(e, "code", type(e).__name__))
+        continue
+      cache[k] = {"url": url, "at": now}
+      changed = True
+      if totals is not None:
+        totals["covers"] = totals.get("covers", 0) + 1
+    if changed:
+      _put_json(deps, deps.env["STORE_BUCKET"], covers_key(username, year), {"version": 1, "covers": cache})
+  return {k: v["url"] for k, v in cache.items() if v.get("url")}
+
+
+def build(deps, username, row, year=TARGET_YEAR, totals=None):
   """One user's chart. False when they have no store yet (never synced)."""
   store = _load_store(deps, username, year)
   if store is None:
@@ -128,8 +169,9 @@ def build(deps, username, row, year=TARGET_YEAR):
   now = int(deps.clock())
   plays = core.year_plays(store)
   items = _get_items(deps, sorted(plays))
+  images = _cover_images(deps, username, year, store, items, now, totals)
   chart, pending = core.build_chart(
-    store, items, username=username, display_name=row.get("display_name"), now=now
+    store, items, username=username, display_name=row.get("display_name"), now=now, images=images
   )
   _put_json(
     deps, deps.env["SITE_BUCKET"], chart_key(deps.env.get("SITE_PREFIX", ""), username), chart,
@@ -154,6 +196,15 @@ def store_key(username, year):
 
 def pending_key(username, year):
   return f"users/{username}/{year}/chart_pending.json"
+
+
+def covers_key(username, year):
+  return f"users/{username}/{year}/chart_covers.json"
+
+
+def _load_covers(deps, username, year):
+  body = _get_object(deps, deps.env["STORE_BUCKET"], covers_key(username, year))
+  return json.loads(body).get("covers", {}) if body else {}
 
 
 def _get_object(deps, bucket, key):
@@ -269,6 +320,7 @@ def _emit(deps, totals, elapsed):
     "ChartsSkipped": (totals["skipped"], "Count"),
     "ChartFailures": (totals["failed"], "Count"),
     "ChartSeconds": (round(elapsed, 2), "Seconds"),
+    "CoverLookups": (totals.get("covers", 0), "Count"),
   }
   line = {
     "_aws": {

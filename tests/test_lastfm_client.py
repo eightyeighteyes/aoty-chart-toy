@@ -84,6 +84,18 @@ def test_user_info_returns_lastfms_casing():
   assert client(FakeHTTP((404, {"error": 6, "message": "User not found"}))).user_info("x") is None
 
 
+def test_album_image_takes_the_largest_real_cover():
+  sizes = [{"size": "small", "#text": "https://i/s.jpg"}, {"size": "extralarge", "#text": "https://i/xl.jpg"},
+           {"size": "mega", "#text": ""}]  # fmt: skip
+  assert client(FakeHTTP((200, {"album": {"image": sizes}}))).album_image("A", "X") == "https://i/xl.jpg"
+  star = [{"size": "large", "#text": "https://i/2a96cbd8b46e442fc41c2b86b821562f.png"}]
+  assert client(FakeHTTP((200, {"album": {"image": star}}))).album_image("A", "X") == ""
+  assert client(FakeHTTP((200, {"album": {}}))).album_image("A", "X") == ""
+  assert client(FakeHTTP((404, {"error": 6, "message": "Album not found"}))).album_image("A", "X") == ""
+  with pytest.raises(lastfm.LastfmError):
+    client(FakeHTTP((403, {"error": 10, "message": "bad key"}))).album_image("A", "X")
+
+
 def test_album_track_count_handles_lists_bare_objects_and_empty_tracklists():
   def count(body):
     return client(FakeHTTP((200, body))).album_track_count("A", "X")

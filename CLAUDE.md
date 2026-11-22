@@ -379,8 +379,12 @@ not daily totals from paging scrobbles (the story text was revised to match).
 - Ranking: By Track = plays, ties by key; By Album = plays ÷ tracks, singles out by
   `is_single`, ties by plays then key. A strict top 100 (ties at the cutoff dropped).
   `tools/chart_check.py` checks a deployed chart against M0's code.
-- Covers: Last.fm image → its other sizes → Cover Art Archive `front-250` by `rg_mbid` → the
-  artist-name tile (`common/covers.py`). CAA 404s for some release groups.
+- Covers: the scrobbles' Last.fm image, else `album.getInfo`'s → its other sizes → Cover Art
+  Archive `front-250` by `rg_mbid` → the artist-name tile (`common/covers.py`). Sync's harvest
+  reads only the newest ~4,000 scrobbles on a first sync, so the builder looks up getInfo covers
+  for shown albums with none (user decision 2026-11-22), at most 120 per build within 90 s,
+  cached per user in `chart_covers.json` ("none" retried monthly, failures not cached). CAA has
+  no art for many small Bandcamp-only releases, which Last.fm has.
 - **Cover hosts vs the CSP** (found in sandbox, 2026-11-22: every cover showed as a tile):
   getRecentTracks serves covers from `lastfm-img.freetls.fastly.net`, but kamp.fm's CSP allows
   only `lastfm.freetls.fastly.net` (same paths), so `cover()` rewrites the host. CAA redirects
