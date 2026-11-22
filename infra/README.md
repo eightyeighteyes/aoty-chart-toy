@@ -126,8 +126,8 @@ What a deploy (`deploy.yml`) does, as the env's deploy role:
    commit's SHA (`-dirty` if a packaged file isn't committed), which `/api/health` reports.
 2. `terraform apply` for `infra/envs/<env>` (skipped with `skip_terraform`).
 3. `update-function-code` for each function, with `wait function-updated` before and after, then
-   `publish-version`. Each deploy leaves a numbered Lambda version described `<sha> by <actor>`. A
-   same-commit redeploy gets back the existing version, which keeps its old description.
+   `publish-version`. Each deploy leaves a new numbered Lambda version described `<sha> by <actor>`,
+   a same-commit redeploy included.
 4. **Only if `web/index.html` exists:** uploads hashed assets with a year's cache, then
    `index.html` with `no-cache`, then removes deleted files (never `data/`), and invalidates
    `<base>*` on kamp.fm's distribution.

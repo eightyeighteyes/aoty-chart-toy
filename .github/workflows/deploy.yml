@@ -119,8 +119,8 @@ jobs:
               --zip-file "fileb://dist/$fn.zip" --query CodeSha256 --output text)
             aws lambda wait function-updated --function-name "$name"
             # Publish separately to label the version. --code-sha256 refuses to publish if $LATEST
-            # isn't the upload above. If the code equals the last version's (a same-commit
-            # redeploy), AWS returns that version and keeps its old description.
+            # isn't the upload above. Every deploy gets a new version, even a same-commit redeploy:
+            # update-function-code modifies $LATEST even when the bytes match (seen in sandbox).
             version=$(aws lambda publish-version --function-name "$name" --code-sha256 "$code_sha" \
               --description "$BUILD_SHA by $ACTOR" --query Version --output text)
             echo "$name -> version $version"
