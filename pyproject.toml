@@ -20,7 +20,7 @@ extend-select = ["I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# lambdas/sync, lambdas/mb: each zip puts its *_core.py at the root, so handlers import it bare.
+# lambdas/sync, lambdas/mb, lambdas/chart: each zip puts its *_core.py at the root, so handlers import it bare.
 # jobs/index: the index build (AOTY-20), whose zip has build.py and dump.py at the root.
-pythonpath = [".", "lambdas", "lambdas/sync", "lambdas/mb", "jobs/index"]
+pythonpath = [".", "lambdas", "lambdas/sync", "lambdas/mb", "lambdas/chart", "jobs/index"]
 addopts = "-ra --strict-markers"
