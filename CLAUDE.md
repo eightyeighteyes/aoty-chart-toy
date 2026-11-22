@@ -405,6 +405,10 @@ Details are in `infra/README.md`. Things to keep in mind when changing it:
   Lambda, `lambda:TagResource` on the new ARN). The sync event source mapping failed its first
   deploy on this (AOTY-18). Grant the tag actions with any new resource type.
 - Testing role policies from the laptop uses `admin_assume_principal`. Turn it off afterwards.
+- **Service-linked roles live in `global/`** (`service_linked_roles.tf`). A deploy role can't
+  create them, and AWS doesn't say so plainly. The first sandbox deploy of the ECS index cluster
+  (AOTY-20) failed with "Unable to assume the service linked role", because the account had never
+  used ECS. A new AWS service may need one too.
 - **This repo uses GitHub's immutable OIDC subject claims:**
   `repo:eightyeighteyes@6600722/aoty-chart-toy@1466126436:...`, not
   `repo:eightyeighteyes/aoty-chart-toy:...`. A trust policy with the bare names gives "Not
