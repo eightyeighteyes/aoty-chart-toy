@@ -239,7 +239,7 @@ code and checks `<api_endpoint>/toys/aoty-sandbox/api/health`. GitHub only lists
 .venv/bin/python scripts/package_lambdas.py
 terraform -chdir=infra/envs/sandbox init
 terraform -chdir=infra/envs/sandbox apply
-for fn in api sync mb; do aws lambda update-function-code --function-name kamp-aoty-sandbox-$fn \
+for fn in api sync mb chart; do aws lambda update-function-code --function-name kamp-aoty-sandbox-$fn \
   --zip-file fileb://dist/$fn.zip --publish; done
 ```
 

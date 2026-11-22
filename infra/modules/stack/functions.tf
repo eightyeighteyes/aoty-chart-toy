@@ -11,6 +11,9 @@ locals {
     sync = { timeout = 900, memory = 512, reserved = null }
     # 512: the release index's shard cache (AOTY-20) holds up to 128 parsed shards.
     mb = { timeout = 900, memory = 512, reserved = 1 }
+    # Chart builder (AOTY-21): reserved 1 runs builds one at a time, so a build that read older
+    # data can't overwrite a newer chart. 512: a heavy user's store is a few MB parsed.
+    chart = { timeout = 300, memory = 512, reserved = 1 }
   }
 
   function_env = {
@@ -25,6 +28,8 @@ locals {
     MB_HOT_URL     = aws_sqs_queue.main["mb-hot"].url
     MB_COLD_URL    = aws_sqs_queue.main["mb-cold"].url
     MB_FUNCTION    = "${local.prefix}-mb"
+    CHART_FUNCTION = "${local.prefix}-chart"
+    SITE_PREFIX    = local.s3_key_prefix
   }
 
   queue_consume = [
@@ -60,8 +65,11 @@ locals {
         resources = [aws_s3_bucket.store.arn, "${aws_s3_bucket.store.arn}/*"]
       },
       {
-        actions   = ["lambda:InvokeFunction"]
-        resources = ["arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-mb"]
+        actions = ["lambda:InvokeFunction"]
+        resources = [
+          "arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-mb",
+          "arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-chart",
+        ]
       },
     ]
     mb = [
@@ -83,8 +91,40 @@ locals {
       },
       {
         # Out of time with work left, it starts its own next run (it queues behind this one).
-        actions   = ["lambda:InvokeFunction"]
-        resources = ["arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-mb"]
+        # It also pokes the chart builder as albums land (AOTY-21).
+        actions = ["lambda:InvokeFunction"]
+        resources = [
+          "arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-mb",
+          "arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-chart",
+        ]
+      },
+    ]
+    chart = [
+      {
+        # The sync worker's stores, and the pending keys the builder keeps beside them.
+        actions   = ["s3:GetObject"]
+        resources = ["${aws_s3_bucket.store.arn}/users/*"]
+      },
+      {
+        actions   = ["s3:PutObject"]
+        resources = ["${aws_s3_bucket.store.arn}/users/*/chart_pending.json"]
+      },
+      {
+        # ListBucket makes a missing store a 404 (NoSuchKey) instead of a 403.
+        actions   = ["s3:ListBucket"]
+        resources = [aws_s3_bucket.store.arn]
+      },
+      {
+        actions   = ["s3:PutObject"]
+        resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/users/*"]
+      },
+      {
+        actions   = ["dynamodb:BatchGetItem"]
+        resources = [aws_dynamodb_table.albums.arn]
+      },
+      {
+        actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
+        resources = [aws_dynamodb_table.users.arn]
       },
     ]
   }
@@ -195,6 +235,14 @@ resource "aws_lambda_function" "fn" {
 # event that ages out. A run that errors isn't retried: its messages come back on their own.
 resource "aws_lambda_function_event_invoke_config" "mb" {
   function_name                = aws_lambda_function.fn["mb"].function_name
+  maximum_event_age_in_seconds = 3600
+  maximum_retry_attempts       = 0
+}
+
+# The chart builder works the same way (AOTY-21): sync and mb start it with async invokes,
+# throttled starts wait behind the running build, and repeats are skipped by requested_at.
+resource "aws_lambda_function_event_invoke_config" "chart" {
+  function_name                = aws_lambda_function.fn["chart"].function_name
   maximum_event_age_in_seconds = 3600
   maximum_retry_attempts       = 0
 }

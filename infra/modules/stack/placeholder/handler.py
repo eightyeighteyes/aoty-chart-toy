@@ -1,4 +1,4 @@
-"""Placeholder for the api, sync and mb Lambdas until their stories deploy real code.
+"""Placeholder for the api, sync, mb and chart Lambdas until CD deploys real code.
 
 Answers <base>api/health with 200 so the API path can be smoke-tested end to end.
 Raises on SQS events: returning success would make the event source mapping delete real

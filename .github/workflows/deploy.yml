@@ -110,7 +110,7 @@ jobs:
           ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
-          for fn in api sync mb; do
+          for fn in api sync mb chart; do
             name=$(jq -r ".function_names.$fn" "$RUNNER_TEMP/stack.json")
             # Wait first: a config change from the apply above leaves the function "InProgress",
             # and update-function-code would fail with ResourceConflictException.

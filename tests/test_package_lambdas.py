@@ -56,6 +56,15 @@ def test_a_job_without_its_entry_script_is_an_error(tree, tmp_path):
     )
 
 
+def test_the_repo_packages_every_function_terraform_creates():
+  assert pkg.FUNCTIONS == ("api", "sync", "mb", "chart")
+  for fn in pkg.FUNCTIONS:
+    assert (pkg.REPO / "lambdas" / fn / "handler.py").is_file()
+  tf = (pkg.REPO / "infra" / "modules" / "stack" / "functions.tf").read_text()
+  for fn in pkg.FUNCTIONS:
+    assert f"\n    {fn} " in tf or f"\n    {fn}  " in tf  # a key in local.functions
+
+
 def test_the_repo_packages_the_index_job():
   assert pkg.JOBS == {"index": "build.py"}
   assert (pkg.REPO / "jobs" / "index" / "build.py").is_file()

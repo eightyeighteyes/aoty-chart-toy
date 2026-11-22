@@ -1,6 +1,6 @@
 """Build one deployment zip per Lambda (AOTY-17) and per Fargate job (AOTY-20).
 
-  .venv/bin/python scripts/package_lambdas.py   # -> dist/{api,sync,mb}.zip, dist/index.zip
+  .venv/bin/python scripts/package_lambdas.py   # -> dist/{api,sync,mb,chart}.zip, dist/index.zip
 
 Each zip holds lambdas/<fn>/ (or jobs/<job>/) at its root, plus lambdas/common/ if present,
 plus the packages from lambdas/requirements.txt. Those are installed as Linux arm64 wheels,
@@ -25,7 +25,7 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-FUNCTIONS = ("api", "sync", "mb")
+FUNCTIONS = ("api", "sync", "mb", "chart")
 JOBS = {"index": "build.py"}  # jobs/<name>/ -> its entry script
 FIXED_DATE = (1980, 1, 1, 0, 0, 0)  # the earliest date a zip entry can carry
 FILE_MODE = 0o100644
