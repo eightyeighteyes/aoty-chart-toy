@@ -100,9 +100,10 @@ class Client:
     data = self.call("user.getweeklyalbumchart", user=user, **{"from": frm, "to": to})
     return as_list(data.get("weeklyalbumchart", {}).get("album"))
 
-  def recent_tracks(self, user, frm, page=1, limit=200):
+  def recent_tracks(self, user, frm, page=1, limit=200, to=None):
     """(tracks, total_pages), newest first. Includes the now-playing row, which has no date."""
-    data = self.call("user.getrecenttracks", user=user, page=page, limit=limit, **{"from": frm})
+    window = {"from": frm} if to is None else {"from": frm, "to": to}
+    data = self.call("user.getrecenttracks", user=user, page=page, limit=limit, **window)
     rt = data.get("recenttracks", {})
     total = int((rt.get("@attr") or {}).get("totalPages") or 0)
     return as_list(rt.get("track")), total
