@@ -1,0 +1,22 @@
+# Tool config only; this repo isn't a package. CI (.github/workflows/ci.yml) runs the same
+# pinned versions from requirements-dev.txt.
+
+[tool.ruff]
+line-length = 110
+indent-width = 2
+target-version = "py313"
+# tools/ is excluded until the AOTY-12 branch (which rewrites tools/mb_cold_run.py) merges,
+# so the first reformat doesn't conflict with it. Remove this exclude then.
+extend-exclude = ["tools", "infra/**/build"]
+
+[tool.ruff.format]
+quote-style = "preserve"
+
+[tool.ruff.lint]
+# Defaults (E4, E7, E9, F) plus import sorting and pyupgrade-style checks that are cheap to satisfy.
+extend-select = ["I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"

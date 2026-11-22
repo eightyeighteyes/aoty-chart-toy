@@ -1,0 +1,135 @@
+name: CI
+
+# Required on main: lint, test, terraform, terraform-plan. No `paths:` filter on purpose: a
+# required check that never reports would block merging forever. A skipped job counts as passed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # Fixtures are recorded MusicBrainz responses (tests/fixtures/mb); nothing hits the network.
+      - run: pytest
+
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.14.9"
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff infra
+      - name: validate
+        run: |
+          set -euo pipefail
+          for root in infra/global infra/envs/staging infra/envs/prod; do
+            echo "::group::$root"
+            terraform -chdir="$root" init -backend=false -input=false
+            terraform -chdir="$root" validate -no-color
+            echo "::endgroup::"
+          done
+
+  # Plans staging and prod with the read-only OIDC plan role (infra/global/ci_roles.tf) and posts
+  # them as one PR comment, edited in place. Same-repo PRs only: fork PRs get no OIDC token, and
+  # the role only trusts the pull_request subject (so pushes to main skip this too).
+  #
+  # The repo is public, so the comment is too: it shows resource names, ARNs and the account ID.
+  # That's accepted because state and Lambda env vars hold no secrets by design, and the plan
+  # role is explicitly denied SSM decryption and kamp-site's state.
+  terraform-plan:
+    name: terraform-plan
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.14.9"
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::424416271636:role/kamp-aoty-ci/kamp-aoty-plan
+          role-session-name: aoty-ci-plan-${{ github.run_id }}
+          aws-region: us-east-1
+      - name: plan
+        run: |
+          set -euo pipefail
+          for env in staging prod; do
+            dir="infra/envs/$env"
+            echo "::group::$env"
+            terraform -chdir="$dir" init -input=false -no-color
+            # -lock=false: a read-only plan never blocks (or waits on) a CD apply.
+            terraform -chdir="$dir" plan -lock=false -input=false -no-color -out=tfplan
+            terraform -chdir="$dir" show -no-color tfplan > "$dir/plan.txt"
+            echo "::endgroup::"
+          done
+      - name: comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- aoty-terraform-plan -->";
+            const limit = 30000; // per env; GitHub caps a comment at 65536 characters
+            const sections = ["staging", "prod"].map((env) => {
+              let text = fs.readFileSync(`infra/envs/${env}/plan.txt`, "utf8").trim();
+              const summary =
+                (text.match(/^Plan: .*$/m) || [])[0] ||
+                (/No changes\./.test(text) ? "No changes." : "see the plan");
+              if (text.length > limit) text = text.slice(0, limit) + "\n... (truncated; full plan in the job log)";
+              return `<details><summary><b>${env}</b>: ${summary}</summary>\n\n\`\`\`\n${text}\n\`\`\`\n</details>`;
+            });
+            const body = [
+              marker,
+              `### Terraform plan (\`${context.sha.slice(0, 7)}\`)`,
+              ...sections,
+              "_Read-only plan via the kamp-aoty-plan OIDC role. Apply happens in CD (AOTY-17)._",
+            ].join("\n\n");
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = comments.find((c) => c.user.type === "Bot" && c.body.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

@@ -1,0 +1,6 @@
+# Mechanical reformatting commits, skipped by `git blame` (GitHub reads this file automatically;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# style: apply ruff format (2-space indent) outside tools/
+# (Full SHA, which survives because PRs here merge with merge commits, not squash.)
+087f75977fd1fd0d02587921a9226e35d3e03297

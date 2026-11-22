@@ -43,9 +43,17 @@ WEIGHTED_MIN_LISTENERS = 3
 
 # The three rankings: (key, button label, how the page explains the order).
 MODES = [
-    ("track", "By Track", "ranked by how many of our {total} members played them, then total plays"),
-    ("album", "By Album", "ranked by album plays: track plays divided by the album's track count (singles left out)"),
-    ("weighted", "Weighted", "ranked by album plays per listener, among albums at least {min_listeners} members played"),
+  ("track", "By Track", "ranked by how many of our {total} members played them, then total plays"),
+  (
+    "album",
+    "By Album",
+    "ranked by album plays: track plays divided by the album's track count (singles left out)",
+  ),
+  (
+    "weighted",
+    "Weighted",
+    "ranked by album plays per listener, among albums at least {min_listeners} members played",
+  ),
 ]
 
 
@@ -62,33 +70,37 @@ _STATUS_RANK = {"Official": 0}
 def pick_release(artist, album, releases):
   """{"tracks", "type"} of the release matching this artist + title, or None.
 
-  Same matching rule as aoty.pick_year: a search hit isn't a match. Among matches,
-  prefer Official, then a release group typed Album > EP > other, then the earliest
-  date, which is usually the standard edition rather than a later deluxe.
+  Same matching rule as aoty.pick_year: a search hit isn't a match, and an exact title
+  beats an edition-stripped one (aoty.title_tier). Among matches, prefer Official, then a
+  release group typed Album > EP > other, then the earliest date, which is usually the
+  standard edition rather than a later deluxe.
   """
   want_artist = aoty.norm(artist)
-  want_titles = {aoty.norm(album), aoty.norm(aoty.base_title(album))}
   matches = []
   for rel in releases:
     count = rel.get("track-count")
     if not count:
       continue
-    if aoty.norm(rel.get("title", "")) not in want_titles:
+    tier = aoty.title_tier(album, rel.get("title", ""))
+    if tier is None:
       continue
     if want_artist not in aoty.credit_names(rel):
       continue
     rg_type = rel.get("release-group", {}).get("primary-type")
-    matches.append((
+    matches.append(
+      (
+        tier,
         _STATUS_RANK.get(rel.get("status"), 1),
         aoty._TYPE_RANK.get(rg_type, 2),
         rel.get("date") or "9999",
         count,
         rg_type or "",
-    ))
+      )
+    )
   if not matches:
     return None
-  best = min(matches)
-  return {"tracks": best[3], "type": best[4] or None}
+  *_, tracks, rg_type = min(matches)
+  return {"tracks": tracks, "type": rg_type or None}
 
 
 def _release_clause(artist, album):
@@ -100,12 +112,16 @@ def lastfm_track_count(artist, album):
   """Fallback when MusicBrainz has no match: the length of Last.fm's tracklist (often empty)."""
   try:
     data = requests.get(
-        "https://ws.audioscrobbler.com/2.0/",
-        params={
-            "method": "album.getinfo", "artist": artist, "album": album, "autocorrect": 1,
-            "api_key": aoty.LASTFM_API_KEY, "format": "json",
-        },
-        timeout=15,
+      "https://ws.audioscrobbler.com/2.0/",
+      params={
+        "method": "album.getinfo",
+        "artist": artist,
+        "album": album,
+        "autocorrect": 1,
+        "api_key": aoty.LASTFM_API_KEY,
+        "format": "json",
+      },
+      timeout=15,
     ).json()
   except (requests.RequestException, ValueError):
     return None
@@ -119,18 +135,21 @@ def lookup_releases(rows):
   """{cache key: {"tracks", "type"}} for every CSV row, using and filling the cache."""
   # Entries from before the type was stored are bare ints: look those up again.
   cache = {k: v for k, v in load_json(TRACK_CACHE_FILE).items() if isinstance(v, dict)}
-  save = lambda: TRACK_CACHE_FILE.write_text(
-      json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+
+  def save():
+    TRACK_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+
   pairs = [(r["Artist"], r["Album"]) for r in rows]
   todo = [p for p in dict.fromkeys(pairs) if aoty.cache_key(*p) not in cache]
   print(f"Track counts: {len(pairs)} albums, {len(todo)} not cached yet")
 
   misses = []
   for i in range(0, len(todo), MB_TRACK_BATCH_SIZE):
-    batch = todo[i:i + MB_TRACK_BATCH_SIZE]
+    batch = todo[i : i + MB_TRACK_BATCH_SIZE]
     print(f"  MusicBrainz batch {i // MB_TRACK_BATCH_SIZE + 1}/{-(-len(todo) // MB_TRACK_BATCH_SIZE)}")
-    rels = aoty.mb_search(" OR ".join(_release_clause(a, b) for a, b in batch), 100, "release",
-                          n_albums=len(batch))
+    rels = aoty.mb_search(
+      " OR ".join(_release_clause(a, b) for a, b in batch), 100, "release", n_albums=len(batch)
+    )
     for artist, album in batch:
       info = pick_release(artist, album, rels or [])
       if info:
@@ -179,16 +198,16 @@ def album_art(artist, album):
       time.sleep(2 * attempt)
     try:
       data = requests.get(
-          "https://ws.audioscrobbler.com/2.0/",
-          params={
-              "method": "album.getinfo",
-              "artist": artist,
-              "album": album,
-              "autocorrect": 1,
-              "api_key": aoty.LASTFM_API_KEY,
-              "format": "json",
-          },
-          timeout=15,
+        "https://ws.audioscrobbler.com/2.0/",
+        params={
+          "method": "album.getinfo",
+          "artist": artist,
+          "album": album,
+          "autocorrect": 1,
+          "api_key": aoty.LASTFM_API_KEY,
+          "format": "json",
+        },
+        timeout=15,
       ).json()
     except (requests.RequestException, ValueError) as e:
       error = e
@@ -237,50 +256,10 @@ def build_rankings(n):
   if "Listener Plays" not in rows[0]:
     raise SystemExit("The CSV predates per-member plays: re-run aoty.py first.")
   releases = lookup_releases(rows)
-  for r in rows:
-    r["key"] = aoty.cache_key(r["Artist"], r["Album"])
-    r["plays"], r["listeners"] = int(r["Total Plays"]), int(r["Unique Listeners"])
-    r["tracks"] = releases[r["key"]]["tracks"]
-    r["by_user"] = json.loads(r["Listener Plays"])
-
-  # By Album / Weighted divide by track count, so a single would score its whole
-  # play count; those modes only rank real albums. By Track keeps everything.
-  albums = [r for r in rows if not is_single(releases[r["key"]])]
-  print(f"{len(rows) - len(albums)} singles (or no track count) left out of By Album / Weighted")
-  scored = {
-      # The CSV is already in this order: listeners, then plays.
-      "track": [(r, r["plays"]) for r in rows],
-      "album": sorted(((r, r["plays"] / r["tracks"]) for r in albums),
-                      key=lambda x: (x[1], x[0]["listeners"]), reverse=True),
-      # Mean album plays across the people who played it. Without a listener floor,
-      # one member looping a record takes #1.
-      "weighted": sorted(((r, r["plays"] / r["tracks"] / r["listeners"]) for r in albums
-                          if r["listeners"] >= WEIGHTED_MIN_LISTENERS),
-                         key=lambda x: (x[1], x[0]["listeners"]), reverse=True),
-  }
-  rankings = {mode: pairs[:n] for mode, pairs in scored.items()}
-
-  # A member's view is re-ranked in the page by that member's own plays (By Track) or
-  # plays per track (By Album; Weighted is the same thing for one listener). The page
-  # does the ranking; here we only pick which albums it needs: each member's top n
-  # under both scores, keeping ties at the cutoff since the page breaks them itself.
   # Picklist order: case-insensitive alphabetical (user decision 2026-11-20).
   members = sorted(aoty.LASTFM_USERS, key=str.casefold)
-  album_keys = {r["key"] for r in albums}
-  shown = {r["key"] for pairs in rankings.values() for r, _ in pairs}
-  for who in members:
-    played = [r for r in rows if who in r["by_user"]]
-    for pool, score_of in (
-        (played, lambda r: r["by_user"][who]),
-        ([r for r in played if r["key"] in album_keys], lambda r: r["by_user"][who] / r["tracks"]),
-    ):
-      pool = sorted(pool, key=score_of, reverse=True)
-      cutoff = score_of(pool[n - 1]) if len(pool) > n else float("-inf")
-      shown.update(r["key"] for r in pool if score_of(r) >= cutoff)
-  # CSV order, which the page uses to break ties.
-  kept = [r for r in rows if r["key"] in shown]
-  for r in kept:
-    r["single"] = r["key"] not in album_keys
+  kept, rankings, n_singles = score_rankings(rows, releases, members, n)
+  print(f"{n_singles} singles (or no track count) left out of By Album / Weighted")
 
   # Cover art once per album, however many rankings it appears in.
   arts = fetch_art(kept)
@@ -292,22 +271,92 @@ def build_rankings(n):
   return kept, rankings, arts, members
 
 
+def score_rankings(rows, releases, members, n):
+  """(kept rows, {mode: everyone's top-n [(row, score), ...]}, number of singles). No I/O.
+
+  rows are CSV rows in rank order (listeners, then plays); releases maps cache key to
+  {"tracks", "type"}. Rows are annotated in place (key, plays, listeners, tracks, by_user,
+  single). Kept rows are every album any view can show, for everyone or for one member.
+  """
+  for r in rows:
+    r["key"] = aoty.cache_key(r["Artist"], r["Album"])
+    r["plays"], r["listeners"] = int(r["Total Plays"]), int(r["Unique Listeners"])
+    r["tracks"] = releases[r["key"]]["tracks"]
+    r["by_user"] = json.loads(r["Listener Plays"])
+
+  # By Album / Weighted divide by track count, so a single would score its whole
+  # play count; those modes only rank real albums. By Track keeps everything.
+  albums = [r for r in rows if not is_single(releases[r["key"]])]
+  scored = {
+    # The CSV is already in this order: listeners, then plays.
+    "track": [(r, r["plays"]) for r in rows],
+    "album": sorted(
+      ((r, r["plays"] / r["tracks"]) for r in albums), key=lambda x: (x[1], x[0]["listeners"]), reverse=True
+    ),
+    # Mean album plays across the people who played it. Without a listener floor,
+    # one member looping a record takes #1.
+    "weighted": sorted(
+      (
+        (r, r["plays"] / r["tracks"] / r["listeners"])
+        for r in albums
+        if r["listeners"] >= WEIGHTED_MIN_LISTENERS
+      ),
+      key=lambda x: (x[1], x[0]["listeners"]),
+      reverse=True,
+    ),
+  }
+  rankings = {mode: pairs[:n] for mode, pairs in scored.items()}
+
+  # A member's view is re-ranked in the page by that member's own plays (By Track) or
+  # plays per track (By Album; Weighted is the same thing for one listener). The page
+  # does the ranking; here we only pick which albums it needs: each member's top n
+  # under both scores, keeping ties at the cutoff since the page breaks them itself.
+  album_keys = {r["key"] for r in albums}
+  shown = {r["key"] for pairs in rankings.values() for r, _ in pairs}
+  for who in members:
+    played = [r for r in rows if who in r["by_user"]]
+    for pool, score_of in (
+      (played, lambda r: r["by_user"][who]),
+      ([r for r in played if r["key"] in album_keys], lambda r: r["by_user"][who] / r["tracks"]),
+    ):
+      pool = sorted(pool, key=score_of, reverse=True)
+      cutoff = score_of(pool[n - 1]) if len(pool) > n else float("-inf")
+      shown.update(r["key"] for r in pool if score_of(r) >= cutoff)
+  # CSV order, which the page uses to break ties.
+  kept = [r for r in rows if r["key"] in shown]
+  for r in kept:
+    r["single"] = r["key"] not in album_keys
+  return kept, rankings, len(rows) - len(albums)
+
+
 def page_data(kept, rankings, arts, members):
   """What the page script renders from: albums once each, rankings as indexes into them."""
   index = {r["key"]: i for i, r in enumerate(kept)}
-  albums = [{
-      "artist": r["Artist"], "album": r["Album"], "art": arts[r["key"]],
+  albums = [
+    {
+      "artist": r["Artist"],
+      "album": r["Album"],
+      "art": arts[r["key"]],
       "fallbacks": " ".join(art_fallbacks(arts[r["key"]])),
-      "listeners": r["listeners"], "plays": r["plays"], "by": r["by_user"],
-      "tracks": r["tracks"], "single": r["single"],
-  } for r in kept]
+      "listeners": r["listeners"],
+      "plays": r["plays"],
+      "by": r["by_user"],
+      "tracks": r["tracks"],
+      "single": r["single"],
+    }
+    for r in kept
+  ]
   total = len(aoty.LASTFM_USERS)
   return {
-      "year": aoty.TARGET_YEAR, "total": total, "top": TOP_N, "featured": FEATURED_N,
-      "members": members, "albums": albums,
-      # Everyone's rankings; a member's are computed in the page.
-      "rankings": {m: [[index[r["key"]], round(s, 3)] for r, s in pairs] for m, pairs in rankings.items()},
-      "descs": {m: desc.format(total=total, min_listeners=WEIGHTED_MIN_LISTENERS) for m, _, desc in MODES},
+    "year": aoty.TARGET_YEAR,
+    "total": total,
+    "top": TOP_N,
+    "featured": FEATURED_N,
+    "members": members,
+    "albums": albums,
+    # Everyone's rankings; a member's are computed in the page.
+    "rankings": {m: [[index[r["key"]], round(s, 3)] for r, s in pairs] for m, pairs in rankings.items()},
+    "descs": {m: desc.format(total=total, min_listeners=WEIGHTED_MIN_LISTENERS) for m, _, desc in MODES},
   }
 
 
@@ -322,8 +371,6 @@ def art_fallbacks(url):
     return []
   base, name = m.groups()
   return [f"{base}{size}{name}" for size in ("ar0/", "174s/") if f"{base}{size}{name}" != url]
-
-
 
 
 # Renders the chosen ranking for the chosen member from the #aoty-data JSON. A plain
@@ -464,12 +511,10 @@ def render(data):
   e = html.escape
   # "</" would end the <script> early; JSON allows the escaped form.
   data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-  member_options = "\n        ".join(
-      f'<option value="{e(m)}">{e(m)}</option>' for m in data["members"]
-  )
+  member_options = "\n        ".join(f'<option value="{e(m)}">{e(m)}</option>' for m in data["members"])
   rank_buttons = "\n      ".join(
-      f'<button type="button" data-rank="{m}" aria-pressed="{str(i == 0).lower()}">{e(label)}</button>'
-      for i, (m, label, _) in enumerate(MODES)
+    f'<button type="button" data-rank="{m}" aria-pressed="{str(i == 0).lower()}">{e(label)}</button>'
+    for i, (m, label, _) in enumerate(MODES)
   )
 
   return f"""<!doctype html>

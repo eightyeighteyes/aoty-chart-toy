@@ -1,0 +1,88 @@
+{
+ "recorded": "2026-11-21",
+ "entity": "release-group",
+ "query": "(artist:\"Taylor Swift\" AND releasegroup:\"1989\")",
+ "limit": 100,
+ "results": [
+  {
+   "title": "1989",
+   "first-release-date": "2014-10-24",
+   "primary-type": "Album",
+   "secondary-types": [],
+   "artist-credit": [
+    {
+     "name": "Taylor Swift",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "1989 [nightcore]",
+   "first-release-date": "2022-01-01",
+   "primary-type": "Album",
+   "secondary-types": [
+    "Remix"
+   ],
+   "artist-credit": [
+    {
+     "name": "Taylor Swift",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "1989 (Taylor’s version)",
+   "first-release-date": "2023-10-27",
+   "primary-type": "Album",
+   "secondary-types": [],
+   "artist-credit": [
+    {
+     "name": "Taylor Swift",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "The 1989 World Tour",
+   "first-release-date": "2015-11-28",
+   "primary-type": "Broadcast",
+   "secondary-types": [
+    "Live"
+   ],
+   "artist-credit": [
+    {
+     "name": "Taylor Swift",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "Taylor Swift Karaoke: 1989",
+   "first-release-date": "2015-01-12",
+   "primary-type": "Album",
+   "secondary-types": [
+    "Remix"
+   ],
+   "artist-credit": [
+    {
+     "name": "Taylor Swift",
+     "joinphrase": ""
+    }
+   ]
+  },
+  {
+   "title": "1989 World Tour, Toyko, Japan, Night 2",
+   "first-release-date": "2015-05-06",
+   "primary-type": "Album",
+   "secondary-types": [
+    "Live"
+   ],
+   "artist-credit": [
+    {
+     "name": "Taylor Swift",
+     "joinphrase": ""
+    }
+   ]
+  }
+ ]
+}

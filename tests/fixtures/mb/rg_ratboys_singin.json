@@ -1,0 +1,20 @@
+{
+ "recorded": "2026-11-21",
+ "entity": "release-group",
+ "query": "(artist:\"Ratboys\" AND releasegroup:\"Singin’ to an Empty Chair\")",
+ "limit": 100,
+ "results": [
+  {
+   "title": "Singin’ to an Empty Chair",
+   "first-release-date": "2026-02-06",
+   "primary-type": "Album",
+   "secondary-types": [],
+   "artist-credit": [
+    {
+     "name": "Ratboys",
+     "joinphrase": ""
+    }
+   ]
+  }
+ ]
+}

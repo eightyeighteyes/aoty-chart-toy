@@ -51,9 +51,15 @@ runs. Prod PITR costs about $0.20/GB-month.
 
 | Role | Trusted for (GitHub OIDC `sub`) | Can |
 |------|----------------------------------|-----|
-| `kamp-aoty-plan` | `repo:eightyeighteyes/aoty-chart-toy:pull_request` | Read AOTY resource metadata and `aoty/staging`, `aoty/prod` state; take the state lock. **No** decrypted parameters, table items, objects, log events or kamp-site state (explicit denies too). |
-| `kamp-aoty-staging-deploy` | `...:environment:staging` | Manage `kamp-aoty-staging-*` resources and `aoty/staging` state. |
-| `kamp-aoty-prod-deploy` | `...:environment:production` | The same for prod. |
+| `kamp-aoty-plan` | `<prefix>:pull_request` | Read AOTY resource metadata and `aoty/staging`, `aoty/prod` state; take the state lock. **No** decrypted parameters, table items, objects, log events or kamp-site state (explicit denies too). |
+| `kamp-aoty-staging-deploy` | `<prefix>:environment:staging` | Manage `kamp-aoty-staging-*` resources and `aoty/staging` state. |
+| `kamp-aoty-prod-deploy` | `<prefix>:environment:production` | The same for prod. |
+
+`<prefix>` is `repo:eightyeighteyes@6600722/aoty-chart-toy@1466126436`. The repo uses GitHub's
+**immutable subject claims**, which embed the owner and repo IDs, so the bare
+`repo:eightyeighteyes/aoty-chart-toy:...` form never matches and AWS answers "Not authorized to
+perform sts:AssumeRoleWithWebIdentity". Check the prefix with
+`gh api repos/eightyeighteyes/aoty-chart-toy/actions/oidc/customization/sub`.
 
 How CI is kept from escalating:
 

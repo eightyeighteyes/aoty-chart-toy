@@ -1,0 +1,23 @@
+{
+ "recorded": "2026-11-21",
+ "entity": "release",
+ "query": "(artist:\"gladie\" AND release:\"I Want That For You\")",
+ "limit": 100,
+ "results": [
+  {
+   "title": "I Want That for You",
+   "status": "Official",
+   "date": null,
+   "track-count": 4,
+   "release-group": {
+    "primary-type": "Single"
+   },
+   "artist-credit": [
+    {
+     "name": "Gladie",
+     "joinphrase": ""
+    }
+   ]
+  }
+ ]
+}

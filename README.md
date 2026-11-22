@@ -37,6 +37,20 @@ years are cached in `data/mb_release_year_cache.json`, so later runs only look u
 Both scripts print a MusicBrainz timing summary and append per-request rows to
 `data/mb_requests.csv`.
 
+## Tests and lint
+
+```sh
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+```
+
+The tests cover release-year matching, track counts and the ranking rules, and run offline
+against recorded MusicBrainz searches (`tests/fixtures/mb/`, refreshed with
+`tools/record_mb_fixtures.py`). CI runs the same checks plus Terraform `fmt`/`validate` and a
+read-only `terraform plan` on every PR. `main` requires them to pass.
+
 ## Web app infrastructure
 
 The M1 web app (kamp.fm/toys/aoty/) runs serverless on AWS, managed by Terraform in `infra/`.
