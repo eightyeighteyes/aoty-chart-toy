@@ -323,7 +323,7 @@ def credit_names(rg):
   return {norm(joined)} | {norm(c.get("name", "")) for c in credits}
 
 
-_TYPE_RANK = {"Album": 0, "EP": 1}
+_TYPE_RANK = {"EP": 0, "Album": 1}
 
 
 def title_tier(album, title):
