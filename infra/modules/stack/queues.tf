@@ -1,7 +1,7 @@
 # sync: FIFO, message group = username, so one user never has two syncs running at once.
 # mb-hot / mb-cold: albums users are waiting on vs the long tail; the mb Lambda polls them
-# itself (hot first), so they have no event source mapping. Event source mappings belong to
-# the worker stories (AOTY-18, AOTY-19).
+# itself (hot first), so they have no event source mapping. The sync queue's mapping is in
+# functions.tf (AOTY-18).
 
 locals {
   queues = {

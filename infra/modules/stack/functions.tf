@@ -173,3 +173,19 @@ resource "aws_lambda_function" "fn" {
 
   depends_on = [aws_cloudwatch_log_group.fn, aws_iam_role_policy.fn]
 }
+
+# The sync queue drives the sync worker (AOTY-18). One message per invocation; the handler
+# reports failures per item. maximum_concurrency (2 is the floor AWS allows) caps how many
+# syncs run at once, and with them the aggregate Last.fm rate (0.5 s/call each). It stands
+# in for reserved concurrency until the account's concurrency quota is raised.
+# Until CD deploys real code, the placeholder raises on SQS events, so no message is lost.
+resource "aws_lambda_event_source_mapping" "sync" {
+  event_source_arn        = aws_sqs_queue.main["sync"].arn
+  function_name           = aws_lambda_function.fn["sync"].arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = 2
+  }
+}

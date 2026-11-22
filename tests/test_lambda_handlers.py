@@ -39,6 +39,16 @@ def test_unknown_routes_and_other_base_paths_are_404(api):
     assert api({"rawPath": path}, None)["statusCode"] == 404
 
 
+def test_terraforms_placeholder_never_acknowledges_sqs_messages():
+  path = LAMBDAS.parent / "infra" / "modules" / "stack" / "placeholder" / "handler.py"
+  spec = importlib.util.spec_from_file_location("placeholder", path)
+  module = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(module)
+  with pytest.raises(RuntimeError):
+    module.handler({"Records": [{"messageId": "m1", "body": "{}"}]}, None)
+  assert module.handler({}, None) == {"ok": True, "placeholder": "unknown"}
+
+
 @pytest.mark.parametrize("fn", ["mb"])  # sync: tests/test_sync_handler.py
 def test_workers_are_no_ops_until_their_stories(fn):
   assert load(fn)({}, None) == {"ok": True, "source": f"lambdas/{fn}"}

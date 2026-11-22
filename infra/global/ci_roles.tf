@@ -190,6 +190,37 @@ data "aws_iam_policy_document" "deploy" {
     actions   = ["lambda:*"]
     resources = ["arn:aws:lambda:${local.region}:${local.account}:function:kamp-aoty-${each.key}-*"]
   }
+  # Event source mappings (the sync queue trigger, AOTY-18) have random UUID ARNs, so they're
+  # scoped by the function they target. Create takes no resource type, only the condition.
+  statement {
+    sid       = "CreateEventSourceMappings"
+    actions   = ["lambda:CreateEventSourceMapping"]
+    resources = ["*"]
+    condition {
+      test     = "ArnLike"
+      variable = "lambda:FunctionArn"
+      values   = ["arn:aws:lambda:${local.region}:${local.account}:function:kamp-aoty-${each.key}-*"]
+    }
+  }
+  statement {
+    sid = "EventSourceMappings"
+    actions = [
+      "lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping",
+      "lambda:DeleteEventSourceMapping",
+    ]
+    resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
+    condition {
+      test     = "ArnLike"
+      variable = "lambda:FunctionArn"
+      values   = ["arn:aws:lambda:${local.region}:${local.account}:function:kamp-aoty-${each.key}-*"]
+    }
+  }
+  # The provider reads mapping tags; ListTags has no lambda:FunctionArn key to scope by.
+  statement {
+    sid       = "EventSourceMappingTags"
+    actions   = ["lambda:ListTags"]
+    resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
+  }
   statement {
     sid     = "LogGroups"
     actions = ["logs:*"]
@@ -208,7 +239,8 @@ data "aws_iam_policy_document" "deploy" {
       "logs:DescribeLogGroups", "logs:DescribeResourcePolicies", "logs:PutResourcePolicy",
       "logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery",
       "logs:DeleteLogDelivery", "logs:ListLogDeliveries",
-      "sqs:ListQueues", "lambda:ListFunctions", "dynamodb:ListTables",
+      "sqs:ListQueues", "lambda:ListFunctions", "lambda:ListEventSourceMappings",
+      "dynamodb:ListTables",
     ]
     resources = ["*"]
   }
@@ -355,6 +387,21 @@ data "aws_iam_policy_document" "plan" {
     sid       = "FunctionMetadata"
     actions   = ["lambda:Get*", "lambda:List*"]
     resources = ["arn:aws:lambda:${local.region}:${local.account}:function:kamp-aoty-*"]
+  }
+  statement {
+    sid       = "EventSourceMappingMetadata"
+    actions   = ["lambda:GetEventSourceMapping"]
+    resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
+    condition {
+      test     = "ArnLike"
+      variable = "lambda:FunctionArn"
+      values   = ["arn:aws:lambda:${local.region}:${local.account}:function:kamp-aoty-*"]
+    }
+  }
+  statement {
+    sid       = "EventSourceMappingTags"
+    actions   = ["lambda:ListTags"]
+    resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
   }
   statement {
     sid     = "LogGroupMetadata"
