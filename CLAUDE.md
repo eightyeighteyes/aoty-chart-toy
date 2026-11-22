@@ -381,6 +381,12 @@ not daily totals from paging scrobbles (the story text was revised to match).
   `tools/chart_check.py` checks a deployed chart against M0's code.
 - Covers: Last.fm image → its other sizes → Cover Art Archive `front-250` by `rg_mbid` → the
   artist-name tile (`common/covers.py`). CAA 404s for some release groups.
+- **Cover hosts vs the CSP** (found in sandbox, 2026-11-22: every cover showed as a tile):
+  getRecentTracks serves covers from `lastfm-img.freetls.fastly.net`, but kamp.fm's CSP allows
+  only `lastfm.freetls.fastly.net` (same paths), so `cover()` rewrites the host. CAA redirects
+  `coverartarchive.org` → `archive.org` → `iaNNN.us.archive.org`, and browsers check `img-src`
+  on every hop, so the CSP lists the bare `archive.org` as well as `*.archive.org` (kamp-site
+  PR #22). A new image source means checking every redirect hop against the CSP.
 - `display_name` (Last.fm's casing) is fetched by sync with `user.getInfo` at most every 30
   days and used only if it lowercases to the username. The page rewrites the URL to it.
 - Pending rebuilds: mb pokes `{"pending": true}`. The builder rebuilds a user only when one of
