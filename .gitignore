@@ -26,8 +26,9 @@ dist/
 crash.log
 infra/**/build/
 
-# Editor
+# Editor / agent tooling
 .vscode/
+.claude/
 
 # macOS
 .DS_Store
