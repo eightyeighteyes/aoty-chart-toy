@@ -8,6 +8,19 @@ import re
 
 _LASTFM_IMAGE = re.compile(r"(https://[^/]+/i/u/)(?:[^/]+/)?([^/]+)$")
 CAA_SIZE = "front-250"
+# getRecentTracks serves covers from lastfm-img.freetls.fastly.net; album.getInfo (M0) from
+# lastfm.freetls.fastly.net, the only one kamp.fm's CSP allows. Same paths, same images.
+LASTFM_HOST = "lastfm.freetls.fastly.net"
+_LASTFM_ALIASES = ("lastfm-img.freetls.fastly.net",)
+
+
+def lastfm_host(url):
+  """url with a Last.fm image alias host replaced by LASTFM_HOST; other URLs unchanged."""
+  for alias in _LASTFM_ALIASES:
+    prefix = f"https://{alias}/"
+    if (url or "").startswith(prefix):
+      return f"https://{LASTFM_HOST}/{url[len(prefix) :]}"
+  return url
 
 
 def art_fallbacks(url):
@@ -36,6 +49,8 @@ def cover(image, rg_mbid):
   """(art, fallbacks) for an album: its Last.fm image and that image's other sizes, then CAA.
 
   With no Last.fm image, CAA is the art itself. ("", []) means the page shows the tile.
+  Last.fm URLs are moved to the host the page's CSP allows (lastfm_host).
   """
-  chain = [u for u in [image or "", *art_fallbacks(image), caa_url(rg_mbid)] if u]
+  image = lastfm_host(image or "")
+  chain = [u for u in [image, *art_fallbacks(image), caa_url(rg_mbid)] if u]
   return (chain[0], chain[1:]) if chain else ("", [])
