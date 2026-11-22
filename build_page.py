@@ -254,6 +254,28 @@ def build_rankings(n):
   if "Listener Plays" not in rows[0]:
     raise SystemExit("The CSV predates per-member plays: re-run aoty.py first.")
   releases = lookup_releases(rows)
+  # Picklist order: case-insensitive alphabetical (user decision 2026-11-20).
+  members = sorted(aoty.LASTFM_USERS, key=str.casefold)
+  kept, rankings, n_singles = score_rankings(rows, releases, members, n)
+  print(f"{n_singles} singles (or no track count) left out of By Album / Weighted")
+
+  # Cover art once per album, however many rankings it appears in.
+  arts = fetch_art(kept)
+  print(f"{len(kept)} albums kept for member views")
+  for mode, pairs in rankings.items():
+    print(f"\n{mode}: {len(pairs)} albums")
+    for i, (r, s) in enumerate(pairs[:FEATURED_N], start=1):
+      print(f"  {i:>2}. {r['Artist']} - {r['Album']} ({s:.2f})")
+  return kept, rankings, arts, members
+
+
+def score_rankings(rows, releases, members, n):
+  """(kept rows, {mode: everyone's top-n [(row, score), ...]}, number of singles). No I/O.
+
+  rows are CSV rows in rank order (listeners, then plays); releases maps cache key to
+  {"tracks", "type"}. Rows are annotated in place (key, plays, listeners, tracks, by_user,
+  single). Kept rows are every album any view can show, for everyone or for one member.
+  """
   for r in rows:
     r["key"] = aoty.cache_key(r["Artist"], r["Album"])
     r["plays"], r["listeners"] = int(r["Total Plays"]), int(r["Unique Listeners"])
@@ -263,7 +285,6 @@ def build_rankings(n):
   # By Album / Weighted divide by track count, so a single would score its whole
   # play count; those modes only rank real albums. By Track keeps everything.
   albums = [r for r in rows if not is_single(releases[r["key"]])]
-  print(f"{len(rows) - len(albums)} singles (or no track count) left out of By Album / Weighted")
   scored = {
     # The CSV is already in this order: listeners, then plays.
     "track": [(r, r["plays"]) for r in rows],
@@ -288,8 +309,6 @@ def build_rankings(n):
   # plays per track (By Album; Weighted is the same thing for one listener). The page
   # does the ranking; here we only pick which albums it needs: each member's top n
   # under both scores, keeping ties at the cutoff since the page breaks them itself.
-  # Picklist order: case-insensitive alphabetical (user decision 2026-11-20).
-  members = sorted(aoty.LASTFM_USERS, key=str.casefold)
   album_keys = {r["key"] for r in albums}
   shown = {r["key"] for pairs in rankings.values() for r, _ in pairs}
   for who in members:
@@ -305,15 +324,7 @@ def build_rankings(n):
   kept = [r for r in rows if r["key"] in shown]
   for r in kept:
     r["single"] = r["key"] not in album_keys
-
-  # Cover art once per album, however many rankings it appears in.
-  arts = fetch_art(kept)
-  print(f"{len(kept)} albums kept for member views")
-  for mode, pairs in rankings.items():
-    print(f"\n{mode}: {len(pairs)} albums")
-    for i, (r, s) in enumerate(pairs[:FEATURED_N], start=1):
-      print(f"  {i:>2}. {r['Artist']} - {r['Album']} ({s:.2f})")
-  return kept, rankings, arts, members
+  return kept, rankings, len(rows) - len(albums)
 
 
 def page_data(kept, rankings, arts, members):

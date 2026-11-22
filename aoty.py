@@ -415,6 +415,33 @@ def fetch_plays_and_candidates(users):
   return plays, candidates
 
 
+def aggregate_plays(plays, candidate_keys, years, year=TARGET_YEAR):
+  """{key: {"artist", "album", "plays", "listeners": {user: plays}}} for target-year candidates.
+
+  plays are (user, artist, album, playcount) rows. Keyed on the normalized names, so
+  "Album" and "album" from two users merge; the first spelling seen is kept.
+  """
+  album_stats = defaultdict(lambda: {"artist": "", "album": "", "plays": 0, "listeners": defaultdict(int)})
+  for user, artist, album_name, playcount in plays:
+    key = cache_key(artist, album_name)
+    if key not in candidate_keys or years.get(key) != year:
+      continue
+    stats = album_stats[key]
+    stats["artist"] = stats["artist"] or artist
+    stats["album"] = stats["album"] or album_name
+    stats["plays"] += playcount
+    stats["listeners"][user] += playcount
+  return album_stats
+
+
+def rank_albums(album_stats):
+  """Unique listeners first, then total plays (a single play counts as a listener).
+
+  Full ties keep aggregation order (the order plays arrived), since sorted() is stable.
+  """
+  return sorted(album_stats.values(), key=lambda s: (len(s["listeners"]), s["plays"]), reverse=True)
+
+
 def main():
   require_config()
   DATA_DIR.mkdir(exist_ok=True)
@@ -426,26 +453,7 @@ def main():
   lookup_years(candidates, cache)
   mb_report("aoty")
   candidate_keys = {cache_key(a, b) for a, b in candidates}
-
-  # Store aggregated stats: {key: {"artist", "album", "plays", "listeners": {user: plays}}}.
-  # Keyed on the normalized names so "Album" and "album" from two users merge.
-  album_stats = defaultdict(lambda: {"artist": "", "album": "", "plays": 0, "listeners": defaultdict(int)})
-  for user, artist, album_name, playcount in plays:
-    key = cache_key(artist, album_name)
-    if key not in candidate_keys or cache.get(key) != TARGET_YEAR:
-      continue
-    stats = album_stats[key]
-    stats["artist"] = stats["artist"] or artist
-    stats["album"] = stats["album"] or album_name
-    stats["plays"] += playcount
-    stats["listeners"][user] += playcount
-
-  # Sort results by unique listeners first, then total plays
-  ranked_albums = sorted(
-    album_stats.values(),
-    key=lambda s: (len(s["listeners"]), s["plays"]),
-    reverse=True,
-  )
+  ranked_albums = rank_albums(aggregate_plays(plays, candidate_keys, cache))
 
   # Export to CSV
   with open(OUTPUT_CSV, mode="w", newline="", encoding="utf-8") as f:
