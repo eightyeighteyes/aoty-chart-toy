@@ -49,12 +49,15 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `.github/workflows/ci.yml` | CI (AOTY-16): `lint`, `test`, `terraform` (fmt + validate), `terraform-plan` (staging + prod via the OIDC plan role, one PR comment edited in place). All four are required on `main`. |
 | `.github/workflows/cd.yml`, `deploy.yml` | CD (AOTY-17): after CI passes on `main`, deploy staging, then release-please; a `v*` tag deploys prod; `workflow_dispatch` for rollback, or to deploy any branch to sandbox (`-f environment=sandbox -f skip_terraform=false`, needs a reviewer). Flow, rollback and the release App setup are in `infra/README.md`, "Deploys and releases". |
 | `scripts/sandbox_reset.py` | AOTY-33: wipes sandbox data (queues, bucket versions, table items; `--keep-albums`), keeping its infrastructure. Dry run unless `--yes`; refuses anything that isn't a `kamp-aoty-sandbox-*` name in the expected account. Admin credentials. |
-| `lambdas/{api,sync,mb}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`, each stamped with a `build.json` `{"sha"}` (`-dirty` for uncommitted or untracked packaged files) that `/api/health` reports and CD's smoke test checks (AOTY-35). Don't add a `build.json` to the source: packaging rejects it. |
+| `lambdas/{api,sync,mb,chart}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`, each stamped with a `build.json` `{"sha"}` (`-dirty` for uncommitted or untracked packaged files) that `/api/health` reports and CD's smoke test checks (AOTY-35). Don't add a `build.json` to the source: packaging rejects it. |
 | `lambdas/sync/` | Sync worker (AOTY-18). `sync_core.py` is pure (week ranges, settle rule, merging, mb selection, covers); `handler.py` does the S3/DynamoDB/SQS I/O behind an injectable `Deps`. Contract and store format are in the module docstrings. |
 | `lambdas/mb/` | MusicBrainz lane (AOTY-19). `mb_core.py` is pure (year then track lookups in M0's order, items); `handler.py` drains the queues and writes the `albums` table behind an injectable `Deps`. Contract in the module docstrings and "MusicBrainz lane" below. |
 | `lambdas/common/mbmatch.py`, `musicbrainz.py` | The matching rules (`pick_release_group`/`pick_year`, `pick_release`, `title_tier`, `is_single`, query clauses), shared by M0 (`aoty.py`/`build_page.py` re-export them) and the mb Lambda; and the standard-library MusicBrainz client with a per-call deadline. |
 | `tools/mb_parity.py` | AOTY-19 acceptance: runs `mb_core` on the laptop over `data/mb_bench/candidates.json` and diffs against M0's year and track caches into `data/mb_parity/run-<ts>/report.md`. A MusicBrainz client: run it alone. |
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
+| `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
+| `web/src/` | The user page shell (AOTY-21): `index.html` template, `app.css`, `app.js`, ported from `build_page.py` (no member filter, dots or Weighted). Routes `<base>user/<name>` client-side. kamp.fm's CSP allows no inline script or handlers: keep everything in `app.js`, use `addEventListener`. `scripts/build_shell.py --base <base>` builds `dist/web` with hashed assets (and fails on inline script); `tools/serve_shell.py --sample alice` previews it locally with kamp.fm's routing and CSP. |
+| `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
 | `pyproject.toml`, `requirements-dev.txt` | ruff (2-space indent, 110 columns, `tools/` excluded until AOTY-12 merges) and pytest config; pinned dev tools. |
@@ -367,6 +370,24 @@ not daily totals from paging scrobbles (the story text was revised to match).
   never looked up by M0; the new answers look right. Track counts and types were the same for all
   568 that M0 had. There were 812 requests, 433 of them 503s (53%), taking 17.2 min at 1.48
   albums/s, including track lookups.
+
+## Chart builder and user page (AOTY-21, 2026-11-22)
+
+- User decisions: **Weighted is hidden** on single-user pages (it equals By Album for one
+  listener; it returns with M2). **No analytics** yet (a follow-up). The route is
+  **`<base>user/<name>`**, so bare `<base><x>` stays free for other pages.
+- Ranking: By Track = plays, ties by key; By Album = plays ÷ tracks, singles out by
+  `is_single`, ties by plays then key. A strict top 100 (ties at the cutoff dropped).
+  `tools/chart_check.py` checks a deployed chart against M0's code.
+- Covers: Last.fm image → its other sizes → Cover Art Archive `front-250` by `rg_mbid` → the
+  artist-name tile (`common/covers.py`). CAA 404s for some release groups.
+- `display_name` (Last.fm's casing) is fetched by sync with `user.getInfo` at most every 30
+  days and used only if it lowercases to the username. The page rewrites the URL to it.
+- Pending rebuilds: mb pokes `{"pending": true}`. The builder rebuilds a user only when one of
+  the keys in their `chart_pending.json` now has an item, so an album the lane never answers
+  doesn't loop. Index re-checks that change an album already on a chart show up at the next sync.
+- Sandbox has no kamp.fm path: test the Lambda half there (chart.json lands in its site bucket),
+  and the page with `tools/serve_shell.py`.
 
 ## Page — design decisions
 

@@ -4,14 +4,16 @@ How the pieces of the single-user app (AOTY-2) fit together. Solid boxes are bui
 boxes and arrows are planned, labelled with the story that adds them. One copy of the stack
 runs per environment (staging, prod, sandbox); names below drop the `kamp-aoty-<env>-` prefix.
 
-Four actors drive everything:
+Five actors drive everything:
 
-- **Visitor**: a person opening `kamp.fm/toys/aoty/<username>`.
+- **Visitor**: a person opening `kamp.fm/toys/aoty/user/<username>`.
 - **Sync worker**: reads one user's Last.fm history into the private store.
 - **mb lane**: the one MusicBrainz client, which dates albums and counts their tracks. It asks
   the release index first.
 - **Index build**: a daily Fargate Spot task that turns the MusicBrainz JSON dump into the
   release index, and queues re-checks for albums whose answer has changed.
+- **Chart builder**: turns one user's store and the `albums` table into `chart.json` on the
+  site bucket, after each sync and while that user's pending albums resolve (AOTY-21).
 
 The page never waits on MusicBrainz or Last.fm: it reads static JSON from CloudFront, and the
 background work keeps that JSON fresh.
@@ -41,7 +43,7 @@ flowchart LR
     sched["Scheduler: hourly"]
     isched["Scheduler: daily 06:15 UTC"]
     ssm[("SSM: Last.fm key,<br/>MB contact")]
-    chart["chart builder<br/>(AOTY-21)"]
+    chart["chart Lambda<br/>reserved concurrency 1"]
     index[("store bucket<br/>index/current.json,<br/>index/DUMP/*.json.gz")]
     code[("store bucket<br/>code/index.zip")]
     indexer["index build<br/>Fargate Spot task"]
@@ -70,10 +72,12 @@ flowchart LR
   mb --> mbapi
   mb -- "track-count fallback" --> lastfm
   mb -- "only writer" --> albums
-  sync -.->|"AOTY-21"| chart
-  chart -.-> storeb
-  chart -.-> albums
-  chart -.->|"chart.json"| siteb
+  sync -- "async: username" --> chart
+  mb -- "async: pending" --> chart
+  chart -- "read store,<br/>pending keys" --> storeb
+  chart -- "BatchGet" --> albums
+  chart -- "chart_built_at,<br/>chart_pending" --> users
+  chart -- "chart.json" --> siteb
   isched -- "ecs:RunTask" --> indexer
   indexer -- "fetch code" --> code
   indexer -- "download, twice a week" --> mbdump
@@ -86,7 +90,6 @@ flowchart LR
   ssm --- indexer
 
   classDef planned stroke-dasharray: 5 5
-  class chart planned
 ```
 
 The index build runs in the default VPC's public subnets with a public IP, with no NAT
@@ -94,8 +97,8 @@ gateway. CD uploads its code to `code/index.zip`, as it updates the Lambdas' cod
 
 ## Visitor flow
 
-What a visit will look like once AOTY-21, 22 and 23 land. Today only `GET /api/health`
-exists. It reports the env and the deployed commit's SHA, read from the zip's `build.json`
+What a visit will look like once AOTY-22 and 24 land. Today the shell, `chart.json` and
+`GET /api/health` exist; a missing chart shows a placeholder until AOTY-24. It reports the env and the deployed commit's SHA, read from the zip's `build.json`
 (AOTY-35).
 
 ```mermaid
@@ -108,13 +111,13 @@ sequenceDiagram
   participant U as users table
   participant Q as sync queue
 
-  V->>CF: GET /toys/aoty/alice
-  CF->>S3: static shell
-  S3-->>V: HTML, CSS, JS
-  V->>CF: GET data/users/alice/chart.json
+  V->>CF: GET /toys/aoty/user/Alice
+  CF->>S3: static shell (every page path serves index.html)
+  S3-->>V: HTML, then hashed CSS and JS
+  V->>CF: GET data/users/alice/chart.json (lowercased)
   CF->>S3: chart.json
   alt chart exists (return visit)
-    S3-->>V: 200: paint the chart immediately
+    S3-->>V: 200: paint the chart, URL rewritten to Last.fm's casing
   else first visit
     S3-->>V: 404: first-visit screen (AOTY-24)
   end
@@ -138,7 +141,7 @@ sequenceDiagram
 ## Background flow: sync, then the mb lane
 
 What happens after a sync message is queued. The sync worker, the mb lane and the release
-index are built (AOTY-18, AOTY-19, AOTY-20); the chart builder hook is a no-op until AOTY-21.
+index and the chart builder are built (AOTY-18, 19, 20, 21).
 
 ```mermaid
 sequenceDiagram
@@ -151,7 +154,7 @@ sequenceDiagram
   participant HQ as mb-hot / mb-cold
   participant MB as mb Lambda
   participant MBA as MusicBrainz
-  participant CB as chart builder (AOTY-21)
+  participant CB as chart Lambda
 
   Q->>SW: {"username": "alice"}
   SW->>ST: load weeks.json.gz
@@ -163,7 +166,7 @@ sequenceDiagram
   SW->>AT: BatchGetItem: which albums are dated already?
   SW->>HQ: undated albums: top 150 to hot, the rest to cold
   SW-)MB: async invoke {}
-  SW-)CB: build chart (no-op until AOTY-21)
+  SW-)CB: {"username", "requested_at"}
 
   Note over MB: Reserved concurrency 1: a second invoke waits (throttled, retried by Lambda)
   MB->>ST: index/current.json (re-read at most hourly)
@@ -182,7 +185,7 @@ sequenceDiagram
   opt messages left when time ran short
     MB-)MB: async invoke itself (runs after this one exits)
   end
-  MB-)CB: rebuild charts with pending albums (AOTY-21)
+  MB-)CB: {"pending": true}: after the first batch that writes, then at most once a minute, and at the end
 ```
 
 A failed request is never written. Its message reappears after the visibility timeout, and
@@ -234,12 +237,14 @@ and the next day's run starts over.
 
 | Store | Written by | Read by |
 |---|---|---|
-| store bucket `users/*/YEAR/weeks.json.gz` | sync | chart builder (AOTY-21) |
+| store bucket `users/*/YEAR/weeks.json.gz` | sync | chart builder |
+| store bucket `users/*/YEAR/chart_pending.json` | chart builder | chart builder (pending pass) |
 | store bucket `index/current.json`, `index/DUMP/*.json.gz` | index build | mb lane |
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
-| `users` table | api, sync | api (status, cooldown) |
-| site bucket `data/users/*/chart.json` | chart builder (AOTY-21) | browsers, through CloudFront |
+| `users` table | api, sync (state, `display_name`), chart builder (`chart_built_at`, `chart_pending`) | api (status, cooldown), chart builder |
+| site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
+| site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 
 An album's year comes from the `albums` table if it has an item. If not, the mb lane tries the
@@ -253,3 +258,40 @@ The index covers every dated release group of any year, not only the target year
 same index serves 2027 and M4's albums of any year. An index answer is trusted only for an
 exact title of type Album. The dump lags days behind MusicBrainz, so last year's single "X"
 mustn't stand in for this year's album "X" that the dump doesn't have yet.
+
+## Chart builder (AOTY-21)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant SW as sync Lambda
+  participant MB as mb Lambda
+  participant CB as chart Lambda
+  participant U as users table
+  participant ST as store bucket
+  participant AT as albums table
+  participant S3 as site bucket
+
+  alt after a sync
+    SW-)CB: {"username", "requested_at"}
+    CB->>U: chart_built_at newer than requested_at?
+    Note over CB: yes: skip (a repeated or retried event)
+  else while albums resolve
+    MB-)CB: {"pending": true}
+    CB->>U: Scan chart_pending > 0
+    CB->>ST: chart_pending.json per user
+    CB->>AT: keys-only BatchGet: any pending album answered?
+    Note over CB: no: skip that user
+  end
+  CB->>ST: weeks.json.gz
+  CB->>AT: BatchGet every played album
+  CB->>S3: data/users/u/chart.json (Cache-Control no-cache)
+  CB->>ST: chart_pending.json
+  CB->>U: chart_built_at, chart_pending
+```
+
+Reserved concurrency 1 runs builds one at a time, so a build that read older data can't
+overwrite a newer chart. The year comes from the `albums` table at build time, so a re-check
+that corrects an album reaches the chart at the user's next sync. The pending pass Scans the
+users table, which is fine at M1's scale; past a few thousand users, a sparse GSI on
+`chart_pending` replaces it.
