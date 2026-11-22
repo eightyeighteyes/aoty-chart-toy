@@ -1,8 +1,7 @@
 # HTTP API in front of the api Lambda. One $default route: the Lambda sees the full public
-# path (e.g. /toys/aoty/api/health) and strips BASE_PATH itself, so CloudFront can forward
-# /toys/aoty/api/* unchanged (AOTY-15).
-# Note for AOTY-15: the execute-api URL bypasses CloudFront; lock it down once CloudFront
-# fronts it (shared-secret header, or disable_execute_api_endpoint).
+# path (e.g. /toys/aoty/api/health) and strips BASE_PATH itself, because kamp.fm's CloudFront
+# forwards /toys/aoty[-staging]/api/* unchanged (kamp-site, AOTY-15).
+# The execute-api URL also works directly, bypassing CloudFront; locking that down is AOTY-26.
 
 resource "aws_apigatewayv2_api" "http" {
   name          = "${local.prefix}-api"

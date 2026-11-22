@@ -224,6 +224,15 @@ data "aws_iam_policy_document" "deploy" {
     ]
   }
 
+  # CD invalidates its env's base path after a shell upload (AOTY-17). IAM can't scope an
+  # invalidation by path, so either env's role could invalidate the other's (or kamp's) paths;
+  # the worst case is a cache refill, and the workflow only ever sends its own <base>*.
+  statement {
+    sid       = "InvalidateShell"
+    actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+    resources = [var.kamp_distribution_arn]
+  }
+
   # Workload roles: only under this env's path, only with this env's boundary attached.
   statement {
     sid = "WorkloadRolesBounded"

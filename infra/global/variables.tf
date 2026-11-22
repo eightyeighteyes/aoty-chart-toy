@@ -23,6 +23,12 @@ variable "admin_assume_principal" {
   default     = null
 }
 
+variable "kamp_distribution_arn" {
+  description = "kamp.fm's CloudFront distribution (kamp-site repo), which CD invalidates after a shell upload"
+  type        = string
+  default     = "arn:aws:cloudfront::424416271636:distribution/EU1A3HSUCEQS9"
+}
+
 variable "state_bucket" {
   type    = string
   default = "kamp-site-tfstate"
