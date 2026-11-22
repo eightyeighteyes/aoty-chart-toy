@@ -126,19 +126,24 @@ def run(deps, context):
 
 
 def _receive(deps, queues):
-  """Up to BATCH messages from the first queue that has any: [(album, queue_url, receipt)]."""
+  """Up to BATCH messages from the first queue that has any: [(album, queue_url, receipt)].
+
+  SQS often answers with fewer than asked even when more are waiting (sandbox, 2026-11-22: 51
+  messages came in 12 batches), so keep receiving until BATCH or an empty answer. Small batches
+  waste MusicBrainz requests: one search covers 20 albums as cheaply as 4.
+  """
   for _, url in queues:
     got = []
     while len(got) < BATCH:
       out = deps.sqs.receive_message(
         QueueUrl=url,
         MaxNumberOfMessages=min(RECEIVE_MAX, BATCH - len(got)),
-        WaitTimeSeconds=WAIT_S if not got else 0,
+        WaitTimeSeconds=WAIT_S,
       )
       page = out.get("Messages", [])
-      got += [(m.get("Body", ""), url, m["ReceiptHandle"]) for m in page]
-      if len(page) < RECEIVE_MAX:
+      if not page:
         break
+      got += [(m.get("Body", ""), url, m["ReceiptHandle"]) for m in page]
     if got:
       return got
   return []

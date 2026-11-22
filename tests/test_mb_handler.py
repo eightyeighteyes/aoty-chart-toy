@@ -34,9 +34,10 @@ class Clock:
 class FakeSQS:
   """Standard queues: a received message is in flight until deleted or released."""
 
-  def __init__(self):
+  def __init__(self, page_cap=None):
     self.queues = {"q/hot": [], "q/cold": []}  # [receipt, body, in_flight]
     self.received_from, self.waits, self.n = [], [], 0
+    self.page_cap = page_cap  # real SQS often returns fewer than asked
 
   def send(self, url, body):
     self.n += 1
@@ -46,7 +47,7 @@ class FakeSQS:
     self.waits.append(WaitTimeSeconds)
     out = []
     for m in self.queues[QueueUrl]:
-      if not m[2] and len(out) < MaxNumberOfMessages:
+      if not m[2] and len(out) < min(MaxNumberOfMessages, self.page_cap or MaxNumberOfMessages):
         m[2] = True
         out.append({"ReceiptHandle": m[0], "Body": m[1]})
     self.received_from += [QueueUrl] * len(out)
@@ -155,9 +156,9 @@ def msg(title, artist="Artist"):
   }
 
 
-def world(h, *, ddb=None, years=None, cost=1.0):
+def world(h, *, ddb=None, years=None, cost=1.0, page_cap=None):
   clock = Clock()
-  sqs = FakeSQS()
+  sqs = FakeSQS(page_cap)
   deps = h.Deps(sqs=sqs, ddb=ddb or FakeDDB(), lambda_=FakeLambda(), mb=FakeMB(clock, years, cost),
                 lastfm_client=FakeLastfm(), env=ENV, clock=lambda: NOW, mono=clock, sleep=lambda s: None)  # fmt: skip
   return deps, sqs, clock
@@ -192,6 +193,16 @@ def test_resolves_writes_items_and_deletes_messages(h):
   assert new["year"] == {"N": "2026"} and new["tracks"] == {"N": "10"} and new["rg_mbid"] == {"S": "rg-New"}
   old = deps.ddb.items[("artist", "old")]
   assert old["year"] == {"N": "1999"} and "tracks" not in old
+
+
+def test_short_receive_pages_still_fill_a_batch_of_twenty(h):
+  # Real SQS returned ~4 messages per receive in sandbox; 20 albums must still share one search.
+  deps, sqs, clock = world(h, page_cap=3)
+  for i in range(40):
+    sqs.send("q/cold", msg(f"A{i:02}"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["batches"] == 2
+  assert [c[0] for c in deps.mb.calls] == ["release-group", "release-group"]
 
 
 def test_hot_is_drained_before_cold(h):
