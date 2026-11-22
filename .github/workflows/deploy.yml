@@ -8,6 +8,11 @@ name: Deploy
 #       gh workflow run deploy.yml --ref v0.1.0 -f environment=production
 #     skip_terraform defaults to true there, so an old tag only rolls back code and the shell,
 #     never infrastructure.
+#   - workflow_dispatch to sandbox from any branch, before its PR merges (AOTY-33):
+#       gh workflow run deploy.yml --ref my-branch -f environment=sandbox -f skip_terraform=false
+#     The `sandbox` environment allows every branch but waits for a reviewer. Sandbox isn't on
+#     kamp.fm: no shell upload, and the smoke test calls the execute-api URL directly.
+#     A branch can edit this file, so none of that is a guard; the sandbox role's IAM is.
 on:
   workflow_call:
     inputs:
@@ -24,7 +29,7 @@ on:
     inputs:
       environment:
         type: choice
-        options: [staging, production]
+        options: [staging, production, sandbox]
         required: true
       skip_terraform:
         description: "Skip terraform apply (code + shell only). Keep on for rollbacks."
@@ -49,8 +54,8 @@ jobs:
       contents: read
       id-token: write
     env:
-      # GitHub environment "production" is infra env "prod".
-      AOTY_ENV: ${{ (inputs.environment || 'production') == 'production' && 'prod' || 'staging' }}
+      # GitHub environment "production" is infra env "prod"; staging and sandbox keep their names.
+      AOTY_ENV: ${{ (inputs.environment || 'production') == 'production' && 'prod' || inputs.environment }}
       SKIP_TERRAFORM: ${{ inputs.skip_terraform == true }}
       AWS_REGION: us-east-1
     steps:
@@ -91,6 +96,7 @@ jobs:
             echo "BASE_PATH=$(jq -r .base_path "$RUNNER_TEMP/stack.json")"
             echo "S3_PREFIX=$(jq -r .s3_key_prefix "$RUNNER_TEMP/stack.json")"
             echo "SITE_BUCKET=$(jq -r .site_bucket_name "$RUNNER_TEMP/stack.json")"
+            echo "API_ENDPOINT=$(jq -r .api_endpoint "$RUNNER_TEMP/stack.json")"
           } >> "$GITHUB_ENV"
 
       - name: lambda code
@@ -108,9 +114,11 @@ jobs:
           done
 
       # No shell yet (later stories add web/): skip, so /toys/aoty/ keeps returning 404 and the
-      # --delete pass below can never empty the prefix.
+      # --delete pass below can never empty the prefix. Never for sandbox, which kamp.fm doesn't
+      # serve (and whose role has no CloudFront access).
       - name: static shell
         id: shell
+        if: env.AOTY_ENV != 'sandbox'
         run: |
           set -euo pipefail
           if [ ! -f web/index.html ]; then
@@ -136,16 +144,40 @@ jobs:
           SHELL_DEPLOYED: ${{ steps.shell.outputs.deployed }}
         run: |
           set -euo pipefail
-          site="https://kamp.fm${BASE_PATH}"
+          # Sandbox has no kamp.fm path: call the HTTP API directly. The Lambda strips BASE_PATH
+          # itself, so the path is the same as through CloudFront.
+          if [ "$AOTY_ENV" = "sandbox" ]; then
+            site="${API_ENDPOINT}${BASE_PATH}"
+          else
+            site="https://kamp.fm${BASE_PATH}"
+          fi
           check() {  # check <expected status> <url>
             status=$(curl -s -o "$RUNNER_TEMP/body" -w '%{http_code}' --retry 3 --retry-all-errors "$2")
             echo "$status $2"
             [ "$status" = "$1" ] || { echo "::error::expected $1, got $status for $2"; cat "$RUNNER_TEMP/body"; exit 1; }
           }
           check 200 "${site}api/health"
-          # Prove the new code is live, not Terraform's placeholder.
-          jq -e '.source == "lambdas/api"' "$RUNNER_TEMP/body" > /dev/null
-          check 404 "${site}data/users/__smoke__/chart.json"
+          # Prove the new code is live, not Terraform's placeholder, and in the right env.
+          jq -e --arg env "$AOTY_ENV" '.source == "lambdas/api" and .env == $env' "$RUNNER_TEMP/body" > /dev/null
+          # The site bucket is only reachable through kamp.fm's CloudFront.
+          if [ "$AOTY_ENV" != "sandbox" ]; then
+            check 404 "${site}data/users/__smoke__/chart.json"
+          fi
           if [ "$SHELL_DEPLOYED" = "true" ]; then
             check 200 "$site"
           fi
+
+      # Sandbox is shared and the last deploy wins, so record what's there now and who put it.
+      - name: summary
+        if: always()
+        env:
+          REF: ${{ inputs.ref || github.ref_name }}
+          ACTOR: ${{ github.triggering_actor }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Deploy to \`$AOTY_ENV\`: $STATUS"
+            echo "- ref: \`$REF\` (\`$(git rev-parse --short HEAD)\`)"
+            echo "- by: $ACTOR"
+            echo "- terraform: $([ "$SKIP_TERRAFORM" = "true" ] && echo skipped || echo applied)"
+          } >> "$GITHUB_STEP_SUMMARY"
