@@ -1,0 +1,45 @@
+name: CD
+
+# After CI passes on a push to main: deploy staging, then let release-please open or update the
+# release PR. Merging that PR lands here too: staging deploys it, then release-please tags
+# v<version>, and the tag push runs deploy.yml for production. So prod never runs before staging.
+#
+# workflow_run (not push) so an untested commit can never deploy; it only fires for the CI
+# workflow on the default branch, and the event check keeps PR runs out.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  staging:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      ref: ${{ github.event.workflow_run.head_sha }}
+
+  release:
+    needs: staging
+    runs-on: ubuntu-latest
+    steps:
+      # The GitHub App's token, not GITHUB_TOKEN: GitHub doesn't run workflows for PRs or tags
+      # made with GITHUB_TOKEN, so release PRs would get no CI and tags wouldn't deploy prod.
+      # Setup: infra/README.md, "Releases".
+      - id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

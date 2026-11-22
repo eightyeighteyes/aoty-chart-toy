@@ -41,6 +41,9 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `tests/` | pytest (AOTY-16): matching rules against recorded MusicBrainz searches in `tests/fixtures/mb/`, track counts and singles, ranking orders. `conftest.py` blanks the `.env` keys before `aoty` is imported. |
 | `tools/record_mb_fixtures.py` | Re-records the MusicBrainz fixtures with the scripts' own query builders (4 requests). Only to refresh them; never during a benchmark. |
 | `.github/workflows/ci.yml` | CI (AOTY-16): `lint`, `test`, `terraform` (fmt + validate), `terraform-plan` (staging + prod via the OIDC plan role, one PR comment edited in place). All four are required on `main`. |
+| `.github/workflows/cd.yml`, `deploy.yml` | CD (AOTY-17): after CI passes on `main`, deploy staging, then release-please; a `v*` tag deploys prod; `workflow_dispatch` for rollback. Flow, rollback and the release App setup are in `infra/README.md`, "Deploys and releases". |
+| `lambdas/{api,sync,mb}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/`, runtime deps in `lambdas/requirements.txt`. `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`. |
+| `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
 | `pyproject.toml`, `requirements-dev.txt` | ruff (2-space indent, 110 columns, `tools/` excluded until AOTY-12 merges) and pytest config; pinned dev tools. |
 
 ## Running
@@ -197,6 +200,14 @@ Details are in `infra/README.md`. Things to keep in mind when changing it:
   `github_sub_prefix` in `infra/global/variables.tf`.
 - **Required checks need a job that always reports.** Don't add `paths:` filters to `ci.yml`;
   skip inside a job with `if:` instead, because a skipped job counts as passed.
+- **GitHub runs no workflows for PRs, tags or releases made with `GITHUB_TOKEN`.** That's why
+  release-please uses the GitHub App token (`RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY`).
+  `workflow_dispatch` is the one event `GITHUB_TOKEN` can trigger.
+- **`workflow_run`, tag-push and `workflow_dispatch` workflows only run from files on `main`.** A
+  change to `cd.yml` or `deploy.yml` is really tested only after merge. actionlint in CI catches
+  typos first.
+- **The `production` environment only accepts `v*` tags**, so a prod deploy must run on the tag
+  ref (`deploy.yml` on tag push), never from a job on `main`.
 
 ## Open items
 

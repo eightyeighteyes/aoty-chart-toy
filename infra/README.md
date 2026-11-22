@@ -38,8 +38,8 @@ runs. Prod PITR costs about $0.20/GB-month.
 ## Ownership rules
 
 - **CD owns Lambda code; Terraform owns configuration.** The placeholder zip is used only when a
-  function is first created (`ignore_changes = [filename, source_code_hash]`). Deploy code with
-  `aws lambda update-function-code`. A `terraform apply` never reverts it.
+  function is first created (`ignore_changes = [filename, source_code_hash]`). The real code is
+  in `lambdas/` and CD deploys it (see "Deploys and releases"). A `terraform apply` never reverts it.
 - **SSM parameter values are never in Terraform.** Refreshing a SecureString would put it in
   state, and the PR plan role would need decrypt rights. Terraform only grants the Lambdas read on
   `/kamp-aoty/<env>/*`.
@@ -87,6 +87,71 @@ terraform -chdir=infra/global apply -var admin_assume_principal=arn:aws:iam::<ac
 AWS_PROFILE=aoty-plan terraform -chdir=infra/envs/staging plan
 terraform -chdir=infra/global apply   # removes the trust again
 ```
+
+## Deploys and releases (AOTY-17)
+
+```
+PR merged to main
+  └─ CI (lint, test, terraform)            .github/workflows/ci.yml
+       └─ on success → CD                  .github/workflows/cd.yml (workflow_run)
+            ├─ staging: deploy.yml          package → terraform apply → Lambda code → shell → smoke
+            └─ release: release-please      opens/updates "chore(main): release X.Y.Z"
+release PR merged → the same path, then release-please tags vX.Y.Z
+  └─ tag push → deploy.yml for production   same steps, `production` environment
+```
+
+What a deploy (`deploy.yml`) does, as the env's deploy role:
+
+1. `python scripts/package_lambdas.py` builds `dist/{api,sync,mb}.zip` from `lambdas/` (Linux
+   arm64 wheels, byte-for-byte reproducible).
+2. `terraform apply` for `infra/envs/<env>` (skipped with `skip_terraform`).
+3. `update-function-code --publish` for each function, with `wait function-updated` before and after.
+   Each deploy leaves a numbered Lambda version.
+4. **Only if `web/index.html` exists:** uploads hashed assets with a year's cache, then
+   `index.html` with `no-cache`, then removes deleted files (never `data/`), and invalidates
+   `<base>*` on kamp.fm's distribution.
+5. Smoke test through kamp.fm:
+   - `<base>api/health` → 200, and the body must say `"source": "lambdas/api"` (deployed code, not the placeholder)
+   - `<base>data/users/__smoke__/chart.json` → 404
+   - `<base>` → 200, once a shell exists
+
+**Rollback** redeploys code and the shell from an older tag without touching infrastructure:
+
+```sh
+gh workflow run deploy.yml --ref v0.1.0 -f environment=production   # skip_terraform defaults to true
+```
+
+To also roll infrastructure back, add `-f skip_terraform=false`, but check the plan first: an
+old tag's Terraform reverts any newer resources.
+
+### Release app (one-time setup)
+
+release-please runs with a GitHub App token, not `GITHUB_TOKEN`, because GitHub runs no workflows
+for PRs or tags that `GITHUB_TOKEN` creates. Without the App, release PRs would get no CI (the
+rulesets would block them) and tags wouldn't deploy prod.
+
+1. GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App**.
+   - Name: e.g. `aoty-release`. Homepage URL: the repo URL. **Webhook: uncheck Active.**
+   - Repository permissions:
+     - **Contents: Read and write**
+     - **Pull requests: Read and write**
+     - **Issues: Read and write** (release-please labels its PRs)
+     - Metadata: read (default)
+   - Where can it be installed: **Only on this account**.
+2. Create it. On its page, note the **Client ID**, then **Generate a private key** (downloads a `.pem`).
+3. **Install App** → only `aoty-chart-toy`.
+4. Add the repo settings:
+
+   ```sh
+   gh variable set RELEASE_APP_CLIENT_ID --repo eightyeighteyes/aoty-chart-toy --body "<client id>"
+   gh secret set RELEASE_APP_PRIVATE_KEY --repo eightyeighteyes/aoty-chart-toy < aoty-release.pem
+   ```
+
+   Then delete the downloaded `.pem`.
+
+Versioning: Conventional Commits since the `bootstrap-sha` in `release-please-config.json`.
+`feat:` bumps the minor version (0.x), `fix:` the patch; tags are `vX.Y.Z`. PRs merge with merge
+commits, so every branch commit becomes a changelog line: keep them Conventional.
 
 ## Bootstrap (done once, 2026-11-21)
 
