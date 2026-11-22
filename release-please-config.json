@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "3e3dfef505ef774786e289ec4c86c52d855aa052",
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "aoty",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true
+    }
+  }
+}
