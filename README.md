@@ -94,3 +94,18 @@ The output goes to `data/mb_index/`. The crawl uses the rate-limited API, so run
 .venv/bin/python tools/mb_index_eval.py report --dump data/mb_index/dump-<name> \
     --crawl data/mb_index/crawl-<ts>                    # writes report.md
 ```
+
+## Release index (AOTY-20)
+
+The production index is built by `jobs/index/build.py`, a daily Fargate Spot task (see
+[infra/README.md](infra/README.md), "Release index"). It shards every dated release group of
+any year from the MusicBrainz JSON dump into the store bucket, and the mb lane asks it before
+searching MusicBrainz. To check its answers against every album M0 looked up, from a dump
+folder `tools/mb_index_dump.py rg` downloaded:
+
+```sh
+.venv/bin/python tools/mb_index_eval.py shards --dump data/mb_index/dump-<name>   # writes report_shards.md
+```
+
+It builds the shards locally with the job's own code (about 15 minutes the first time), then
+exits non-zero if any trusted answer disagrees with M0's year.

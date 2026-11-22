@@ -36,7 +36,9 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `tools/mb_lambda.py` | AOTY-12 harness: deploys a throwaway us-east-1 Lambda (`tools/mb_lambda/handler.py`), runs `mb_cold_run` arm L there in 250-album slices (`sweep`), and unpacks each slice into `data/mb_bench/run-<ts>-lambda/`. `teardown` removes the function, role and log group. `mb_cold_run.py --offset/--limit` takes the same slices locally. |
 | `tools/mb_index_dump.py` | AOTY-13: downloads the MusicBrainz JSON dump's `release-group.tar.xz` (resumable, SHA256-checked) into `data/mb_index/dump-<name>/`. Writes `index_2026.json` and the all-years `keymap.json`. `release-probe` times the first 1 GB of `release.tar.xz`. Doesn't use the rate-limited API. |
 | `tools/mb_index_crawl.py` | AOTY-13: crawls every 2026 release group through search, split into id ranges of one page each (`crawl`, about 85 min), into `data/mb_index/crawl-<ts>/`. `offset-probe` records the 500-result cap. Run it on its own. |
-| `tools/mb_index_eval.py` | AOTY-13: `report` scores the indexes against every album M0 looked up, explains misses, compares crawl and dump, and writes `report.md`. `track-probe` prices live track-count lookups. |
+| `tools/mb_index_eval.py` | AOTY-13: `report` scores the indexes against every album M0 looked up, explains misses, compares crawl and dump, and writes `report.md`. `track-probe` prices live track-count lookups. AOTY-20: `shards` builds the real shards locally (~10 min) and fails on any trusted answer that disagrees with M0. |
+| `jobs/index/` | AOTY-20 release index build: `build.py` (Fargate Spot task: download, spill, shard, publish, re-check) and `dump.py` (dump download/streaming, shared with `tools/mb_index_dump.py`). Packaged into `dist/index.zip`. |
+| `lambdas/common/releaseindex.py` | The index format: `shard_of`, `record`, the manifest and its `norm` fingerprint, `lookup` with the trust rule. Pure. `common/dynamo.py` holds DynamoDB value conversion. |
 | `tools/mb_analyze.py` | Per-arm markdown tables for one or more `run-*` folders: 503 rate, server p50/p95, sleep vs server, retry cost, albums/s, rate-limit headers, years diff vs the real cache. |
 | `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
 | `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
@@ -229,15 +231,53 @@ Output goes to `data/mb_index/`.
     1.8 MB/s, plus about 2 h of CPU.
   - A live lookup costs 1.8 s per release group (one `release` search on `rgid:`). That's
     about 36 h for all 72k 2026 Albums and EPs.
-- **Recommendation for AOTY-20:**
-  - **Year index:** build the keymap from the dump twice a week, as a Fargate Spot task.
-    Lambda's 15 min and 10 GB can't fit the download plus the parse.
-  - **Lookup order:** keymap → `albums` table → live `pick_year` queued in the `mb` lane.
-    Do the live step first for a user's top albums that the keymap and the table miss,
-    because the dump is days behind.
-  - **Track counts:** keep M0's lazy, cached live lookup with the Last.fm fallback. If the
-    `mb` lane can't keep up, consider a weekly `release.tar.xz` pass filtered to 2026
-    release groups.
+- The AOTY-20 index that came out of this is in "Release index (AOTY-20)" below. Track counts stay
+  live; if the `mb` lane can't keep up, a weekly `release.tar.xz` pass filtered to the target
+  year is the fallback.
+
+## Release index (AOTY-20, 2026-11-22)
+
+- **Every dated release group of any year** (user decision), so years are data and the same
+  index serves 2027+ and M4. Not the AOTY-13 2026-titles keymap, which would need a per-year build.
+- **Format** (`common/releaseindex.py`):
+  - 4,096 gzipped shards by `sha1(norm(title))[:3]` under `index/<dump>/` in the store bucket.
+  - `index/current.json` is written last, so a build is live only once every shard is uploaded.
+  - The manifest carries a fingerprint of `norm`. If `norm` changes, the mb lane turns the index
+    off (`IndexErrors`) rather than silently missing everything and sending every album to live
+    searches. **Changing `norm` means rebuilding the index.**
+- **Trust rule:** an index answer is used only for an exact title (`title_tier` 0) of type Album.
+  The dump lags days behind, so last year's single "X" would otherwise stand in for this year's
+  album "X" that the dump doesn't have yet. EPs are untrusted too: a new same-named album would
+  beat them. Everything else goes to the live search, and an index miss means "unknown".
+- **Accuracy** (`tools/mb_index_eval.py shards`, dump 2026-11-21, all 1,530 albums M0 looked up):
+  - No trusted answer disagrees with M0.
+  - 519/568 of M0's 2026 albums (91%) and 1,183/1,530 overall (77%) need no live year search.
+  - The 142 untrusted hits all agree with M0 too: the rule costs lookups, never answers.
+  - 6 albums M0 had as null are answered (Marmozets "CO.WAR.DICE." among them).
+  - 199 are unknown to both.
+- **Build** (`jobs/index/build.py`, Fargate Spot, daily 06:15 UTC):
+  - It spills records to 16 files on disk by shard prefix. Peak RSS is 522 MB, against 5.4 GB with
+    everything in memory. 10 min wall time on the laptop, plus the download.
+  - 4.46M records, 3.1M titles, 280 MB of shards, the largest 195 KB.
+  - Daily, because Scheduler doesn't retry a task that started and died. The run exits early
+    when the manifest already names the latest dump.
+  - It keeps the build it replaced and deletes older ones, rather than using an age-based
+    lifecycle rule, which would expire a live index if builds kept failing.
+  - x86_64, because Fargate Spot has no ARM64. No ECR: AWS's public Lambda Python image, pinned by
+    digest, fetches `code/index.zip`.
+- **Re-checks**, at the end of each build, to mb-cold with `"recheck": true`:
+  - (a) A trusted answer that differs from the stored one, when the stored `rg_mbid` is one the
+    dump has. Otherwise a newer live answer would be undone by every build.
+  - (b) A null year looked up more than 30 days ago, for a live retry. The rewrite resets
+    `looked_up_at`, so it's monthly per item. Capped at 5,000 per build.
+- **mb lane:**
+  - A re-check overwrites the item, decided per key: any message for an album that's a re-check
+    counts.
+  - It keeps the stored track count when `rg_mbid` is unchanged.
+  - The manifest is re-read at most hourly, and shards are kept in a 128-entry LRU, so the mb
+    Lambda has 512 MB.
+- **Covers** (the Cover Art Archive fallback from the story) moved to AOTY-21. The stale-index
+  alarm is AOTY-37.
 
 ## Last.fm data cost (AOTY-11 spike, 2026-11-21, 19 members)
 
@@ -300,8 +340,9 @@ not daily totals from paging scrobbles (the story text was revised to match).
   Staging, prod and sandbox each have one, and a laptop tool (`tools/mb_parity.py`,
   `aoty.py`) is another. Run laptop tools while the deployed lanes are idle.
 - **The mb Lambda is the only writer of the `albums` table.** The sync worker reads it; any item,
-  a confirmed miss (`year` null) included, counts as resolved forever. AOTY-20's index (in S3)
-  will only skip the year search: the lane still writes the item and looks up tracks itself.
+  a confirmed miss (`year` null) included, counts as resolved until the index build asks for a
+  re-check (AOTY-20). The index only skips the year search: the lane still writes the item and
+  looks up tracks itself.
 - **Items are keyed by the message's `artist_key`/`title_key`**, never recomputed: sync's
   `album_key` has a fallback for all-punctuation names that `norm` alone would miss.
 - Item fields: `year` (int or null), `rg_mbid`, `primary_type` (the year's release group),

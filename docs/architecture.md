@@ -4,11 +4,14 @@ How the pieces of the single-user app (AOTY-2) fit together. Solid boxes are bui
 boxes and arrows are planned, labelled with the story that adds them. One copy of the stack
 runs per environment (staging, prod, sandbox); names below drop the `kamp-aoty-<env>-` prefix.
 
-Three actors drive everything:
+Four actors drive everything:
 
 - **Visitor**: a person opening `kamp.fm/toys/aoty/<username>`.
 - **Sync worker**: reads one user's Last.fm history into the private store.
-- **mb lane**: the one MusicBrainz client, which dates albums and counts their tracks.
+- **mb lane**: the one MusicBrainz client, which dates albums and counts their tracks. It asks
+  the release index first.
+- **Index build**: a daily Fargate Spot task that turns the MusicBrainz JSON dump into the
+  release index, and queues re-checks for albums whose answer has changed.
 
 The page never waits on MusicBrainz or Last.fm: it reads static JSON from CloudFront, and the
 background work keeps that JSON fresh.
@@ -36,10 +39,12 @@ flowchart LR
     cold[["mb-cold queue"]]
     mb["mb Lambda<br/>reserved concurrency 1"]
     sched["Scheduler: hourly"]
+    isched["Scheduler: daily 06:15 UTC"]
     ssm[("SSM: Last.fm key,<br/>MB contact")]
     chart["chart builder<br/>(AOTY-21)"]
-    index[("release index in store<br/>(AOTY-20)")]
-    indexer["index build, twice weekly<br/>(AOTY-20)"]
+    index[("store bucket<br/>index/current.json,<br/>index/DUMP/*.json.gz")]
+    code[("store bucket<br/>code/index.zip")]
+    indexer["index build<br/>Fargate Spot task"]
   end
 
   lastfm(["Last.fm API"])
@@ -68,17 +73,24 @@ flowchart LR
   sync -.->|"AOTY-21"| chart
   chart -.-> storeb
   chart -.-> albums
-  chart -.-> index
   chart -.->|"chart.json"| siteb
-  indexer -.-> mbdump
-  indexer -.-> index
-  mb -.->|"AOTY-20: index first"| index
+  isched -- "ecs:RunTask" --> indexer
+  indexer -- "fetch code" --> code
+  indexer -- "download, twice a week" --> mbdump
+  indexer -- "shards, then manifest" --> index
+  indexer -- "Scan: what changed?" --> albums
+  indexer -- "re-checks" --> cold
+  mb -- "index first" --> index
   ssm --- sync
   ssm --- mb
+  ssm --- indexer
 
   classDef planned stroke-dasharray: 5 5
-  class chart,index,indexer planned
+  class chart planned
 ```
+
+The index build runs in the default VPC's public subnets with a public IP, with no NAT
+gateway. CD uploads its code to `code/index.zip`, as it updates the Lambdas' code.
 
 ## Visitor flow
 
@@ -124,8 +136,8 @@ sequenceDiagram
 
 ## Background flow: sync, then the mb lane
 
-What happens after a sync message is queued. The sync worker and the mb lane are built (AOTY-18
-and this story, AOTY-19); the chart builder hook is a no-op until AOTY-21.
+What happens after a sync message is queued. The sync worker, the mb lane and the release
+index are built (AOTY-18, AOTY-19, AOTY-20); the chart builder hook is a no-op until AOTY-21.
 
 ```mermaid
 sequenceDiagram
@@ -153,12 +165,15 @@ sequenceDiagram
   SW-)CB: build chart (no-op until AOTY-21)
 
   Note over MB: Reserved concurrency 1: a second invoke waits (throttled, retried by Lambda)
+  MB->>ST: index/current.json (re-read at most hourly)
   loop until both queues are empty or time runs short
     MB->>HQ: receive up to 20 (hot first)
-    MB->>AT: skip albums that already have an item
-    MB->>MBA: one batched release-group search (20 albums)
+    MB->>AT: skip albums that already have an item (unless a message is a re-check)
+    MB->>ST: index shards (cached while warm)
+    Note over MB: A trusted hit (exact title, type Album) needs no year search
+    MB->>MBA: one batched release-group search for the rest
     MB->>MBA: one search per miss
-    MB->>MBA: release search for this year's albums (track counts)
+    MB->>MBA: release search for this year's albums (track counts; a re-check keeps the stored count)
     MB->>LF: album.getInfo when MusicBrainz has no count
     MB->>AT: write year, type, tracks (a confirmed miss = null year)
     MB->>HQ: delete the resolved messages
@@ -180,9 +195,10 @@ sequenceDiagram
   participant SC as Scheduler
   participant MB as mb Lambda
   participant HQ as mb-hot / mb-cold
-  participant IX as index build (AOTY-20)
+  participant IX as index build (Fargate Spot)
   participant DUMP as MusicBrainz dump
   participant ST as store bucket
+  participant AT as albums table
 
   Note over SC,MB: Hourly backstop, in case a sync's poke was lost
   SC-)MB: invoke {}
@@ -193,25 +209,46 @@ sequenceDiagram
     MB->>MB: drain as in the flow above
   end
 
-  Note over SC,ST: Twice weekly (AOTY-20, planned)
-  SC-)IX: build the release index
-  IX->>DUMP: download release-group.tar.xz
-  IX->>ST: write the keymap (any year, titles that match this year)
-  Note over IX,MB: Monthly: requeue misses older than 30 days to mb-cold
+  Note over SC,AT: Daily at 06:15 UTC (a new dump comes out twice a week)
+  SC-)IX: ecs:RunTask, FARGATE_SPOT
+  IX->>ST: code/index.zip, then index/current.json
+  IX->>DUMP: LATEST
+  alt the manifest already names the latest dump
+    IX-->>SC: exit in seconds
+  else a new dump
+    IX->>DUMP: download release-group.tar.xz (1.24 GB, SHA256-checked)
+    IX->>IX: every dated release group, any year, into 4,096 shards by title
+    IX->>ST: upload index/DUMP/*.json.gz
+    IX->>ST: write index/current.json last (the build goes live)
+    IX->>ST: delete builds older than the one replaced
+    IX->>AT: Scan
+    IX->>HQ: re-checks to mb-cold: answer changed, or a miss older than 30 days
+  end
 ```
+
+A Spot interruption kills a build before its manifest is written, so the old index stays live
+and the next day's run starts over.
 
 ## Who reads and writes what
 
 | Store | Written by | Read by |
 |---|---|---|
 | store bucket `users/*/YEAR/weeks.json.gz` | sync | chart builder (AOTY-21) |
-| store bucket release index | index build (AOTY-20) | mb lane, chart builder |
-| `albums` table | **mb lane only** | sync (what to queue), chart builder |
+| store bucket `index/current.json`, `index/DUMP/*.json.gz` | index build | mb lane |
+| store bucket `code/index.zip` | CD | index build (at start) |
+| `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
 | `users` table | api, sync | api (status, cooldown) |
 | site bucket `data/users/*/chart.json` | chart builder (AOTY-21) | browsers, through CloudFront |
-| mb-hot / mb-cold | sync (AOTY-20: monthly re-check) | mb lane |
+| mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 
-The lookup order for an album's year (AOTY-20) is the index, then the `albums` table, then a
-live search in the mb lane. The lane writes the item whichever of those found the year, and
+An album's year comes from the `albums` table if it has an item. If not, the mb lane tries the
+index, then a live search. The lane writes the item whichever of the two found the year, and
 looks up the track count itself, because the dump has none. So "has an `albums` item" stays
-the one test for "resolved".
+the one test for "resolved". A re-check is the only way an item is rewritten. The index build
+asks for one when its answer has changed, and the chart builder will read the table, so the
+correction reaches every chart.
+
+The index covers every dated release group of any year, not only the target year's, so the
+same index serves 2027 and M4's albums of any year. An index answer is trusted only for an
+exact title of type Album. The dump lags days behind MusicBrainz, so last year's single "X"
+mustn't stand in for this year's album "X" that the dump doesn't have yet.
