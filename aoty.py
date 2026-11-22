@@ -183,9 +183,20 @@ def mb_search(query, limit, entity="release-group", n_albums=1):
   named in the URL: a bare /ws/2/ 301s and looks like zero results. `n_albums` is how
   many albums the query covers; it's only recorded, for `mb_report`.
   """
+  page = mb_get(entity, {"query": query, "limit": limit}, n_albums=n_albums)
+  return None if page is None else page.get(entity + "s", [])
+
+
+def mb_get(entity, params, n_albums=1):
+  """One MusicBrainz web-service GET, rate limited, retrying on 503.
+
+  Returns the whole JSON body (for a search: `count`, `offset` and the results) or None
+  on failure, which is never an empty page: a pager must treat None as a gap to retry.
+  """
   global _last_mb_request
   url = f"https://musicbrainz.org/ws/2/{entity}/"
-  params = {"query": query, "fmt": "json", "limit": limit}
+  params = {**params, "fmt": "json"}
+  limit = params.get("limit", "")
   retry_after = MB_MIN_INTERVAL
   for attempt in range(MB_MAX_ATTEMPTS):
     # Respect MusicBrainz rate limit (max 1 request per second), backing off on 503
@@ -233,11 +244,11 @@ def mb_search(query, limit, entity="release-group", n_albums=1):
       print(f"  MusicBrainz HTTP {response.status_code}")
       return None
     try:
-      found = response.json().get(entity + "s", [])
+      body = response.json()
     except ValueError:
       return None
-    stat["results"] = len(found)
-    return found
+    stat["results"] = len(body.get(entity + "s", []))
+    return body
   return None
 
 
