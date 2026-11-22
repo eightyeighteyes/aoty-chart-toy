@@ -265,9 +265,9 @@ To bring it back, apply `envs/sandbox` as the admin again (the first-apply rule 
 2. Create the GitHub environment, with a required reviewer and no branch rule:
 
    ```sh
-   gh api -X PUT repos/eightyeighteyes/aoty-chart-toy/environments/sandbox \
-     -F "reviewers[][type]=User" -F "reviewers[][id]=$(gh api users/eightyeighteyes --jq .id)" \
-     -F prevent_self_review=false
+   # 6600722 = `gh api users/eightyeighteyes --jq .id`
+   echo '{"reviewers":[{"type":"User","id":6600722}],"prevent_self_review":false,"deployment_branch_policy":null}' > env.json
+   gh api -X PUT repos/eightyeighteyes/aoty-chart-toy/environments/sandbox --input env.json
    ```
 
 3. Put `/kamp-aoty/sandbox/lastfm_api_key` (the separate key) and `/kamp-aoty/sandbox/mb_contact`
