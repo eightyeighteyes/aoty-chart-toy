@@ -131,3 +131,24 @@ def test_collaboration_credit_matches_either_artist_or_the_full_credit():
   for artist in ("A", "B", "A & B"):
     assert aoty.pick_year(artist, "Duets", [group]) == "2026"
   assert aoty.pick_year("C", "Duets", [group]) is None
+
+
+# --- pick_release_group: what the mb Lambda stores (AOTY-19) -------------------------------
+
+
+def test_pick_release_group_returns_the_chosen_groups_id_and_type(mb_fixture):
+  # The recorded fixtures are trimmed to the matched fields, so give each group an id here.
+  groups = [{**g, "id": f"rg-{i}"} for i, g in enumerate(mb_fixture("rg_taylor_swift_1989"))]
+  match = aoty.pick_release_group("Taylor Swift", "1989 (Taylor's Version)", groups)
+  chosen = next(g for g in groups if g["id"] == match["id"])
+  assert match["year"] == "2023" == chosen["first-release-date"][:4]
+  assert match["type"] == chosen.get("primary-type")
+
+
+def test_pick_release_group_untyped_group_has_type_none():
+  group = {**rg("X", "2026-01-01", None), "id": "rg-1"}
+  assert aoty.pick_release_group("Artist", "X", [group]) == {"year": "2026", "id": "rg-1", "type": None}
+
+
+def test_pick_release_group_no_match_is_none():
+  assert aoty.pick_release_group("Artist", "Y", [rg("X", "2026-01-01")]) is None

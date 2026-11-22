@@ -17,7 +17,12 @@ sys.path.insert(0, str(HERE / "lambdas"))
 
 from common.albumkey import base_title, norm  # noqa: E402
 
-__all__ = ["base_title", "norm"]  # re-exported: build_page, tools and tests use aoty.norm
+# Matching rules are shared with the mb Lambda (AOTY-19); _clause keeps its old name for tools/.
+from common.mbmatch import credit_names, pick_release_group, pick_year, title_tier  # noqa: E402
+from common.mbmatch import rg_clause as _clause  # noqa: E402
+
+# Re-exported: build_page, tools and tests use aoty.norm, aoty.pick_year and friends.
+__all__ = ["base_title", "credit_names", "norm", "pick_release_group", "pick_year", "title_tier"]
 
 
 def _load_dotenv(path):
@@ -165,15 +170,6 @@ def get_user_top_albums(username, period="12month"):
     if not batch or page >= total_pages:
       return albums
     page += 1
-
-
-def _lucene_escape(s):
-  """Escape chars that would break a quoted Lucene phrase (e.g. an album with a " in it)."""
-  return s.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _clause(artist, album):
-  return f'(artist:"{_lucene_escape(artist)}" AND releasegroup:"{_lucene_escape(base_title(album))}")'
 
 
 def mb_search(query, limit, entity="release-group", n_albums=1):
@@ -325,54 +321,6 @@ def mb_report(script):
         }
       )
   print(f"  Per-request rows appended to {MB_STATS_CSV}")
-
-
-def credit_names(rg):
-  credits = rg.get("artist-credit", [])
-  joined = "".join(c.get("name", "") + c.get("joinphrase", "") for c in credits)
-  return {norm(joined)} | {norm(c.get("name", "")) for c in credits}
-
-
-_TYPE_RANK = {"Album": 0, "EP": 1}
-
-
-def title_tier(album, title):
-  """How a MusicBrainz title matches a Last.fm one: 0 exactly, 1 edition-stripped, None not at all.
-
-  Callers sort on this first, so an exact match always beats a stripped one. Without that,
-  "1989 (Taylor's Version)" (stripped to "1989") took the 2014 "1989" release group's year
-  over its own 2023 one. Deluxe editions still resolve to the original: MusicBrainz keeps them
-  in the original release group, under the original title.
-  """
-  have = norm(title)
-  if have == norm(album):
-    return 0
-  if have == norm(base_title(album)):
-    return 1
-  return None
-
-
-def pick_year(artist, album, release_groups):
-  """Year of the release group matching this artist + title, or None.
-
-  A search hit is not a match: the phrase "1989" also hits "1989 [nightcore]",
-  so compare the titles ourselves. An exact title beats an edition-stripped one
-  (title_tier); then, when several match (an album and a same-named single, say),
-  prefer Album, then EP, then the earliest date.
-  """
-  want_artist = norm(artist)
-  matches = []
-  for rg in release_groups:
-    date = rg.get("first-release-date", "")
-    if len(date) < 4:
-      continue
-    tier = title_tier(album, rg.get("title", ""))
-    if tier is None:
-      continue
-    if want_artist not in credit_names(rg):
-      continue
-    matches.append((tier, _TYPE_RANK.get(rg.get("primary-type"), 2), date, date[:4]))
-  return min(matches)[-1] if matches else None
 
 
 def lookup_years(pairs, cache):
