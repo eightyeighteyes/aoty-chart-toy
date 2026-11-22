@@ -38,6 +38,10 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
 | `.env` | `LASTFM_API_KEY`, `LASTFM_USERS`, `MB_CONTACT` — git-ignored. `.env.example` documents it. |
 | `infra/` | Terraform for M1 (AOTY-14): `global/` (GitHub OIDC provider, CI roles, admin-only), `envs/{staging,prod}/` (thin roots), `modules/stack/` (one environment). `infra/README.md` has the layout, ownership rules and bootstrap. |
+| `tests/` | pytest (AOTY-16): matching rules against recorded MusicBrainz searches in `tests/fixtures/mb/`, track counts and singles, ranking orders. `conftest.py` blanks the `.env` keys before `aoty` is imported. |
+| `tools/record_mb_fixtures.py` | Re-records the MusicBrainz fixtures with the scripts' own query builders (4 requests). Only to refresh them; never during a benchmark. |
+| `.github/workflows/ci.yml` | CI (AOTY-16): `lint`, `test`, `terraform` (fmt + validate), `terraform-plan` (staging + prod via the OIDC plan role, one PR comment edited in place). All four are required on `main`. |
+| `pyproject.toml`, `requirements-dev.txt` | ruff (2-space indent, 110 columns, `tools/` excluded until AOTY-12 merges) and pytest config; pinned dev tools. |
 
 ## Running
 
@@ -49,7 +53,15 @@ it's a moving target (it changed between sessions once already), so never rely o
 .venv/bin/python aoty.py          # ~13 min cold, seconds with a warm cache
 .venv/bin/python build_page.py    # ~10–20 s (100 parallel cover lookups)
 open site/index.html
+
+.venv/bin/python -m pip install -r requirements-dev.txt   # once, for the checks below
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .   # `ruff format .` to fix
+.venv/bin/python -m pytest
 ```
+
+The pure ranking cores are `aoty.aggregate_plays`, `aoty.rank_albums` and
+`build_page.score_rankings`. Keep I/O out of them; the tests and the M1 Lambdas both use them.
 
 `build_page.py` does `import aoty`, which works because the script's own directory is on
 `sys.path` — run it by path, not as a module from elsewhere.
@@ -99,6 +111,7 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
 - **The search URL must name the entity**: `https://musicbrainz.org/ws/2/release-group/`. Bare `/ws/2/` returns a 301 and the original script silently treated every album as "no year".
 - **Rate limit is 1 req/s per client and is the bottleneck.** The only real speedup is fewer requests: lookups are batched as one Lucene query `(artist:"A" AND releasegroup:"B") OR ...` of `MB_BATCH_SIZE` (20) albums, `limit=100`. Misses get one individual retry each.
 - **A search hit is not a match.** The phrase `"1989"` also returns `1989 [nightcore]`, `1989 (Taylor's Version)`, live bootlegs. `pick_year` compares normalized title *and* artist credit itself, prefers primary type Album > EP > other, then earliest date.
+- **An exact title beats an edition-stripped one** (`title_tier`, fixed 2026-11-21). `base_title` strips any bracket mentioning "version", so `1989 (Taylor's Version)` used to take the 2014 `1989` release group's year. Both `pick_year` and `pick_release` sort on the tier first. Deluxe editions still resolve to the original, because MusicBrainz keeps them in the original release group.
 - **Normalization (`norm`)**: NFKC + casefold, curly→straight quotes, punctuation collapsed. `base_title` strips Last.fm edition suffixes (`(Deluxe Edition)`, `[Remastered 2011]`) because MB release-group titles don't carry them — query with the base title, match against either.
 - **503 = throttled.** `mb_search` waits the 503's `Retry-After` (at least `MB_MIN_INTERVAL`, plus up to `MB_JITTER` 0.5 s), up to `MB_MAX_ATTEMPTS` (8) tries. It never caches a failure, so the next run retries it. Confirmed misses (a 200 with no match) *are* cached as `null`. `MB_BACKOFF = "exponential"` restores the old `MB_MIN_INTERVAL * 2**attempt` x4.
 - **Throughput is set by MusicBrainz's 503s, not by our pacing or the queries** (AOTY-10,
@@ -177,6 +190,13 @@ Details are in `infra/README.md`. Things to keep in mind when changing it:
 - The deploy roles only allow what's in use. New resource types mean editing
   `global/ci_roles.tf` and having the admin apply `global` first.
 - Testing role policies from the laptop uses `admin_assume_principal`. Turn it off afterwards.
+- **This repo uses GitHub's immutable OIDC subject claims:**
+  `repo:eightyeighteyes@6600722/aoty-chart-toy@1466126436:...`, not
+  `repo:eightyeighteyes/aoty-chart-toy:...`. A trust policy with the bare names gives "Not
+  authorized to perform sts:AssumeRoleWithWebIdentity" (AOTY-16). The prefix is
+  `github_sub_prefix` in `infra/global/variables.tf`.
+- **Required checks need a job that always reports.** Don't add `paths:` filters to `ci.yml`;
+  skip inside a job with `if:` instead, because a skipped job counts as passed.
 
 ## Open items
 
