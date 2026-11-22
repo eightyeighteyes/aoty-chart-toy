@@ -48,3 +48,12 @@ touches the real caches.
 .venv/bin/python tools/mb_cold_run.py                         # full run, ~15–20 min
 .venv/bin/python tools/mb_analyze.py data/mb_bench/run-*
 ```
+
+`tools/mb_lambda.py` runs the same benchmark from a throwaway AWS Lambda (us-east-1, `aws`
+CLI credentials required), to compare it with the laptop. Run `teardown` when you're done.
+
+```sh
+.venv/bin/python tools/mb_lambda.py deploy      # build and create/update the function
+.venv/bin/python tools/mb_lambda.py sweep       # all candidates, 250 per invocation
+.venv/bin/python tools/mb_lambda.py teardown    # remove the function, role and log group
+```
