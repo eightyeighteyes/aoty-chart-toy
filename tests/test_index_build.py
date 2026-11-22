@@ -278,8 +278,8 @@ def test_items_without_names_are_skipped(env):
 
 def test_dump_age_hours():
   made = datetime(2026, 11, 21, tzinfo=UTC).timestamp()
-  assert build.dump_age_hours("20261121-000000", made + 36 * 3600) == 36.0
-  assert build.dump_age_hours("not-a-dump", NOW) is None
+  assert ri.dump_age_hours("20261121-000000", made + 36 * 3600) == 36.0
+  assert ri.dump_age_hours("not-a-dump", NOW) is None
 
 
 def test_a_manifest_read_error_other_than_missing_is_raised():

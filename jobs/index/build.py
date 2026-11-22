@@ -39,7 +39,6 @@ import sys
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -51,6 +50,7 @@ import dump  # noqa: E402
 from common import musicbrainz  # noqa: E402
 from common import releaseindex as ri  # noqa: E402
 from common.albumkey import norm  # noqa: E402
+from common.dynamo import from_item  # noqa: E402
 
 log = logging.getLogger("index-build")
 
@@ -281,7 +281,7 @@ def recheck(deps, load_shard, now):
   while True:
     page = deps.ddb.scan(TableName=table, **({"ExclusiveStartKey": start} if start else {}))
     for raw in page.get("Items", []):
-      item = from_dynamo(raw)
+      item = from_item(raw)
       counts["rechecked_items"] += 1
       if not item.get("artist") or not item.get("album"):
         continue
@@ -325,29 +325,7 @@ def send(sqs, queue_url, messages):
       log.warning("could not queue %d re-checks", len(out["Failed"]))
 
 
-def from_dynamo(item):
-  out = {}
-  for k, v in item.items():
-    if "S" in v:
-      out[k] = v["S"]
-    elif "N" in v:
-      out[k] = int(v["N"]) if v["N"].lstrip("-").isdigit() else float(v["N"])
-    elif "NULL" in v:
-      out[k] = None
-    elif "BOOL" in v:
-      out[k] = v["BOOL"]
-  return out
-
-
 # ---- metrics ----------------------------------------------------------------------------
-
-
-def dump_age_hours(dump_name, now):
-  try:
-    made = datetime.strptime(dump_name, "%Y%m%d-%H%M%S").replace(tzinfo=UTC).timestamp()
-  except ValueError:
-    return None
-  return round((now - made) / 3600, 1)
 
 
 def emit(deps, summary, elapsed):
@@ -355,7 +333,7 @@ def emit(deps, summary, elapsed):
   values = {
     "IndexBuildSeconds": (round(elapsed, 1), "Seconds"),
     "IndexBuildSkipped": (1 if summary.get("skipped") else 0, "Count"),
-    "IndexDumpAgeHours": (dump_age_hours(summary.get("dump", ""), deps.clock()) or 0, "None"),
+    "IndexDumpAgeHours": (ri.dump_age_hours(summary.get("dump", ""), deps.clock()) or 0, "None"),
   }
   if not summary.get("skipped"):
     values |= {

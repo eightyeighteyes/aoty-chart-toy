@@ -4,7 +4,8 @@ The handler passes in the I/O as callables:
 
   search(entity, query, limit) -> list | None   one MusicBrainz search; None = failed
   lastfm_tracks(artist, album) -> int | None    Last.fm tracklist length; raises on failure
-  year_from_index(album) -> dict | None         the AOTY-20 release index; None until then
+  year_from_index(album) -> Hit | None          the AOTY-20 release index (common.releaseindex);
+                                                may raise, which counts as an index error
 
 and gets back `Result(items, failed, stats)`. An album is either resolved (an item, written
 and never looked up again) or failed (nothing written, so a later run retries it). A
@@ -12,9 +13,13 @@ confirmed miss is resolved, with year None, exactly like M0's null cache entries
 
 Lookups follow M0 (aoty.lookup_years, build_page.lookup_releases), so the M0 cold-run set
 gets the same answers:
+  0. The release index, when there is one. Only a trusted hit is used: an untrusted one, a
+     miss or an error goes on to the live search, because the dump lags (releaseindex).
   1. Year: one release-group search per MB_BATCH_SIZE albums, then one search per miss.
   2. Track count, only for albums of the target year (as M0): one release search per
-     MB_TRACK_BATCH_SIZE albums, one per miss, then Last.fm's tracklist.
+     MB_TRACK_BATCH_SIZE albums, one per miss, then Last.fm's tracklist. A re-check
+     (`previous` holds the stored item) keeps the stored count when the release group is
+     the same, so correcting a year costs no track lookup.
 An album whose year was found but whose track lookup failed is failed as a whole; the
 `year_wasted` stat counts how often that costs a repeated year lookup.
 
@@ -43,29 +48,47 @@ def key_of(album):
   return album["artist_key"], album["title_key"]
 
 
-def resolve(albums, *, search, lastfm_tracks, target_year, now, year_from_index=None):
-  """Resolve a batch of queue messages (dicts with artist_key, title_key, artist, album, mbid)."""
+def resolve(albums, *, search, lastfm_tracks, target_year, now, year_from_index=None, previous=None):
+  """Resolve a batch of queue messages (dicts with artist_key, title_key, artist, album, mbid).
+
+  previous: key -> the stored albums-table item (plain values), for re-checked albums.
+  """
   unique = {}
   for a in albums:
     unique.setdefault(key_of(a), a)  # the first message for a key wins; order is kept
   albums = list(unique.values())
-  stats = {"albums": len(albums), "index_hits": 0, "year_wasted": 0}
+  previous = previous or {}
+  stats = {"albums": len(albums), "index_hits": 0, "index_untrusted": 0, "index_misses": 0,
+           "index_errors": 0, "year_wasted": 0, "tracks_reused": 0}  # fmt: skip
   years, failed = {}, set()
 
   todo = []
   for a in albums:
-    hit = year_from_index(a) if year_from_index else None
-    if hit:
-      years[key_of(a)] = hit
-      stats["index_hits"] += 1
+    hit = None
+    if year_from_index:
+      try:
+        hit = year_from_index(a)
+      except Exception:
+        stats["index_errors"] += 1
+      else:
+        stats["index_misses" if hit is None else "index_hits" if hit.trusted else "index_untrusted"] += 1
+    if hit and hit.trusted:
+      years[key_of(a)] = hit.as_match()
     else:
       todo.append(a)
   _lookup_years(todo, search, years, failed)
 
   tracks = {}
   want_tracks = [a for a in albums if (years.get(key_of(a)) or {}).get("year") == str(target_year)]
-  _lookup_tracks(want_tracks, search, lastfm_tracks, tracks, failed)
-  stats["year_wasted"] = sum(1 for a in want_tracks if key_of(a) in failed)
+  for a in want_tracks:
+    prev = previous.get(key_of(a))
+    if prev and "tracks" in prev and prev.get("rg_mbid") and prev["rg_mbid"] == years[key_of(a)].get("id"):
+      tracks[key_of(a)] = {"tracks": prev["tracks"], "type": prev.get("tracks_type"),
+                           "source": prev.get("tracks_source")}  # fmt: skip
+      stats["tracks_reused"] += 1
+  need_tracks = [a for a in want_tracks if key_of(a) not in tracks]
+  _lookup_tracks(need_tracks, search, lastfm_tracks, tracks, failed)
+  stats["year_wasted"] = sum(1 for a in need_tracks if key_of(a) in failed)
 
   result = Result(failed=failed, stats=stats)
   for a in albums:

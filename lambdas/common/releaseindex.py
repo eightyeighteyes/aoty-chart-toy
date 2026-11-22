@@ -26,6 +26,7 @@ Two safety rules:
 
 import hashlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from common.albumkey import base_title, norm
 from common.mbmatch import pick_release_group, title_tier
@@ -94,6 +95,15 @@ def manifest(dump, *, built_at, records, titles, shards):
     "titles": titles,
     "shards": shards,
   }
+
+
+def dump_age_hours(dump, now):
+  """Hours since a dump was made, from its folder name (20261121-001001, UTC); None if unparsable."""
+  try:
+    made = datetime.strptime(dump, "%Y%m%d-%H%M%S").replace(tzinfo=UTC).timestamp()
+  except (TypeError, ValueError):
+    return None
+  return round((now - made) / 3600, 1)
 
 
 def usable(m):
