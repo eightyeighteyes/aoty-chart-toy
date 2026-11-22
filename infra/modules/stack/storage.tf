@@ -15,36 +15,47 @@ resource "aws_s3_bucket_public_access_block" "site" {
   restrict_public_buckets = true
 }
 
+locals {
+  # No distribution (sandbox): no OAC statements, only TLSOnly.
+  oac_distribution = var.cloudfront_distribution_arn == null ? [] : [var.cloudfront_distribution_arn]
+}
+
 data "aws_iam_policy_document" "site" {
-  statement {
-    sid       = "CloudFrontOACRead"
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}*"]
-    principals {
-      type        = "Service"
-      identifiers = ["cloudfront.amazonaws.com"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "AWS:SourceArn"
-      values   = [var.cloudfront_distribution_arn]
+  dynamic "statement" {
+    for_each = local.oac_distribution
+    content {
+      sid       = "CloudFrontOACRead"
+      actions   = ["s3:GetObject"]
+      resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}*"]
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "AWS:SourceArn"
+        values   = [statement.value]
+      }
     }
   }
   # With ListBucket, a missing key is a 404 rather than a 403, so the browser can tell
   # "no chart yet" from "forbidden" (AOTY-15). CloudFront only ever sends GETs for paths under
   # the base path, never a bucket listing.
-  statement {
-    sid       = "CloudFrontOACMissingAs404"
-    actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.site.arn]
-    principals {
-      type        = "Service"
-      identifiers = ["cloudfront.amazonaws.com"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "AWS:SourceArn"
-      values   = [var.cloudfront_distribution_arn]
+  dynamic "statement" {
+    for_each = local.oac_distribution
+    content {
+      sid       = "CloudFrontOACMissingAs404"
+      actions   = ["s3:ListBucket"]
+      resources = [aws_s3_bucket.site.arn]
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "AWS:SourceArn"
+        values   = [statement.value]
+      }
     }
   }
   statement {

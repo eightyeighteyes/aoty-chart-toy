@@ -41,11 +41,12 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
 | `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
 | `.env` | `LASTFM_API_KEY`, `LASTFM_USERS`, `MB_CONTACT` — git-ignored. `.env.example` documents it. |
-| `infra/` | Terraform for M1 (AOTY-14): `global/` (GitHub OIDC provider, CI roles, admin-only), `envs/{staging,prod}/` (thin roots), `modules/stack/` (one environment). `infra/README.md` has the layout, ownership rules and bootstrap. |
+| `infra/` | Terraform for M1 (AOTY-14): `global/` (GitHub OIDC provider, CI roles, admin-only), `envs/{staging,prod,sandbox}/` (thin roots), `modules/stack/` (one environment). `infra/README.md` has the layout, ownership rules and bootstrap. `envs/sandbox/` (AOTY-33) is where an unmerged branch is tested: not on kamp.fm, its own data and Last.fm key; see "Testing a branch in sandbox". |
 | `tests/` | pytest (AOTY-16): matching rules against recorded MusicBrainz searches in `tests/fixtures/mb/`, track counts and singles, ranking orders. `conftest.py` blanks the `.env` keys before `aoty` is imported. |
 | `tools/record_mb_fixtures.py` | Re-records the MusicBrainz fixtures with the scripts' own query builders (4 requests). Only to refresh them; never during a benchmark. |
 | `.github/workflows/ci.yml` | CI (AOTY-16): `lint`, `test`, `terraform` (fmt + validate), `terraform-plan` (staging + prod via the OIDC plan role, one PR comment edited in place). All four are required on `main`. |
-| `.github/workflows/cd.yml`, `deploy.yml` | CD (AOTY-17): after CI passes on `main`, deploy staging, then release-please; a `v*` tag deploys prod; `workflow_dispatch` for rollback. Flow, rollback and the release App setup are in `infra/README.md`, "Deploys and releases". |
+| `.github/workflows/cd.yml`, `deploy.yml` | CD (AOTY-17): after CI passes on `main`, deploy staging, then release-please; a `v*` tag deploys prod; `workflow_dispatch` for rollback, or to deploy any branch to sandbox (`-f environment=sandbox -f skip_terraform=false`, needs a reviewer). Flow, rollback and the release App setup are in `infra/README.md`, "Deploys and releases". |
+| `scripts/sandbox_reset.py` | AOTY-33: wipes sandbox data (queues, bucket versions, table items; `--keep-albums`), keeping its infrastructure. Dry run unless `--yes`; refuses anything that isn't a `kamp-aoty-sandbox-*` name in the expected account. Admin credentials. |
 | `lambdas/{api,sync,mb}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`. |
 | `lambdas/sync/` | Sync worker (AOTY-18). `sync_core.py` is pure (week ranges, settle rule, merging, mb selection, covers); `handler.py` does the S3/DynamoDB/SQS I/O behind an injectable `Deps`. Contract and store format are in the module docstrings. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
@@ -157,9 +158,9 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
     was 0–383 of 400, about the same spread as the laptop's.
   - MusicBrainz answers faster from Lambda: p50 ~0.37 s vs ~0.6 s.
   - **Decision: the M1 `mb` lane stays a Lambda.** No Fargate and no NAT.
-  - **This AWS account's Lambda concurrency limit is 10**, so `put-function-concurrency` refuses
-    even 1, because AWS keeps 10 unreserved. A single MusicBrainz client (AOTY-19) needs a quota
-    increase or a DynamoDB lease.
+  - **This AWS account's Lambda concurrency quota is 1,000** (raised from 10 on 2026-11-22). At
+    10, `put-function-concurrency` refused even 1, because AWS keeps 10 unreserved. A single
+    MusicBrainz client (AOTY-19) can now use reserved concurrency.
   - `mb_lambda.py deploy | run | sweep | teardown` uses the `aws` CLI. Invokes use no CLI
     retries and a 910 s read timeout. The handler resets warm-container state
     (`aoty.reset_run_state`) and stops 150 s before the 15-min cap.
@@ -283,7 +284,7 @@ not daily totals from paging scrobbles (the story text was revised to match).
 - **Covers:** recent tracks give covers, matched by album MBID, then by key. Compilations rarely
   match, because scrobbles carry the track artist, so AOTY-21 needs an `album.getInfo` fallback.
 - **Rate:** 0.5 s per call per worker, with `maximum_concurrency` 2 on the event source mapping
-  (the AWS minimum). Reserved concurrency still waits on the quota increase.
+  (the AWS minimum). The quota is 1,000 now, so reserved concurrency is possible if it's needed.
 - Logs carry a 10-character hash of the username, never the name.
 - **Charts leave out scrobbles that have no album name** (`tools/sync_check.py`, 2026-11-21). For the
   lightest member, the chart total was 3,254 against 3,373 scrobbles: exactly the 119 with no album.
@@ -316,8 +317,13 @@ Details are in `infra/README.md`. Things to keep in mind when changing it:
   a permanent diff. Deny decryption through SSM only.
 - **Assumed-role sessions outlive a trust change.** The CLI caches them for up to 1 h, so to test
   that a trust was removed, use a fresh `aws sts assume-role`.
-- **The Lambda concurrency limit was 10**, so reserved concurrency is impossible until the quota
-  increase is granted (requested 2026-11-21).
+- **The Lambda concurrency quota is 1,000** (raised from 10 on 2026-11-22), so reserved
+  concurrency works now.
+- **Sandbox (AOTY-33) is the one deploy role any branch can get.** Its denies (nothing public,
+  no account-wide log policies, no CloudFront) are the real guard; the workflow isn't, because a
+  branch can edit it. Its first apply is the admin's, because only the admin can create bucket
+  policies and public access blocks. HTTP APIs are scoped by `Environment` tag in every env, and
+  tag writes check both `aws:RequestTag` and `aws:ResourceTag`.
 - The deploy roles only allow what's in use. New resource types mean editing
   `global/ci_roles.tf` and having the admin apply `global` first.
 - **Creating a tagged resource also needs its tag permission.** The provider's `default_tags`

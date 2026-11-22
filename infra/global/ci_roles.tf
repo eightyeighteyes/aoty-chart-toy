@@ -21,6 +21,9 @@ locals {
     staging = "${var.github_sub_prefix}:environment:staging"
     # GitHub environment names; "production" matches the AOTY-17 release job.
     prod = "${var.github_sub_prefix}:environment:production"
+    # AOTY-33. The `sandbox` GitHub environment has no branch rule (any branch may deploy) but
+    # requires a reviewer, so this role is the one an unmerged branch can get.
+    sandbox = "${var.github_sub_prefix}:environment:sandbox"
   }
 }
 
@@ -223,21 +226,28 @@ data "aws_iam_policy_document" "deploy" {
   }
   # The provider's default_tags go out with CreateEventSourceMapping, which AWS also authorizes
   # as lambda:TagResource on the new mapping (AOTY-18's first deploy failed on exactly this).
-  # Tag actions have no lambda:FunctionArn key either, so they're scoped by the Environment tag:
-  # a role may tag a mapping as its own environment, and retag or untag only its own mappings.
+  # Tag actions have no lambda:FunctionArn key either, so they're scoped by the Environment tag.
+  # Both keys are checked: RequestTag alone would let a role retag another env's mapping as its
+  # own and then manage it (AOTY-33). IfExists: a mapping being created has no tags yet, and a
+  # tag call that doesn't touch Environment carries none.
   statement {
-    sid       = "TagNewEventSourceMappings"
+    sid       = "TagOwnEventSourceMappings"
     actions   = ["lambda:TagResource"]
     resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
     condition {
-      test     = "StringEquals"
+      test     = "StringEqualsIfExists"
       variable = "aws:RequestTag/Environment"
+      values   = [each.key]
+    }
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "aws:ResourceTag/Environment"
       values   = [each.key]
     }
   }
   statement {
-    sid       = "RetagOwnEventSourceMappings"
-    actions   = ["lambda:TagResource", "lambda:UntagResource"]
+    sid       = "UntagOwnEventSourceMappings"
+    actions   = ["lambda:UntagResource"]
     resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
     condition {
       test     = "StringEquals"
@@ -268,25 +278,103 @@ data "aws_iam_policy_document" "deploy" {
     ]
     resources = ["*"]
   }
-  # HTTP API ids are random, so they can't be scoped by name. The account has no other
-  # HTTP APIs; REST APIs (/restapis) stay out of reach.
+  # HTTP API ids are random, so APIs are scoped by their Environment tag (AOTY-33; before that,
+  # any env's role could edit every env's API). REST APIs (/restapis) stay out of reach.
+  # Routes, integrations and stages are authorized against the parent API's tags.
   statement {
-    sid     = "HttpApis"
-    actions = ["apigateway:*"]
-    resources = [
-      "arn:aws:apigateway:${local.region}::/apis",
-      "arn:aws:apigateway:${local.region}::/apis/*",
-      "arn:aws:apigateway:${local.region}::/tags/*",
-    ]
+    sid       = "HttpApiList"
+    actions   = ["apigateway:GET"]
+    resources = ["arn:aws:apigateway:${local.region}::/apis"]
+  }
+  statement {
+    sid       = "HttpApiCreate"
+    actions   = ["apigateway:POST"]
+    resources = ["arn:aws:apigateway:${local.region}::/apis"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = [each.key]
+    }
+  }
+  statement {
+    sid       = "HttpApiOwn"
+    actions   = ["apigateway:*"]
+    resources = ["arn:aws:apigateway:${local.region}::/apis/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Environment"
+      values   = [each.key]
+    }
+  }
+  statement {
+    sid       = "HttpApiTagsRead"
+    actions   = ["apigateway:GET"]
+    resources = ["arn:aws:apigateway:${local.region}::/tags/*"]
+  }
+  # Same two-key rule as the mapping tags above.
+  statement {
+    sid       = "HttpApiTagsWrite"
+    actions   = ["apigateway:POST", "apigateway:PUT", "apigateway:DELETE"]
+    resources = ["arn:aws:apigateway:${local.region}::/tags/*"]
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "aws:RequestTag/Environment"
+      values   = [each.key]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Environment"
+      values   = [each.key]
+    }
   }
 
   # CD invalidates its env's base path after a shell upload (AOTY-17). IAM can't scope an
   # invalidation by path, so either env's role could invalidate the other's (or kamp's) paths;
   # the worst case is a cache refill, and the workflow only ever sends its own <base>*.
-  statement {
-    sid       = "InvalidateShell"
-    actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
-    resources = [var.kamp_distribution_arn]
+  # Sandbox isn't served through kamp.fm, so it gets no CloudFront access at all.
+  dynamic "statement" {
+    for_each = each.key == "sandbox" ? [] : [var.kamp_distribution_arn]
+    content {
+      sid       = "InvalidateShell"
+      actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+      resources = [statement.value]
+    }
+  }
+
+  # Sandbox only (AOTY-33): any branch can run as this role, so it may not make anything public
+  # or rewrite account-wide log policies. The bucket policies, public access blocks and the log
+  # resource policy are created once by the admin's first apply; a branch that changes them
+  # fails its deploy. (Account-wide S3 Block Public Access isn't an option: another site in the
+  # account serves a public bucket.)
+  dynamic "statement" {
+    for_each = each.key == "sandbox" ? [1] : []
+    content {
+      sid    = "SandboxNeverPublic"
+      effect = "Deny"
+      actions = [
+        "lambda:CreateFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig",
+        "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketAcl", "s3:PutObjectAcl", "s3:PutBucketOwnershipControls",
+        "dynamodb:PutResourcePolicy", "sqs:AddPermission",
+        "logs:PutResourcePolicy", "logs:DeleteResourcePolicy",
+        "logs:UpdateLogDelivery", "logs:DeleteLogDelivery",
+      ]
+      resources = ["*"]
+    }
+  }
+  dynamic "statement" {
+    for_each = each.key == "sandbox" ? [1] : []
+    content {
+      sid       = "SandboxInvokeOnlyFromApiGateway"
+      effect    = "Deny"
+      actions   = ["lambda:AddPermission"]
+      resources = ["*"]
+      condition {
+        test     = "StringNotEquals"
+        variable = "lambda:Principal"
+        values   = ["apigateway.amazonaws.com"]
+      }
+    }
   }
 
   # Workload roles: only under this env's path, only with this env's boundary attached.

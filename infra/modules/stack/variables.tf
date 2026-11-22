@@ -1,9 +1,9 @@
 variable "environment" {
-  description = "staging or prod; part of every resource name (kamp-aoty-<environment>-*)"
+  description = "staging, prod or sandbox; part of every resource name (kamp-aoty-<environment>-*)"
   type        = string
   validation {
-    condition     = contains(["staging", "prod"], var.environment)
-    error_message = "environment must be staging or prod (the CI roles in infra/global only cover those)."
+    condition     = contains(["staging", "prod", "sandbox"], var.environment)
+    error_message = "environment must be staging, prod or sandbox (the CI roles in infra/global only cover those)."
   }
 }
 
@@ -17,8 +17,12 @@ variable "base_path" {
 }
 
 variable "cloudfront_distribution_arn" {
-  description = "kamp.fm's CloudFront distribution (kamp-site), the only reader of the site bucket"
+  description = <<-EOT
+    kamp.fm's CloudFront distribution (kamp-site), the only reader of the site bucket. null for
+    sandbox, which isn't served through kamp.fm: the site bucket then has no OAC grant at all.
+  EOT
   type        = string
+  default     = null
 }
 
 variable "albums_point_in_time_recovery" {

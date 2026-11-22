@@ -32,8 +32,10 @@ resource "aws_dynamodb_table" "albums" {
     type = "S"
   }
 
-  # Slow to rebuild at MusicBrainz's 1 req/s, so guarded in both environments.
-  deletion_protection_enabled = true
+  # Slow to rebuild at MusicBrainz's 1 req/s, so guarded in staging and prod. Sandbox's copy
+  # is disposable (AOTY-33). prevent_destroy can't depend on a variable, so destroying sandbox
+  # still needs `terraform state rm` first (infra/README.md, "Testing a branch in sandbox").
+  deletion_protection_enabled = var.environment != "sandbox"
 
   point_in_time_recovery {
     enabled = var.albums_point_in_time_recovery

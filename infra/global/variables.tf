@@ -11,7 +11,7 @@ variable "github_sub_prefix" {
 variable "environments" {
   description = "Environments that get a deploy role and a permissions boundary"
   type        = set(string)
-  default     = ["staging", "prod"]
+  default     = ["staging", "prod", "sandbox"]
 }
 
 variable "admin_assume_principal" {

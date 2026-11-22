@@ -60,7 +60,7 @@ jobs:
       - name: validate
         run: |
           set -euo pipefail
-          for root in infra/global infra/envs/staging infra/envs/prod; do
+          for root in infra/global infra/envs/staging infra/envs/prod infra/envs/sandbox; do
             echo "::group::$root"
             terraform -chdir="$root" init -backend=false -input=false
             terraform -chdir="$root" validate -no-color
@@ -68,7 +68,8 @@ jobs:
           done
 
   # Plans staging and prod with the read-only OIDC plan role (infra/global/ci_roles.tf) and posts
-  # them as one PR comment, edited in place. Same-repo PRs only: fork PRs get no OIDC token, and
+  # them as one PR comment, edited in place. Not sandbox: its state is whatever branch deployed
+  # last, so its plan would be noise (AOTY-33). Same-repo PRs only: fork PRs get no OIDC token, and
   # the role only trusts the pull_request subject (so pushes to main skip this too).
   #
   # The repo is public, so the comment is too: it shows resource names, ARNs and the account ID.

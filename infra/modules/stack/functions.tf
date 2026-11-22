@@ -1,8 +1,8 @@
 # Placeholder Lambdas. Terraform owns configuration (role, env vars, timeouts); CD owns the
 # code (AOTY-17 deploys with `aws lambda update-function-code`). The placeholder zip is only
 # used when a function is first created, hence ignore_changes on the code attributes.
-# No reserved concurrency yet: the account limit is 10 and AWS keeps 10 unreserved, so any
-# reservation fails until the Lambda concurrency quota is raised (needed by AOTY-19/26).
+# No reserved concurrency yet. The account quota is 1,000 since 2026-11-22 (it was 10, which
+# made any reservation fail), so AOTY-19/26 can add it now.
 
 locals {
   functions = {
@@ -176,8 +176,7 @@ resource "aws_lambda_function" "fn" {
 
 # The sync queue drives the sync worker (AOTY-18). One message per invocation; the handler
 # reports failures per item. maximum_concurrency (2 is the floor AWS allows) caps how many
-# syncs run at once, and with them the aggregate Last.fm rate (0.5 s/call each). It stands
-# in for reserved concurrency until the account's concurrency quota is raised.
+# syncs run at once, and with them the aggregate Last.fm rate (0.5 s/call each).
 # Until CD deploys real code, the placeholder raises on SQS events, so no message is lost.
 resource "aws_lambda_event_source_mapping" "sync" {
   event_source_arn        = aws_sqs_queue.main["sync"].arn
