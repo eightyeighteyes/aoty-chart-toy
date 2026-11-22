@@ -31,6 +31,12 @@ variable "albums_point_in_time_recovery" {
   default     = false
 }
 
+variable "index_schedule_enabled" {
+  description = "Run the release index build daily (AOTY-20). Off in sandbox, where it's run by hand."
+  type        = bool
+  default     = true
+}
+
 variable "log_retention_days" {
   type    = number
   default = 14
