@@ -17,6 +17,9 @@ def test_album_key_strips_editions_and_normalizes_both_halves():
 def test_all_punctuation_names_keep_a_key_instead_of_going_blank():
   assert albumkey.album_key("Sigur Rós", "( )") == ("sigur rós", "( )")
   assert albumkey.album_key("!!!", "...") == ("!!!", "...")
+  # The two that broke the first staging sync: one artist, one title.
+  assert albumkey.album_key("@", "Autosmile") == ("@", "autosmile")
+  assert albumkey.album_key("Beak>", ">>>>") == ("beak", ">>>>")
   assert albumkey.album_key("  ", "") == ("", "")
   assert not albumkey.is_complete(albumkey.album_key("Artist", "   "))
 
