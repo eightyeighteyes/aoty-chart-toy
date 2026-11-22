@@ -1,0 +1,3 @@
+# Runtime dependencies shared by every Lambda, installed as Linux arm64 wheels by
+# scripts/package_lambdas.py. Empty for now: the handlers only use the standard library.
+# (boto3 is already in the Lambda runtime; don't add it here.)

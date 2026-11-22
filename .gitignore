@@ -14,6 +14,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Lambda zips from scripts/package_lambdas.py
+dist/
+
 # Terraform (lock files ARE committed; state lives in S3)
 .terraform/
 *.tfstate
