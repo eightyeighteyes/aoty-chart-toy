@@ -3,7 +3,7 @@
 Started by async invokes only. Reserved concurrency 1 runs builds one at a time, so a build that
 read older data can never overwrite a newer chart. Two events:
 
-  {"username": "alice", "requested_at": uts}
+  {"username": "alice", "requested_at": uts, "year": 2026?}
       From the sync worker after each sync. Skipped when the user's chart was built at or after
       requested_at: async events can repeat, and throttled ones are retried for up to an hour.
   {"pending": true}
@@ -83,7 +83,8 @@ def handler(event, context, deps=None):
       totals["skipped"] += 1
     else:
       requested_at = int(event.get("requested_at") or 0)
-      _guarded(deps, username, totals, lambda: _build_requested(deps, username, requested_at, totals))
+      year = int(event.get("year") or TARGET_YEAR)
+      _guarded(deps, username, totals, lambda: _build_requested(deps, username, year, requested_at, totals))
   _emit(deps, totals, deps.mono() - started)
   return totals
 
@@ -97,12 +98,12 @@ def _guarded(deps, username, totals, fn):
     totals["failed"] += 1
 
 
-def _build_requested(deps, username, requested_at, totals):
+def _build_requested(deps, username, year, requested_at, totals):
   row = _get_user(deps, username)
   if requested_at and row.get("chart_built_at", 0) >= requested_at:
     totals["skipped"] += 1
     return
-  _count(totals, build(deps, username, row))
+  _count(totals, build(deps, username, row, year))
 
 
 def _rebuild_if_resolved(deps, row, totals):

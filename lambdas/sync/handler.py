@@ -16,7 +16,8 @@ One sync:
   3. Queue albums with no albums-table item to mb-hot (the user's top 150) or mb-cold, and
      poke the mb Lambda if anything was queued. mb messages can repeat; AOTY-19 must treat
      them idempotently.
-  4. Mark the users row done. The chart builder hook is a no-op until AOTY-21.
+  4. Refresh the user's display name (Last.fm's casing) when it's missing or 30 days old, start
+     the chart builder (AOTY-21) asynchronously, and mark the users row done.
 
 Error 6 (confirmed by user.getInfo) and 17 mark the user not_found / private and delete the
 message; a new request always tries again. Other errors fail the message for an SQS retry
@@ -51,6 +52,7 @@ RETRIES = 4
 RETRY_BASE_S = 60  # a failed sync is retried after 60 s, then 120, 240, 480
 RETRY_MAX_S = 900
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+DISPLAY_NAME_MAX_AGE = 30 * core.DAY
 
 
 class Deps:
@@ -156,7 +158,10 @@ def sync_user(msg, context, deps):
   if queued:
     _save_store(deps, username, store)  # queued_at / resolved marks
     deps.lambda_.invoke(FunctionName=deps.env["MB_FUNCTION"], InvocationType="Event", Payload=b"{}")
-  start_chart_build(deps, username, year)
+  names = _display_name_fields(deps, username, user, now)
+  if names:
+    _update_user(deps, username, names)  # before the chart build, which reads it
+  start_chart_build(deps, username, year, now)
 
   progress["plays"] = sum(core.year_plays(store).values())
   done = {"state": "done", "progress": progress, "last_synced_at": now}
@@ -170,8 +175,37 @@ def sync_user(msg, context, deps):
   return "done"
 
 
-def start_chart_build(deps, username, year):
-  """Hook for the chart builder (AOTY-21). A no-op until that story."""
+def start_chart_build(deps, username, year, now):
+  """Ask the chart builder (AOTY-21) for this user's chart. Best effort: the sync is done.
+
+  requested_at lets the builder skip a repeated or retried event once a newer chart exists.
+  A lost poke leaves the chart stale until the user's next sync.
+  """
+  payload = {"username": username, "year": year, "requested_at": now}
+  try:
+    deps.lambda_.invoke(
+      FunctionName=deps.env["CHART_FUNCTION"], InvocationType="Event", Payload=json.dumps(payload).encode()
+    )
+  except Exception:
+    log.exception("could not start the chart build for %s", _tag(username))
+
+
+def _display_name_fields(deps, username, user, now):
+  """{display_name, display_name_at} when the stored casing is missing or stale, else {}.
+
+  One user.getInfo call at most every DISPLAY_NAME_MAX_AGE. Best effort: a failure keeps
+  whatever name is stored (the chart falls back to the username).
+  """
+  if user.get("display_name") and now - (user.get("display_name_at") or 0) < DISPLAY_NAME_MAX_AGE:
+    return {}
+  try:
+    name = deps.lastfm.user_info(username)
+  except lastfm.LastfmError as e:
+    log.warning("display name lookup failed: Last.fm %s", e.code)
+    return {}
+  if not name or name.lower() != username:  # never store a name that isn't this user's
+    return {}
+  return {"display_name": name, "display_name_at": now}
 
 
 # ---- Last.fm --------------------------------------------------------------------------

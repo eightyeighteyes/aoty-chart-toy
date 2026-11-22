@@ -125,15 +125,22 @@ class Client:
     tracks = tracks.get("track") if isinstance(tracks, dict) else None
     return len(as_list(tracks)) or None
 
-  def user_exists(self, user):
-    """False only on a definite "User not found"; other errors propagate."""
+  def user_info(self, user):
+    """The user's name in Last.fm's own casing, or None on a definite "User not found".
+
+    Other errors propagate. The chart page redirects to this casing (AOTY-21).
+    """
     try:
-      self.call("user.getinfo", user=user)
+      data = self.call("user.getinfo", user=user)
     except LastfmError as e:
       if e.code == NOT_FOUND:
-        return False
+        return None
       raise
-    return True
+    return (data.get("user") or {}).get("name") or user
+
+  def user_exists(self, user):
+    """False only on a definite "User not found"; other errors propagate."""
+    return self.user_info(user) is not None
 
 
 _api_key = {}

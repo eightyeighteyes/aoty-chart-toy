@@ -78,6 +78,12 @@ def test_user_exists_is_false_only_for_not_found():
     client(FakeHTTP((403, {"error": 17, "message": "private"}))).user_exists("x")
 
 
+def test_user_info_returns_lastfms_casing():
+  assert client(FakeHTTP((200, {"user": {"name": "AliCe"}}))).user_info("alice") == "AliCe"
+  assert client(FakeHTTP((200, {"user": {}}))).user_info("alice") == "alice"
+  assert client(FakeHTTP((404, {"error": 6, "message": "User not found"}))).user_info("x") is None
+
+
 def test_album_track_count_handles_lists_bare_objects_and_empty_tracklists():
   def count(body):
     return client(FakeHTTP((200, body))).album_track_count("A", "X")
