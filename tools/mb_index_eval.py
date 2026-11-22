@@ -246,9 +246,107 @@ def track_probe(args):
   print(json.dumps(meta, indent=1))
 
 
+# Trusted index answers known to differ from M0's cache, with why (none yet: M0's nulls that the
+# index answers are listed as finds, not disagreements). Anything else fails `shards`.
+ALLOWED_DISAGREEMENTS = {}
+
+
+def shards(args):
+  """AOTY-20 accuracy gate: the real sharded index (jobs/index/build.py) against M0, all years.
+
+  Builds the shards from the dump folder's release-group.tar.xz into <dump>/shards/ (once),
+  then answers every album M0 looked up through common.releaseindex.lookup, the mb lane's
+  own code path. Exits 1 if a trusted answer disagrees with M0's year and isn't allowlisted.
+  """
+  sys.path.insert(0, str(REPO / "jobs" / "index"))
+  import build  # noqa: E402
+  import dump as mbdump  # noqa: E402
+
+  from common import releaseindex as ri  # noqa: E402
+
+  folder = Path(args.dump)
+  shards_dir = folder / "shards"
+  meta = {"dump": folder.name.removeprefix("dump-")}
+  if not (shards_dir / f"{'0' * ri.SHARD_HEX}.json.gz").exists():
+    t0, cpu0 = time.monotonic(), time.process_time()
+    spill_dir = folder / "spill"
+    with open(folder / "release-group.tar.xz", "rb") as f:
+      meta |= build.spill(mbdump.dump_lines(f, mbdump.RG_MEMBER), spill_dir)
+    meta["titles"] = build.write_shards(spill_dir, shards_dir)
+    for p in spill_dir.iterdir():
+      p.unlink()
+    spill_dir.rmdir()
+    meta |= {"build_wall_s": round(time.monotonic() - t0, 1), "build_cpu_s": round(time.process_time() - cpu0, 1)}
+    meta["peak_rss_mb"] = round(resource_peak_mb())
+  sizes_ = [p.stat().st_size for p in shards_dir.glob("*.json.gz")]
+  meta |= {"shards": len(sizes_), "shards_mb": round(sum(sizes_) / 1e6, 1),
+           "largest_shard_kb": round(max(sizes_) / 1e3, 1)}  # fmt: skip
+  load_shard = build.shard_loader(shards_dir)
+
+  cache = load(aoty.CACHE_FILE)
+  pairs = [tuple(p) for p in load(CANDIDATES)["albums"]]
+  counts, examples = Counter(), defaultdict(list)
+  failures = []
+  for artist, album in pairs:
+    key = aoty.cache_key(artist, album)
+    if key not in cache:
+      continue
+    truth = cache[key]
+    hit = ri.lookup(artist, album, load_shard)
+    kind = "trusted" if hit and hit.trusted else ("untrusted" if hit else "none")
+    if hit is None:
+      outcome = "unknown (live)" if truth else "both null"
+    elif truth is None:
+      outcome = "index finds, M0 null"
+    elif hit.year == truth:
+      outcome = "agree"
+    else:
+      outcome = "DISAGREE"
+      if kind == "trusted" and f"{artist} — {album}" not in ALLOWED_DISAGREEMENTS:
+        failures.append(f"{artist} — {album}: M0 {truth}, index {hit.year} ({hit.type})")
+    in_year = "2026" if truth == YEAR else "other"
+    counts[(kind, outcome, in_year)] += 1
+    if outcome in ("DISAGREE", "index finds, M0 null") or (kind != "trusted" and truth == YEAR):
+      examples[f"{kind} / {outcome} / M0 {in_year}"].append(
+        f"{artist} — {album} (M0 {truth}, index {hit.year if hit else '-'} {hit.type if hit else ''})"
+      )
+
+  total = sum(counts.values())
+  m0_2026 = sum(n for (_, _, y), n in counts.items() if y == "2026")
+  trusted_2026 = sum(n for (k, o, y), n in counts.items() if y == "2026" and k == "trusted" and o == "agree")
+  trusted_all = sum(n for (k, o, _), n in counts.items() if k == "trusted" and o == "agree")
+  lines = [f"# Sharded index vs M0 (AOTY-20), dump {meta['dump']}\n", "```", json.dumps(meta, indent=1), "```"]
+  lines += ["\n| index | outcome | M0 year | albums |", "|---|---|---|---|"]
+  lines += [f"| {k} | {o} | {y} | {n} |" for (k, o, y), n in sorted(counts.items())]
+  lines.append(
+    f"\nTrusted and agreeing: **{trusted_all}/{total}** of all albums; **{trusted_2026}/{m0_2026}** of M0's"
+    f" {YEAR} albums resolve with no live year search. Trusted disagreements: **{len(failures)}**."
+  )
+  for reason, items in sorted(examples.items(), key=lambda kv: -len(kv[1])):
+    lines.append(f"\n- {reason}: {len(items)}")
+    lines += [f"  - {x}" for x in items[:12]]
+  out = folder / "report_shards.md"
+  out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+  print("\n".join(lines))
+  print(f"\nwrote {out}")
+  if failures:
+    print("\nFAIL: trusted answers that disagree with M0:\n  " + "\n  ".join(failures))
+    raise SystemExit(1)
+
+
+def resource_peak_mb():
+  import resource
+
+  rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+  return rss / 1e6 if sys.platform == "darwin" else rss / 1e3
+
+
 def main():
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   sub = parser.add_subparsers(dest="cmd", required=True)
+  p = sub.add_parser("shards")
+  p.add_argument("--dump", required=True, help="data/mb_index/dump-<name> with release-group.tar.xz")
+  p.set_defaults(fn=shards)
   p = sub.add_parser("report")
   p.add_argument("--dump", required=True)
   p.add_argument("--crawl", action="append")
