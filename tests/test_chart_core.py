@@ -3,6 +3,7 @@
 import calendar
 
 import chart_core as core
+
 import sync_core
 from common.albumkey import album_key, join_key
 from common.covers import art_fallbacks, caa_url

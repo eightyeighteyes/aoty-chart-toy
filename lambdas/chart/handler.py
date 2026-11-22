@@ -34,6 +34,7 @@ import re
 import time
 
 import chart_core as core
+
 from common import dynamo
 from common.albumkey import join_key, split_key
 from common.config import TARGET_YEAR
@@ -201,7 +202,9 @@ def _get_items(deps, keys, keys_only=False):
   table, found = deps.env["ALBUMS_TABLE"], {}
   for i in range(0, len(keys), BATCH_GET):
     request = {
-      "Keys": [{"artist_key": {"S": a}, "title_key": {"S": t}} for a, t in map(split_key, keys[i : i + BATCH_GET])]
+      "Keys": [
+        {"artist_key": {"S": a}, "title_key": {"S": t}} for a, t in map(split_key, keys[i : i + BATCH_GET])
+      ]
     }
     if keys_only:
       request["ProjectionExpression"] = "artist_key, title_key"

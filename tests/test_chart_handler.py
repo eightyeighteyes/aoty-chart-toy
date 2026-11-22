@@ -62,10 +62,16 @@ class FakeS3:
 
   def put_store(self, plays, username="alice"):
     store = sync_core.new_store(2026)
-    store["weeks"]["1767225600"] = {"to": 0, "fetched_at": NOW, "plays": {key(*a): n for a, n in plays.items()}}
+    store["weeks"]["1767225600"] = {
+      "to": 0,
+      "fetched_at": NOW,
+      "plays": {key(*a): n for a, n in plays.items()},
+    }
     for a in plays:
       store["albums"][key(*a)] = {"artist": a[0], "album": a[1], "mbid": "", "image": ""}
-    self.objects[("store", f"users/{username}/2026/weeks.json.gz")] = gzip.compress(json.dumps(store).encode())
+    self.objects[("store", f"users/{username}/2026/weeks.json.gz")] = gzip.compress(
+      json.dumps(store).encode()
+    )
 
   def json(self, loc):
     return json.loads(self.objects[loc])
@@ -85,7 +91,9 @@ class FakeDDB:
     row = self.users.get(Key["username"]["S"])
     return {"Item": dynamo.to_item(row)} if row else {}
 
-  def update_item(self, TableName, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues):
+  def update_item(
+    self, TableName, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues
+  ):
     row = self.users.setdefault(Key["username"]["S"], {"username": Key["username"]["S"]})
     for part in UpdateExpression.removeprefix("SET ").split(", "):
       name, value = part.split(" = ")
@@ -111,7 +119,10 @@ class FakeDDB:
     rows = [r for r in self.users.values() if r.get("chart_pending", 0) > 0]
     # Two pages, to exercise LastEvaluatedKey.
     if "ExclusiveStartKey" not in kw and len(rows) > 1:
-      return {"Items": [dynamo.to_item(rows[0])], "LastEvaluatedKey": {"username": {"S": rows[0]["username"]}}}
+      return {
+        "Items": [dynamo.to_item(rows[0])],
+        "LastEvaluatedKey": {"username": {"S": rows[0]["username"]}},
+      }
     rest = rows[1:] if "ExclusiveStartKey" in kw else rows
     return {"Items": [dynamo.to_item(r) for r in rest]}
 
