@@ -317,6 +317,11 @@ not daily totals from paging scrobbles (the story text was revised to match).
   deadline, releases that batch's failures (visibility 0), and invokes itself if work is left.
 - While a run goes, every other start is throttled and retried by Lambda until the 1 h max event
   age. Harmless: each one exits fast on empty queues. The empty check long-polls both queues.
+- **Parity (`tools/mb_parity.py`, 2026-11-22 12:15 ET, laptop):** all 1,536 M0 cold-run candidates
+  resolved with none failed. Years were the same for all 1,530 that M0's cache had. The other 6 were
+  never looked up by M0; the new answers look right. Track counts and types were the same for all
+  568 that M0 had. There were 812 requests, 433 of them 503s (53%), taking 17.2 min at 1.48
+  albums/s, including track lookups.
 
 ## Page — design decisions
 
