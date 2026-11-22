@@ -9,13 +9,20 @@ A message is one album, as the sync worker sends it (AOTY-18):
 
   {"artist_key", "title_key", "artist", "album", "mbid"}
 
-Messages can repeat (several users, or a crash in sync), so a run is idempotent: an album
-with an albums-table item is resolved and its messages are just deleted.
+plus "recheck": true when the index build (jobs/index/build.py, AOTY-20) asks for an album
+to be looked up again. Messages can repeat (several users, or a crash in sync), so a run is
+idempotent: an album with an albums-table item is resolved and its messages are just deleted,
+unless any of its messages is a re-check, which overwrites the item.
+
+Years come from the release index first (common.releaseindex, in the store bucket): the
+manifest is re-read at most hourly, shards are kept in an LRU while the container is warm. An
+unusable manifest (missing, other format, other norm) turns the index off for the run and
+counts as an index error, so every album goes to the live search as before AOTY-20.
 
 One run, until both queues are empty or time runs short:
   1. Receive up to BATCH messages, from mb-hot if it has any, else mb-cold.
-  2. Delete messages whose album already has an item.
-  3. Resolve the rest (mb_core.resolve: year, then track count for target-year albums).
+  2. Delete messages whose album already has an item (re-checks excepted).
+  3. Resolve the rest (mb_core.resolve: index, year, then track count for target-year albums).
   4. Write an item per resolved album (a confirmed miss included, with year null), then
      delete all of that album's messages, from both queues.
   5. Failed albums are neither written nor deleted. They come back after the queue's
@@ -24,13 +31,16 @@ One run, until both queues are empty or time runs short:
 With both queues empty, a run makes no MusicBrainz request. Each run logs one EMF line.
 """
 
+import gzip
 import json
 import logging
 import os
 import time
+from collections import OrderedDict
 
 import mb_core as core
-from common import lastfm, musicbrainz
+from common import dynamo, lastfm, musicbrainz
+from common import releaseindex as ri
 from common.config import TARGET_YEAR
 
 log = logging.getLogger()
@@ -45,15 +55,68 @@ MIN_BATCH_S = 30  # don't start a batch with less than this left
 BATCH_GET, BATCH_WRITE, DELETE_BATCH = 100, 25, 10  # DynamoDB / SQS limits
 RETRIES = 4
 NAMESPACE = "kamp-aoty"
+MANIFEST_TTL_S = 3600
+SHARD_CACHE = 128  # a batch of 20 albums reads at most 40 shards (~250 KB parsed each)
+
+
+class Index:
+  """The release index in the store bucket, cached across warm invocations."""
+
+  def __init__(self, s3, bucket, clock=time.time):
+    self.s3, self.bucket, self.clock = s3, bucket, clock
+    self.manifest, self.fetched_at, self.state = None, None, "missing"
+    self.shards = OrderedDict()  # (dump, shard) -> {norm(title): [records]}
+
+  def current(self):
+    """The usable manifest, or None. Raises if it can't be read."""
+    now = self.clock()
+    if self.fetched_at is None or now - self.fetched_at > MANIFEST_TTL_S:
+      try:
+        body = self.s3.get_object(Bucket=self.bucket, Key=ri.MANIFEST_KEY)["Body"].read()
+        m = json.loads(body)
+      except Exception as e:
+        if _error_code(e) not in ("NoSuchKey", "404"):
+          raise
+        m = None
+      self.manifest = m if ri.usable(m) else None
+      self.fetched_at = now
+      self.state = "missing" if m is None else "ok" if self.manifest else "unusable"
+      if self.state == "unusable":
+        log.error("release index manifest is unusable (format or norm changed); index off")
+    return self.manifest
+
+  def shard(self, dump, shard):
+    key = (dump, shard)
+    if key in self.shards:
+      self.shards.move_to_end(key)
+      return self.shards[key]
+    body = self.s3.get_object(Bucket=self.bucket, Key=ri.shard_key(dump, shard))["Body"].read()
+    data = json.loads(gzip.decompress(body))
+    self.shards[key] = data
+    while len(self.shards) > SHARD_CACHE:
+      self.shards.popitem(last=False)
+    return data
+
+  def lookup_fn(self, manifest):
+    dump = manifest["dump"]
+
+    def year_from_index(album):
+      return ri.lookup(album["artist"], album["album"], lambda shard: self.shard(dump, shard))
+
+    return year_from_index
+
+
+def _error_code(e):
+  return getattr(e, "response", {}).get("Error", {}).get("Code")
 
 
 class Deps:
   """Everything a run touches, so tests can pass fakes. from_env() builds the real ones."""
 
-  def __init__(self, *, sqs, ddb, lambda_, mb, lastfm_client, env, clock=time.time, mono=time.monotonic,
-               sleep=time.sleep):  # fmt: skip
+  def __init__(self, *, sqs, ddb, lambda_, mb, lastfm_client, env, index=None, clock=time.time,
+               mono=time.monotonic, sleep=time.sleep):  # fmt: skip
     self.sqs, self.ddb, self.lambda_, self.mb, self.lastfm = sqs, ddb, lambda_, mb, lastfm_client
-    self.env, self.clock, self.mono, self.sleep = env, clock, mono, sleep
+    self.env, self.index, self.clock, self.mono, self.sleep = env, index, clock, mono, sleep
 
   @classmethod
   def from_env(cls):
@@ -63,6 +126,9 @@ class Deps:
     ssm = boto3.client("ssm")
     key = lastfm.api_key_from_ssm(ssm, f"{env['SSM_PREFIX']}lastfm_api_key")
     contact = _ssm_value(ssm, f"{env['SSM_PREFIX']}mb_contact")
+    global _index
+    if _index is None:
+      _index = Index(boto3.client("s3"), env["STORE_BUCKET"])
     return cls(
       sqs=boto3.client("sqs"),
       ddb=boto3.client("dynamodb"),
@@ -70,10 +136,12 @@ class Deps:
       mb=musicbrainz.Client(musicbrainz.user_agent(UA_VERSION, contact)),
       lastfm_client=lastfm.Client(key),
       env=env,
+      index=_index,
     )
 
 
 _contact = {}
+_index = None  # one Index per container, so its caches outlive an invocation
 
 
 def _ssm_value(ssm, name):
@@ -94,9 +162,11 @@ def run(deps, context):
   remaining = context.get_remaining_time_in_millis() / 1000 if context else 900
   deadline = started + remaining - DEADLINE_MARGIN_S
   totals = {"messages": 0, "already_resolved": 0, "resolved": 0, "missed": 0, "failed": 0,
-            "year_wasted": 0, "invalid": 0, "batches": 0}  # fmt: skip
+            "year_wasted": 0, "invalid": 0, "batches": 0, "rechecks": 0, "index_hits": 0,
+            "index_untrusted": 0, "index_misses": 0, "index_errors": 0, "tracks_reused": 0}  # fmt: skip
   queues = [("hot", deps.env["MB_HOT_URL"]), ("cold", deps.env["MB_COLD_URL"])]
   out_of_time = False
+  year_from_index, index_age = _open_index(deps, totals)
 
   while True:
     if deps.mono() + MIN_BATCH_S > deadline:
@@ -106,7 +176,7 @@ def run(deps, context):
     if not msgs:
       break
     totals["batches"] += 1
-    _process(deps, msgs, deadline, totals)
+    _process(deps, msgs, deadline, totals, year_from_index)
     if deps.mono() + MIN_BATCH_S > deadline:
       out_of_time = True
       break
@@ -118,8 +188,25 @@ def run(deps, context):
     deps.lambda_.invoke(FunctionName=deps.env["MB_FUNCTION"], InvocationType="Event", Payload=b"{}")
     poked = True
   elapsed = deps.mono() - started
-  _emit(deps, totals, depths, elapsed, out_of_time, poked)
+  _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age)
   return {**totals, "out_of_time": out_of_time, "self_invoked": poked}
+
+
+def _open_index(deps, totals):
+  """(year_from_index or None, the dump's age in hours or None) for this run."""
+  if deps.index is None:
+    return None, None
+  try:
+    m = deps.index.current()
+  except Exception:
+    log.exception("could not read the release index manifest; index off for this run")
+    totals["index_errors"] += 1
+    return None, None
+  if m is None:
+    if deps.index.state == "unusable":
+      totals["index_errors"] += 1
+    return None, None
+  return deps.index.lookup_fn(m), ri.dump_age_hours(m["dump"], deps.clock())
 
 
 # ---- queues -----------------------------------------------------------------------------
@@ -159,6 +246,7 @@ def _parse(body):
   if not all(isinstance(msg.get(k), str) and msg[k] for k in ("artist_key", "title_key", "artist", "album")):
     return None
   msg.setdefault("mbid", "")
+  msg["recheck"] = msg.get("recheck") is True
   return msg
 
 
@@ -199,8 +287,8 @@ def _depths(deps, queues):
 # ---- one batch --------------------------------------------------------------------------
 
 
-def _process(deps, msgs, deadline, totals):
-  handles, albums = {}, []
+def _process(deps, msgs, deadline, totals, year_from_index=None):
+  handles, albums, recheck = {}, [], set()
   for body, url, receipt in msgs:
     album = _parse(body)
     if album is None:
@@ -212,14 +300,18 @@ def _process(deps, msgs, deadline, totals):
     if key not in handles:
       albums.append(album)
     handles.setdefault(key, []).append((url, receipt))
+    if album["recheck"]:
+      recheck.add(key)  # any message for the key decides, not just the first
   totals["messages"] += len(msgs)
+  totals["rechecks"] += len(recheck)
 
-  done = _existing(deps, list(handles))
+  done = set(_get_items(deps, [k for k in handles if k not in recheck], keys_only=True))
   totals["already_resolved"] += len(done)
   _delete(deps, [h for k in done for h in handles[k]])
   albums = [a for a in albums if core.key_of(a) not in done]
   if not albums:
     return
+  previous = _get_items(deps, sorted(recheck)) if recheck else {}
 
   result = core.resolve(
     albums,
@@ -227,32 +319,36 @@ def _process(deps, msgs, deadline, totals):
     lastfm_tracks=deps.lastfm.album_track_count,
     target_year=TARGET_YEAR,
     now=deps.clock(),
+    year_from_index=year_from_index,
+    previous=previous,
   )
+  if result.stats.get("index_errors"):
+    log.warning("%d release index lookups failed; those albums went to the live search",
+                result.stats["index_errors"])  # fmt: skip
   _write(deps, list(result.items.values()))
   _delete(deps, [h for k in result.items for h in handles[k]])
   if deps.mono() + MIN_BATCH_S > deadline:
     _release(deps, [h for k in result.failed for h in handles[k]])
-  for name in ("resolved", "missed", "failed", "year_wasted"):
+  for name in ("resolved", "missed", "failed", "year_wasted", "index_hits", "index_untrusted", "index_misses",
+               "index_errors", "tracks_reused"):  # fmt: skip
     totals[name] += result.stats.get(name, 0)
 
 
 # ---- albums table -----------------------------------------------------------------------
 
 
-def _existing(deps, keys):
-  """The keys that already have an albums-table item."""
-  table, found = deps.env["ALBUMS_TABLE"], set()
+def _get_items(deps, keys, keys_only=False):
+  """key -> the albums-table item as plain values, for the keys that have one."""
+  table, found = deps.env["ALBUMS_TABLE"], {}
   for i in range(0, len(keys), BATCH_GET):
-    pending = {
-      table: {
-        "Keys": [{"artist_key": {"S": a}, "title_key": {"S": t}} for a, t in keys[i : i + BATCH_GET]],
-        "ProjectionExpression": "artist_key, title_key",
-      }
-    }
+    request = {"Keys": [{"artist_key": {"S": a}, "title_key": {"S": t}} for a, t in keys[i : i + BATCH_GET]]}
+    if keys_only:
+      request["ProjectionExpression"] = "artist_key, title_key"
+    pending = {table: request}
     for attempt in range(RETRIES + 1):
       out = deps.ddb.batch_get_item(RequestItems=pending)
       for item in out.get("Responses", {}).get(table, []):
-        found.add((item["artist_key"]["S"], item["title_key"]["S"]))
+        found[(item["artist_key"]["S"], item["title_key"]["S"])] = dynamo.from_item(item)
       pending = out.get("UnprocessedKeys") or {}
       if not pending:
         break
@@ -281,25 +377,13 @@ def _write(deps, items):
       deps.sleep(0.2 * 2**attempt)
 
 
-def to_dynamo(item):
-  """A plain item (str, int, None values) as DynamoDB attribute values."""
-  out = {}
-  for k, v in item.items():
-    if v is None:
-      out[k] = {"NULL": True}
-    elif isinstance(v, bool):
-      out[k] = {"BOOL": v}
-    elif isinstance(v, int | float):
-      out[k] = {"N": str(v)}
-    else:
-      out[k] = {"S": str(v)}
-  return out
+to_dynamo = dynamo.to_item
 
 
 # ---- metrics ----------------------------------------------------------------------------
 
 
-def _emit(deps, totals, depths, elapsed, out_of_time, poked):
+def _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age=None):
   """One CloudWatch Embedded Metric Format line: the run's metrics, by Environment."""
   mb = deps.mb.summary()
   values = {
@@ -314,10 +398,18 @@ def _emit(deps, totals, depths, elapsed, out_of_time, poked):
     "AlbumsAlreadyResolved": (totals["already_resolved"], "Count"),
     "YearWasted": (totals["year_wasted"], "Count"),
     "AlbumsPerSecond": (round(totals["resolved"] / elapsed, 3) if elapsed > 0 else 0, "Count/Second"),
+    "IndexHits": (totals["index_hits"], "Count"),
+    "IndexUntrusted": (totals["index_untrusted"], "Count"),
+    "IndexMisses": (totals["index_misses"], "Count"),
+    "IndexErrors": (totals["index_errors"], "Count"),
+    "Rechecks": (totals["rechecks"], "Count"),
+    "TracksReused": (totals["tracks_reused"], "Count"),
     "HotQueueDepth": (depths.get("hot", 0), "Count"),
     "ColdQueueDepth": (depths.get("cold", 0), "Count"),
     "RunSeconds": (round(elapsed, 1), "Seconds"),
   }
+  if index_age is not None:  # absent rather than 0 when there's no usable index
+    values["IndexAgeHours"] = (index_age, "None")
   line = {
     "_aws": {
       "Timestamp": int(deps.clock() * 1000),

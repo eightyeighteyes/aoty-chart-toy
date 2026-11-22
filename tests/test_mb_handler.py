@@ -1,10 +1,15 @@
 """The mb lane handler (lambdas/mb/handler.py) against in-memory fakes of SQS, DynamoDB and MusicBrainz."""
 
+import gzip
 import importlib.util
+import io
 import json
 from pathlib import Path
 
 import pytest
+
+from common import releaseindex as ri
+from common.albumkey import norm
 
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "mb" / "handler.py"
 NOW = 1_795_000_000
@@ -78,7 +83,12 @@ class FakeDDB:
 
   def batch_get_item(self, RequestItems):
     req = RequestItems["albums"]
-    found = [k for k in req["Keys"] if (k["artist_key"]["S"], k["title_key"]["S"]) in self.items]
+    self.gets = getattr(self, "gets", []) + [req]
+    found = []
+    for k in req["Keys"]:
+      item = self.items.get((k["artist_key"]["S"], k["title_key"]["S"]))
+      if item is not None:
+        found.append(k if "ProjectionExpression" in req else {**item, **k})
     return {"Responses": {"albums": found}}
 
   def batch_write_item(self, RequestItems):
@@ -156,11 +166,48 @@ def msg(title, artist="Artist"):
   }
 
 
-def world(h, *, ddb=None, years=None, cost=1.0, page_cap=None):
+class S3Error(Exception):
+  def __init__(self, code):
+    self.response = {"Error": {"Code": code}}
+
+
+class FakeS3:
+  """A store bucket holding a release index built from `records` (dump release-group dicts)."""
+
+  def __init__(self, records=(), manifest=None, dump="20261121-001001"):
+    self.objects, self.gets = {}, []
+    shards = {}
+    for r in records:
+      key = norm(r["title"])
+      shards.setdefault(ri.shard_of(key), {}).setdefault(key, []).append(ri.record(r))
+    for shard, body in shards.items():
+      self.objects[ri.shard_key(dump, shard)] = gzip.compress(json.dumps(body).encode())
+    if manifest is None:
+      manifest = ri.manifest(dump, built_at=NOW, records=len(records), titles=len(shards), shards=4096)
+    if manifest is not False:
+      self.objects[ri.MANIFEST_KEY] = json.dumps(manifest).encode()
+
+  def get_object(self, Bucket, Key):
+    self.gets.append(Key)
+    if Key not in self.objects:
+      if Key.endswith(".json.gz"):
+        return {"Body": io.BytesIO(gzip.compress(b"{}"))}  # the builder writes every shard
+      raise S3Error("NoSuchKey")
+    return {"Body": io.BytesIO(self.objects[Key])}
+
+
+def dump_rg(title, date, type_="Album", artist="Artist"):
+  return {"id": f"rg-{title}-{date[:4]}", "title": title, "first-release-date": date, "primary-type": type_,
+          "artist-credit": [{"name": artist, "joinphrase": ""}]}  # fmt: skip
+
+
+def world(h, *, ddb=None, years=None, cost=1.0, page_cap=None, s3=None):
   clock = Clock()
   sqs = FakeSQS(page_cap)
+  index = h.Index(s3, "store", clock=lambda: NOW) if s3 is not None else None
   deps = h.Deps(sqs=sqs, ddb=ddb or FakeDDB(), lambda_=FakeLambda(), mb=FakeMB(clock, years, cost),
-                lastfm_client=FakeLastfm(), env=ENV, clock=lambda: NOW, mono=clock, sleep=lambda s: None)  # fmt: skip
+                lastfm_client=FakeLastfm(), env=ENV, index=index, clock=lambda: NOW, mono=clock,
+                sleep=lambda s: None)  # fmt: skip
   return deps, sqs, clock
 
 
@@ -287,6 +334,111 @@ def test_out_of_time_with_nothing_left_does_not_invoke_itself(h):
   out = h.handler({}, Context(clock, 10), deps)
   assert out["out_of_time"] and not out["self_invoked"] and deps.lambda_.invokes == []
   assert sqs.waits == []  # no time to start: nothing received
+
+
+def test_index_hits_skip_the_year_search(h, capsys):
+  s3 = FakeS3([dump_rg("Old", "1994-05-10"), dump_rg("New", "2026-02-02")])
+  deps, sqs, clock = world(h, s3=s3)
+  sqs.send("q/cold", msg("Old"))
+  sqs.send("q/cold", msg("New"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["index_hits"] == 2 and out["resolved"] == 2
+  assert [c[0] for c in deps.mb.calls] == ["release"]  # only New's track count
+  assert deps.ddb.items[("artist", "old")]["rg_mbid"] == {"S": "rg-Old-1994"}
+  line = emf(capsys)
+  assert line["IndexHits"] == 2 and line["IndexErrors"] == 0 and line["IndexAgeHours"] is not None
+
+
+def test_untrusted_hits_and_misses_go_live(h):
+  s3 = FakeS3([dump_rg("Lead", "2025-09-01", "Single")])
+  deps, sqs, clock = world(h, s3=s3, years={"Lead": "2026-03-01"})
+  sqs.send("q/hot", msg("Lead"))
+  sqs.send("q/hot", msg("Unknown"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert (out["index_untrusted"], out["index_misses"], out["index_hits"]) == (1, 1, 0)
+  assert deps.ddb.items[("artist", "lead")]["year"] == {"N": "2026"}
+
+
+def test_shards_are_cached_across_runs(h):
+  s3 = FakeS3([dump_rg("Old", "1994")])
+  deps, sqs, clock = world(h, s3=s3)
+  sqs.send("q/hot", msg("Old"))
+  h.handler({}, Context(clock, 900), deps)
+  deps.ddb.items.clear()
+  sqs.send("q/hot", msg("Old"))
+  h.handler({}, Context(clock, 900), deps)
+  shard_gets = [k for k in s3.gets if k.endswith(".json.gz")]
+  assert len(shard_gets) == 1 and s3.gets.count(ri.MANIFEST_KEY) == 1  # manifest cached for an hour
+
+
+def test_an_unusable_manifest_turns_the_index_off_and_counts_an_error(h, capsys):
+  bad = ri.manifest("20261121-001001", built_at=NOW, records=1, titles=1, shards=4096) | {"fingerprint": "x"}
+  deps, sqs, clock = world(h, s3=FakeS3([dump_rg("Old", "1994")], manifest=bad))
+  sqs.send("q/hot", msg("Old"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["index_errors"] == 1 and out["index_hits"] == 0 and deps.mb.calls  # live search
+  assert "IndexAgeHours" not in emf(capsys)
+
+
+def test_no_index_yet_is_not_an_error(h):
+  deps, sqs, clock = world(h, s3=FakeS3(manifest=False))
+  sqs.send("q/hot", msg("Old"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["index_errors"] == 0 and out["resolved"] == 1
+
+
+def test_a_broken_shard_goes_live_and_counts_an_error(h):
+  class Broken(FakeS3):
+    def get_object(self, Bucket, Key):
+      if Key.endswith(".json.gz"):
+        raise S3Error("SlowDown")
+      return super().get_object(Bucket, Key)
+
+  deps, sqs, clock = world(h, s3=Broken([dump_rg("Old", "1994")]))
+  sqs.send("q/hot", msg("Old"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["index_errors"] == 1 and out["resolved"] == 1
+
+
+def stored(year, rg_mbid, tracks=None):
+  item = {"artist_key": {"S": "artist"}, "title_key": {"S": "fixed"}, "year": {"N": str(year)},
+          "rg_mbid": {"S": rg_mbid}}  # fmt: skip
+  if tracks is not None:
+    item |= {
+      "tracks": {"N": str(tracks)},
+      "tracks_type": {"S": "Album"},
+      "tracks_source": {"S": "musicbrainz"},
+    }
+  return item
+
+
+def test_a_recheck_overwrites_the_item_and_keeps_its_tracks(h):
+  ddb = FakeDDB({("artist", "fixed"): stored(2025, "rg-Fixed-2026", tracks=12)})
+  deps, sqs, clock = world(h, ddb=ddb, s3=FakeS3([dump_rg("Fixed", "2026-01-03")]))
+  sqs.send("q/cold", {**msg("Fixed"), "recheck": True})
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["rechecks"] == 1 and out["already_resolved"] == 0 and out["tracks_reused"] == 1
+  item = deps.ddb.items[("artist", "fixed")]
+  assert item["year"] == {"N": "2026"} and item["tracks"] == {"N": "12"}
+  assert deps.mb.calls == [] and sqs.left("q/cold") == 0
+
+
+def test_a_recheck_flag_on_any_message_for_the_key_counts(h):
+  ddb = FakeDDB({("artist", "fixed"): stored(2025, "rg-Fixed-2026", tracks=12)})
+  deps, sqs, clock = world(h, ddb=ddb, s3=FakeS3([dump_rg("Fixed", "2026-01-03")]))
+  sqs.send("q/cold", msg("Fixed"))  # a plain duplicate from sync arrives first
+  sqs.send("q/cold", {**msg("Fixed"), "recheck": True})
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["rechecks"] == 1 and deps.ddb.items[("artist", "fixed")]["year"] == {"N": "2026"}
+  assert sqs.left("q/cold") == 0
+
+
+def test_a_non_boolean_recheck_is_ignored(h):
+  ddb = FakeDDB({("artist", "fixed"): stored(2025, "rg-Fixed-2026")})
+  deps, sqs, clock = world(h, ddb=ddb)
+  sqs.send("q/cold", {**msg("Fixed"), "recheck": "yes"})
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["already_resolved"] == 1 and out["rechecks"] == 0
 
 
 def test_to_dynamo_types(h):

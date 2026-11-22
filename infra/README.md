@@ -28,6 +28,7 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` 2. |
 | `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. Visibility 900 s (the mb timeout). |
 | mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an hourly EventBridge Scheduler schedule that invokes it through the `…-mb-schedule` role; with both queues empty a run makes no MusicBrainz request. |
+| Release index build (AOTY-20) | `kamp-aoty-<env>-index` ECS cluster (FARGATE_SPOT only) and task definition: 1 vCPU / 4 GB, x86_64 (Spot runs no ARM64), AWS's public `lambda/python:3.13` image pinned by digest, fetching its code from `s3://<store>/code/index.zip`. Runs in the default VPC's public subnets with a public IP and the default security group: no NAT. `…-index-daily` schedule at 06:15 UTC (off in sandbox) runs the exact revision Terraform made, through the `…-index-schedule` role. Logs in `/ecs/kamp-aoty-<env>-index`. See "Release index" below. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
 | `api`, `sync`, `mb` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
 | HTTP API | `$default` route → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttled to burst 20 / 10 req/s. |
@@ -35,13 +36,16 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 
 An idle stack costs about $0/mo: on-demand tables, SQS, Lambda, HTTP API, standard SSM
 parameters and the default S3/DynamoDB/SQS encryption (no KMS keys) are all free when nothing
-runs. Prod PITR costs about $0.20/GB-month.
+runs. Prod PITR costs about $0.20/GB-month. The index build is about $0.01 a run on Spot (two
+real builds a week; the other days exit in seconds), plus a few cents of S3 for the shards.
 
 ## Ownership rules
 
 - **CD owns Lambda code; Terraform owns configuration.** The placeholder zip is used only when a
   function is first created (`ignore_changes = [filename, source_code_hash]`). The real code is
   in `lambdas/` and CD deploys it (see "Deploys and releases"). A `terraform apply` never reverts it.
+  The same goes for the index build: its task definition is Terraform's, its code
+  (`jobs/index/`, `dist/index.zip`) is uploaded by CD to `code/index.zip` in the store bucket.
 - **SSM parameter values are never in Terraform.** Refreshing a SecureString would put it in
   state, and the PR plan role would need decrypt rights. Terraform only grants the Lambdas read on
   `/kamp-aoty/<env>/*`.
@@ -247,6 +251,7 @@ only deploy once those exist. A branch that changes them fails its apply.
 .venv/bin/python scripts/sandbox_reset.py                       # dry run
 .venv/bin/python scripts/sandbox_reset.py --yes                 # wipe everything
 .venv/bin/python scripts/sandbox_reset.py --yes --keep-albums   # keep the release-year cache
+.venv/bin/python scripts/sandbox_reset.py --yes --keep-index    # keep index/ and code/ (a ~25 min rebuild)
 ```
 
 It disables the sync mapping while it works. SQS allows one purge per queue per 60 s, and a sync
@@ -303,7 +308,37 @@ aws lambda invoke --function-name kamp-aoty-staging-mb --invocation-type Event -
 
 Each run logs one EMF line (namespace `kamp-aoty`, dimension `Environment`): `MbRequests`,
 `MbThrottled`, `MbRetryAfterSeconds`, `AlbumsResolved`/`Missed`/`Failed`/`AlreadyResolved`,
-`YearWasted`, `AlbumsPerSecond`, `HotQueueDepth`, `ColdQueueDepth`, `RunSeconds`.
+`YearWasted`, `AlbumsPerSecond`, `HotQueueDepth`, `ColdQueueDepth`, `RunSeconds`, and for the
+release index `IndexHits`/`Untrusted`/`Misses`/`Errors`, `IndexAgeHours` (absent with no usable
+index), `Rechecks`, `TracksReused`.
+
+## Release index (AOTY-20)
+
+The index build (`jobs/index/build.py`) runs daily at 06:15 UTC. It exits within seconds unless
+a new MusicBrainz dump is out (twice a week). Then it takes about 25 minutes: a 1.24 GB download,
+the parse, 4,096 shard uploads under `index/<dump>/` and `index/current.json` last. It then
+queues re-checks to `mb-cold`. It never calls the MusicBrainz API, so it can't slow the mb lane.
+`common/releaseindex.py` has the format and the rules.
+
+To run it by hand (sandbox has no schedule), with admin credentials:
+
+```sh
+stack=$(terraform -chdir=infra/envs/sandbox output -json stack)
+aws ecs run-task --cluster kamp-aoty-sandbox-index \
+  --task-definition "$(jq -r .index_task.task_definition <<<"$stack")" \
+  --capacity-provider-strategy capacityProvider=FARGATE_SPOT,weight=1 \
+  --network-configuration "awsvpcConfiguration={subnets=[$(jq -r '.index_task.subnets|join(",")' <<<"$stack")],securityGroups=[$(jq -r .index_task.security_group <<<"$stack")],assignPublicIp=ENABLED}"
+aws logs tail /ecs/kamp-aoty-sandbox-index --follow
+```
+
+The task needs `code/index.zip`, which a deploy uploads. To force a rebuild of the same dump,
+delete `index/current.json` first. Without a usable manifest the mb lane goes live for every
+album, exactly as before AOTY-20. Its EMF line has `IndexBuildSeconds`, `IndexBuildSkipped`,
+`IndexDumpAgeHours`, `IndexRecords`, `IndexTitles`, `RechecksQueued`.
+
+A Spot interruption kills the run with nothing published: the old index stays live, and the
+next day's run starts over. Scheduler retries only a RunTask that failed to start (no capacity),
+up to three times within an hour.
 
 ## Follow-ups outside Terraform
 

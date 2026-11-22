@@ -66,6 +66,18 @@ output "table_names" {
   }
 }
 
+output "index_task" {
+  description = "For running the release index build by hand (aws ecs run-task; infra/README.md) and for CD's code upload"
+  value = {
+    cluster         = aws_ecs_cluster.index.name
+    task_definition = aws_ecs_task_definition.index.arn
+    subnets         = data.aws_subnets.default.ids
+    security_group  = data.aws_security_group.default.id
+    code_key        = local.index_code_key
+    log_group       = aws_cloudwatch_log_group.index.name
+  }
+}
+
 output "ssm_parameter_names" {
   description = "Set these out of band (infra/README.md); Terraform never holds the values"
   value       = local.ssm_params

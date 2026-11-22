@@ -186,6 +186,18 @@ def test_full_reset_keeps_albums_when_asked(sr):
   assert aws.calls.index(aws.ops("update-event-source-mapping")[0]) < first_delete
 
 
+def test_full_reset_keeps_the_release_index_when_asked(sr):
+  store = [("users/u/2026/weeks.json.gz", "1"), ("index/current.json", "2"), ("index/d/abc.json.gz", "3"),
+           ("code/index.zip", "4")]  # fmt: skip
+  aws = FakeAws(
+    versions={"kamp-aoty-sandbox-store": list(store), "kamp-aoty-sandbox-site": [("index/x", "5")]},
+    items={"kamp-aoty-sandbox-users": [], "kamp-aoty-sandbox-albums": []},
+  )
+  sr.reset(aws, stack(), ACCT, dry_run=False, keep_index=True, log=lambda *_: None, sleep=lambda _: None)
+  assert aws.versions["kamp-aoty-sandbox-store"] == store[1:]
+  assert aws.versions["kamp-aoty-sandbox-site"] == []  # only the store bucket keeps index/
+
+
 def test_mapping_is_re_enabled_after_a_failure(sr):
   aws = FakeAws(fail_on="delete-objects", versions={"kamp-aoty-sandbox-store": [("a", "1")]})
   with pytest.raises(RuntimeError, match="boom"):

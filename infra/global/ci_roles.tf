@@ -76,6 +76,7 @@ data "aws_iam_policy_document" "boundary" {
     actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = [
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/lambda/kamp-aoty-${each.key}-*:*",
+      "arn:aws:logs:${local.region}:${local.account}:log-group:/ecs/kamp-aoty-${each.key}-*:*",
     ]
   }
   statement {
@@ -110,6 +111,7 @@ data "aws_iam_policy_document" "boundary" {
       "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
       "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem",
       "dynamodb:ConditionCheckItem", "dynamodb:DescribeTable",
+      "dynamodb:Scan", # the index build's re-check pass over albums (AOTY-20)
     ]
     resources = [
       "arn:aws:dynamodb:${local.region}:${local.account}:table/kamp-aoty-${each.key}-*",
@@ -128,6 +130,23 @@ data "aws_iam_policy_document" "boundary" {
     sid       = "InvokeSiblings"
     actions   = ["lambda:InvokeFunction"]
     resources = ["arn:aws:lambda:${local.region}:${local.account}:function:kamp-aoty-${each.key}-*"]
+  }
+  # The index schedule's role starts the index task (AOTY-20), passing it this env's task and
+  # execution roles, which carry this same boundary.
+  statement {
+    sid       = "RunOwnTasks"
+    actions   = ["ecs:RunTask"]
+    resources = ["arn:aws:ecs:${local.region}:${local.account}:task-definition/kamp-aoty-${each.key}-*:*"]
+  }
+  statement {
+    sid       = "PassOwnTaskRoles"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${local.account}:role/kamp-aoty/${each.key}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
   }
 }
 
@@ -272,7 +291,34 @@ data "aws_iam_policy_document" "deploy" {
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/lambda/kamp-aoty-${each.key}-*:*",
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/apigateway/kamp-aoty-${each.key}-*",
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/apigateway/kamp-aoty-${each.key}-*:*",
+      "arn:aws:logs:${local.region}:${local.account}:log-group:/ecs/kamp-aoty-${each.key}-*",
+      "arn:aws:logs:${local.region}:${local.account}:log-group:/ecs/kamp-aoty-${each.key}-*:*",
     ]
+  }
+  # The index build (AOTY-20): its cluster (create, capacity providers, tags) by name.
+  statement {
+    sid       = "EcsClusters"
+    actions   = ["ecs:*"]
+    resources = ["arn:aws:ecs:${local.region}:${local.account}:cluster/kamp-aoty-${each.key}-*"]
+  }
+  # Task definitions: Register, Describe and Deregister take no resource ARN, so any env's role
+  # could register or deregister a revision in another env's family. Registering can't hurt:
+  # schedules pin the exact revision Terraform made, and PassRole limits a revision to the
+  # caller's own roles. Deregistering another env's revision would stop its index build until
+  # that env's next apply re-registers it: a stale index, not an escalation.
+  statement {
+    sid = "EcsTaskDefinitions"
+    actions = [
+      "ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition", "ecs:DeregisterTaskDefinition",
+      "ecs:ListTaskDefinitions",
+    ]
+    resources = ["*"]
+  }
+  # Tags go out with RegisterTaskDefinition (default_tags) and are authorized on the new revision.
+  statement {
+    sid       = "EcsTaskDefinitionTags"
+    actions   = ["ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource"]
+    resources = ["arn:aws:ecs:${local.region}:${local.account}:task-definition/kamp-aoty-${each.key}-*:*"]
   }
   # Actions that only accept Resource "*": log-group listing, and the log-delivery calls
   # API Gateway makes on the caller's behalf when HTTP API access logging is configured.
@@ -284,6 +330,8 @@ data "aws_iam_policy_document" "deploy" {
       "logs:DeleteLogDelivery", "logs:ListLogDeliveries",
       "sqs:ListQueues", "lambda:ListFunctions", "lambda:ListEventSourceMappings",
       "dynamodb:ListTables",
+      # The index task runs in the default VPC (AOTY-20); nothing in EC2 is written.
+      "ec2:DescribeVpcs", "ec2:DescribeVpcAttribute", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
     ]
     resources = ["*"]
   }
@@ -430,6 +478,17 @@ data "aws_iam_policy_document" "deploy" {
       values   = ["scheduler.amazonaws.com"]
     }
   }
+  # The index task's execution and task roles, named in its task definition (AOTY-20).
+  statement {
+    sid       = "PassWorkloadRolesToEcsTasks"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${local.account}:role/kamp-aoty/${each.key}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
   statement {
     sid     = "NeverTouchCI"
     effect  = "Deny"
@@ -541,13 +600,25 @@ data "aws_iam_policy_document" "plan" {
     resources = [
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/lambda/kamp-aoty-*",
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/apigateway/kamp-aoty-*",
+      "arn:aws:logs:${local.region}:${local.account}:log-group:/ecs/kamp-aoty-*",
     ]
   }
+  statement {
+    sid     = "EcsMetadata"
+    actions = ["ecs:DescribeClusters", "ecs:ListTagsForResource"]
+    resources = [
+      "arn:aws:ecs:${local.region}:${local.account}:cluster/kamp-aoty-*",
+      "arn:aws:ecs:${local.region}:${local.account}:task-definition/kamp-aoty-*:*",
+    ]
+  }
+  # DescribeTaskDefinition takes no resource ARN. Task definitions hold no secrets by design
+  # (the same rule as Lambda environment variables).
   statement {
     sid = "AccountWideReads"
     actions = [
       "logs:DescribeLogGroups", "sqs:ListQueues", "lambda:ListFunctions",
-      "lambda:ListEventSourceMappings", "dynamodb:ListTables",
+      "lambda:ListEventSourceMappings", "dynamodb:ListTables", "ecs:DescribeTaskDefinition",
+      "ec2:DescribeVpcs", "ec2:DescribeVpcAttribute", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
     ]
     resources = ["*"]
   }

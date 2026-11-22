@@ -9,7 +9,8 @@ locals {
   functions = {
     api  = { timeout = 30, memory = 256, reserved = null }
     sync = { timeout = 900, memory = 512, reserved = null }
-    mb   = { timeout = 900, memory = 256, reserved = 1 }
+    # 512: the release index's shard cache (AOTY-20) holds up to 128 parsed shards.
+    mb = { timeout = 900, memory = 512, reserved = 1 }
   }
 
   function_env = {
@@ -74,6 +75,11 @@ locals {
           "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem", "dynamodb:Query",
         ]
         resources = [aws_dynamodb_table.albums.arn]
+      },
+      {
+        # The release index (AOTY-20): the manifest and shards, read only.
+        actions   = ["s3:GetObject"]
+        resources = ["${aws_s3_bucket.store.arn}/index/*"]
       },
       {
         # Out of time with work left, it starts its own next run (it queues behind this one).

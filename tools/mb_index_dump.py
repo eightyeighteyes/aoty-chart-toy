@@ -25,33 +25,32 @@ while a MusicBrainz API job runs.
 
 import argparse
 import gzip
-import hashlib
 import json
 import resource
 import sys
 import tarfile
 import time
-import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "jobs" / "index"))
 import aoty  # noqa: E402
+import dump as mbdump  # noqa: E402  (shared with the AOTY-20 index build)
 
-DUMPS = "https://data.metabrainz.org/pub/musicbrainz/data/json-dumps"
+DUMPS = mbdump.DUMPS
 OUT = REPO / "data" / "mb_index"
 YEAR = "2026"
-UA = {"User-Agent": aoty.MB_HEADERS["User-Agent"]}
+UA = aoty.MB_HEADERS["User-Agent"]
 
 
 def http(url, start=0):
-  headers = {**UA, **({"Range": f"bytes={start}-"} if start else {})}
-  return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60)
+  return mbdump.http(url, UA, start)
 
 
 def latest_dump():
-  return http(f"{DUMPS}/LATEST").read().decode().strip()
+  return mbdump.latest_dump(UA)
 
 
 def peak_rss_mb():
@@ -60,41 +59,7 @@ def peak_rss_mb():
 
 
 def download(dump, name, dest):
-  """Fetch DUMPS/dump/name to dest, resuming a .part file; verify SHA256. Returns stats."""
-  url = f"{DUMPS}/{dump}/{name}"
-  sums = http(f"{DUMPS}/{dump}/SHA256SUMS").read().decode()
-  want = next(line.split()[0] for line in sums.splitlines() if line.split()[-1].lstrip("*") == name)
-  if dest.exists():
-    print(f"{dest} already downloaded")
-    return {"download_s": 0, "resumed_from": None}
-  part = dest.with_suffix(dest.suffix + ".part")
-  start = part.stat().st_size if part.exists() else 0
-  t0 = time.monotonic()
-  with http(url, start) as r, open(part, "ab") as f:
-    total = start + int(r.headers.get("Content-Length", 0))
-    done, last = start, 0.0
-    while chunk := r.read(1 << 20):
-      f.write(chunk)
-      done += len(chunk)
-      if time.monotonic() - last > 10:
-        last = time.monotonic()
-        mbps = (done - start) / 1e6 / (last - t0)
-        print(f"  {done / 1e6:,.0f} / {total / 1e6:,.0f} MB  {mbps:.1f} MB/s", flush=True)
-  seconds = time.monotonic() - t0
-  print(f"Downloaded {done / 1e6:,.0f} MB in {seconds:.0f} s; checking SHA256")
-  h = hashlib.sha256()
-  with open(part, "rb") as f:
-    while chunk := f.read(1 << 24):
-      h.update(chunk)
-  if h.hexdigest() != want:
-    raise SystemExit(f"SHA256 mismatch for {part}: delete it and retry")
-  part.rename(dest)
-  return {
-    "download_s": round(seconds, 1),
-    "download_mbps": round((done - start) / 1e6 / seconds, 2),
-    "resumed_from": start or None,
-    "sha256": want,
-  }
+  return mbdump.download(dump, name, dest, UA)
 
 
 def minimal(rg):
@@ -110,14 +75,7 @@ def minimal(rg):
   }
 
 
-def dump_lines(fileobj, member_name):
-  """Yield the JSON lines of one member of a streamed .tar.xz."""
-  with tarfile.open(fileobj=fileobj, mode="r|xz") as tar:
-    for member in tar:
-      if member.name == member_name:
-        yield from tar.extractfile(member)
-        return
-  raise SystemExit(f"{member_name} not found in the archive")
+dump_lines = mbdump.dump_lines
 
 
 def write_json(path, data):

@@ -3,6 +3,7 @@
   .venv/bin/python scripts/sandbox_reset.py               # dry run: what would be deleted
   .venv/bin/python scripts/sandbox_reset.py --yes         # do it
   .venv/bin/python scripts/sandbox_reset.py --yes --keep-albums   # keep the release-year cache
+  .venv/bin/python scripts/sandbox_reset.py --yes --keep-index    # keep index/ and code/ (AOTY-20)
 
 Run it with admin credentials (the sandbox deploy role can't read the data). Names come from
 `terraform output -json stack` in infra/envs/sandbox, and the script refuses to run unless
@@ -34,6 +35,9 @@ PREFIX = "kamp-aoty-sandbox-"
 DELETE_OBJECTS_MAX = 1000  # S3 DeleteObjects limit per call
 BATCH_WRITE_MAX = 25  # DynamoDB BatchWriteItem limit per call
 BATCH_RETRIES = 8
+# --keep-index: the release index (AOTY-20) and the code its build task fetches. Rebuilding the
+# index takes ~25 min, and a cold-user test needs it in place.
+INDEX_PREFIXES = ("index/", "code/")
 
 
 class RefuseError(Exception):
@@ -140,8 +144,8 @@ def object_versions(aws, bucket):
   ]
 
 
-def empty_bucket(aws, bucket, dry_run):
-  objects = object_versions(aws, bucket)
+def empty_bucket(aws, bucket, dry_run, keep_prefixes=()):
+  objects = [o for o in object_versions(aws, bucket) if not o["Key"].startswith(tuple(keep_prefixes))]
   if not dry_run:
     for batch in chunks(objects, DELETE_OBJECTS_MAX):
       out = aws(
@@ -199,16 +203,18 @@ def empty_table(aws, table, dry_run, sleep=time.sleep):
   return len(keys)
 
 
-def reset(aws, stack, caller_account, *, dry_run=True, keep_albums=False, log=print, sleep=time.sleep):
+def reset(aws, stack, caller_account, *, dry_run=True, keep_albums=False, keep_index=False, log=print,
+          sleep=time.sleep):  # fmt: skip
   r = guard(stack, caller_account)
   tables = [t for k, t in sorted(r["tables"].items()) if not (keep_albums and k == "albums")]
+  keep = {stack["store_bucket_name"]: INDEX_PREFIXES} if keep_index else {}
   uuids = mapping_uuids(aws, r["sync_function"])
   log(f"{'DRY RUN: ' if dry_run else ''}resetting sandbox (account {caller_account})")
 
   if dry_run:
     log(f"would disable mappings {uuids} and purge {len(r['queues'])} queues")
     for b in r["buckets"]:
-      log(f"{b}: {empty_bucket(aws, b, True)} object versions")
+      log(f"{b}: {empty_bucket(aws, b, True, keep.get(b, ()))} object versions")
     for t in tables:
       log(f"{t}: {empty_table(aws, t, True)} items")
     return
@@ -220,7 +226,7 @@ def reset(aws, stack, caller_account, *, dry_run=True, keep_albums=False, log=pr
     for url in skipped:
       log(f"  skipped {_queue_name(url)}: purged less than 60 s ago")
     for b in r["buckets"]:
-      log(f"{b}: deleted {empty_bucket(aws, b, False)} object versions")
+      log(f"{b}: deleted {empty_bucket(aws, b, False, keep.get(b, ()))} object versions")
     for t in tables:
       log(f"{t}: deleted {empty_table(aws, t, False, sleep=sleep)} items")
   finally:
@@ -232,12 +238,15 @@ def main(argv=None):
   ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
   ap.add_argument("--yes", action="store_true", help="actually delete (default: dry run)")
   ap.add_argument("--keep-albums", action="store_true", help="keep the albums table (release-year cache)")
+  ap.add_argument("--keep-index", action="store_true", help="keep the release index and its build code")
   args = ap.parse_args(argv)
 
   stack = stack_output()
   account = run_aws(["sts", "get-caller-identity"])["Account"]
   try:
-    reset(run_aws, stack, account, dry_run=not args.yes, keep_albums=args.keep_albums)
+    reset(
+      run_aws, stack, account, dry_run=not args.yes, keep_albums=args.keep_albums, keep_index=args.keep_index
+    )
   except RefuseError as e:
     sys.exit(f"refusing: {e}")
 

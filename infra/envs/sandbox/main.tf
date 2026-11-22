@@ -44,6 +44,8 @@ module "stack" {
   environment        = "sandbox"
   base_path          = "/toys/aoty-sandbox/"
   log_retention_days = 3
+  # Run by hand (infra/README.md, "Release index"): a branch shouldn't download the dump daily.
+  index_schedule_enabled = false
 }
 
 # Same shape as staging and prod, so deploy.yml and scripts/sandbox_reset.py read one object.

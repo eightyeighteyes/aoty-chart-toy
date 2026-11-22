@@ -3,6 +3,7 @@
 import pytest
 
 import mb_core as core
+from common.releaseindex import Hit
 
 NOW = 1_795_000_000
 
@@ -181,14 +182,76 @@ def test_duplicate_messages_are_looked_up_once():
   assert len(out.items) == 1 and mb.calls[0][1].count("releasegroup:") == 1
 
 
+def hit(year, trusted=True, id_="rg-i", type_="Album"):
+  return Hit(year=year, id=id_, type=type_, trusted=trusted)
+
+
 def test_index_hit_skips_the_year_search_but_not_the_track_lookup():
   mb = FakeMB(("release", has("X"), [rel("X", 11)]))
-  out = resolve(
-    [msg("Artist", "X")], mb, year_from_index=lambda a: {"year": "2026", "id": "rg-i", "type": "Album"}
-  )
+  out = resolve([msg("Artist", "X")], mb, year_from_index=lambda a: hit("2026"))
   assert [c[0] for c in mb.calls] == ["release"]
-  assert out.items[("artist", "x")]["tracks"] == 11
+  item = out.items[("artist", "x")]
+  assert (item["tracks"], item["year"], item["rg_mbid"]) == (11, 2026, "rg-i")
   assert out.stats["index_hits"] == 1
+
+
+def test_an_untrusted_index_hit_goes_to_the_live_search():
+  # The dump's 2025 single "X"; MusicBrainz already has the 2026 album.
+  mb = FakeMB(("release-group", has("X"), [rg("X", "2026-03-01", id_="rg-album")]), ("release", has("X"), []))
+  out = resolve(
+    [msg("Artist", "X")], mb, year_from_index=lambda a: hit("2025", trusted=False, type_="Single")
+  )
+  assert out.items[("artist", "x")]["year"] == 2026 and out.items[("artist", "x")]["rg_mbid"] == "rg-album"
+  assert (out.stats["index_hits"], out.stats["index_untrusted"]) == (0, 1)
+
+
+def test_index_misses_and_errors_go_live_and_are_counted():
+  def index(a):
+    if a["album"] == "Broken":
+      raise OSError("S3 down")
+    return None
+
+  mb = FakeMB(("release-group", lambda q: True, [rg("Gone", "1999"), rg("Broken", "1998")]))
+  out = resolve([msg("Artist", "Gone"), msg("Artist", "Broken")], mb, year_from_index=index)
+  assert {k: i["year"] for k, i in out.items.items()} == {
+    ("artist", "gone"): 1999,
+    ("artist", "broken"): 1998,
+  }
+  assert (out.stats["index_misses"], out.stats["index_errors"]) == (1, 1)
+
+
+def test_a_recheck_keeps_stored_tracks_when_the_release_group_is_unchanged():
+  prev = {
+    ("artist", "x"): {"rg_mbid": "rg-i", "tracks": 12, "tracks_type": "Album", "tracks_source": "musicbrainz"}
+  }
+  mb = FakeMB()
+  out = resolve([msg("Artist", "X")], mb, year_from_index=lambda a: hit("2026"), previous=prev)
+  assert mb.calls == []
+  item = out.items[("artist", "x")]
+  assert (item["tracks"], item["tracks_type"], item["tracks_source"]) == (12, "Album", "musicbrainz")
+  assert out.stats["tracks_reused"] == 1
+
+
+def test_a_recheck_with_a_new_release_group_looks_tracks_up_again():
+  prev = {
+    ("artist", "x"): {
+      "rg_mbid": "rg-old",
+      "tracks": 12,
+      "tracks_type": "Album",
+      "tracks_source": "musicbrainz",
+    }
+  }
+  mb = FakeMB(("release", has("X"), [rel("X", 9)]))
+  out = resolve([msg("Artist", "X")], mb, year_from_index=lambda a: hit("2026"), previous=prev)
+  assert out.items[("artist", "x")]["tracks"] == 9 and out.stats["tracks_reused"] == 0
+
+
+def test_a_recheck_that_leaves_the_target_year_drops_tracks():
+  prev = {
+    ("artist", "x"): {"rg_mbid": "rg-i", "tracks": 12, "tracks_type": "Album", "tracks_source": "musicbrainz"}
+  }
+  out = resolve([msg("Artist", "X")], FakeMB(), year_from_index=lambda a: hit("2019"), previous=prev)
+  assert out.items[("artist", "x")]["year"] == 2019 and "tracks" not in out.items[("artist", "x")]
 
 
 @pytest.mark.parametrize("mbid", ["", "abc-123"])
