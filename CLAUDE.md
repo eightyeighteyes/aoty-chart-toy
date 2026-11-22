@@ -199,7 +199,14 @@ not daily totals from paging scrobbles (the story text was revised to match).
   most once a week per album (`queued_at`). Albums found in the table are marked `resolved` in the
   store and never re-checked. A crash can still send duplicates, so AOTY-19 must be idempotent.
 - **Errors:** 6, confirmed by `user.getInfo`, and 17 end as `not_found` / `private` without an SQS
-  retry; a new message always tries again. The last of 5 receives writes `state=error` first.
+  retry; a new message always tries again.
+  - Any other failure sets `state=retrying` and the message's visibility to 60/120/240/480 s.
+    Otherwise it waits out the queue's 90-min visibility timeout, blocking the user's FIFO group,
+    which is how the first staging sync looked "stuck".
+  - The last of 5 receives writes `state=error`.
+- **Keys never go blank:** `norm` strips punctuation, so `album_key` falls back to the casefolded
+  name for all-punctuation titles and artists (`( )`, `!!!`). DynamoDB rejects an empty key
+  string, and that crashed the first real staging sync after all 47 weeks.
 - **Covers:** recent tracks give covers, matched by album MBID, then by key. Compilations rarely
   match, because scrobbles carry the track artist, so AOTY-21 needs an `album.getInfo` fallback.
 - **Rate:** 0.5 s per call per worker, with `maximum_concurrency` 2 on the event source mapping

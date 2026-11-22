@@ -15,7 +15,7 @@ key is common.albumkey.join_key((artist_key, title_key)), the albums table's ide
 import calendar
 from collections import Counter
 
-from common.albumkey import album_key, join_key
+from common.albumkey import album_key, is_complete, join_key, split_key
 
 STORE_VERSION = 1
 DAY = 86400
@@ -119,9 +119,10 @@ def chart_plays(rows):
   for row in rows:
     artist, album = _text(row.get("artist")), row.get("name") or ""
     n = int(row.get("playcount") or 0)
-    if not album or n <= 0:
+    pair = album_key(artist, album)
+    if not is_complete(pair) or n <= 0:  # a blank artist or album name can't be keyed
       continue
-    key = join_key(album_key(artist, album))
+    key = join_key(pair)
     plays[key] += n
     m = meta.setdefault(key, {"artist": artist, "album": album, "mbid": ""})
     m["mbid"] = m["mbid"] or row.get("mbid") or ""
@@ -157,12 +158,17 @@ def mb_candidates(store, now):
   Skips albums already in the albums table ("resolved", permanent: a confirmed miss is an
   item too) and those queued within REQUEUE_AFTER, so a sync doesn't re-check thousands of
   keys or flood mb-hot with duplicates while AOTY-19 catches up.
+
+  Also skips keys with an empty half, which the albums table can't hold. Since album_key's
+  punctuation fallback they aren't created, but a store written before it may still have them.
   """
   albums = store["albums"]
 
   def wanted(k):
     a = albums.get(k, {})
-    return not a.get("resolved") and now - (a.get("queued_at") or 0) >= REQUEUE_AFTER
+    if a.get("resolved") or not is_complete(split_key(k)):
+      return False
+    return now - (a.get("queued_at") or 0) >= REQUEUE_AFTER
 
   return [k for k in ranked_keys(store) if wanted(k)]
 
