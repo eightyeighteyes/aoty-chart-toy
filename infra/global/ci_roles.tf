@@ -221,6 +221,30 @@ data "aws_iam_policy_document" "deploy" {
     actions   = ["lambda:ListTags"]
     resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
   }
+  # The provider's default_tags go out with CreateEventSourceMapping, which AWS also authorizes
+  # as lambda:TagResource on the new mapping (AOTY-18's first deploy failed on exactly this).
+  # Tag actions have no lambda:FunctionArn key either, so they're scoped by the Environment tag:
+  # a role may tag a mapping as its own environment, and retag or untag only its own mappings.
+  statement {
+    sid       = "TagNewEventSourceMappings"
+    actions   = ["lambda:TagResource"]
+    resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = [each.key]
+    }
+  }
+  statement {
+    sid       = "RetagOwnEventSourceMappings"
+    actions   = ["lambda:TagResource", "lambda:UntagResource"]
+    resources = ["arn:aws:lambda:${local.region}:${local.account}:event-source-mapping:*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Environment"
+      values   = [each.key]
+    }
+  }
   statement {
     sid     = "LogGroups"
     actions = ["logs:*"]

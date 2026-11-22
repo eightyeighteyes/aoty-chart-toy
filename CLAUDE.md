@@ -240,6 +240,10 @@ Details are in `infra/README.md`. Things to keep in mind when changing it:
   increase is granted (requested 2026-11-21).
 - The deploy roles only allow what's in use. New resource types mean editing
   `global/ci_roles.tf` and having the admin apply `global` first.
+- **Creating a tagged resource also needs its tag permission.** The provider's `default_tags`
+  are sent with the create call, and AWS authorizes them as a separate `TagResource` (for
+  Lambda, `lambda:TagResource` on the new ARN). The sync event source mapping failed its first
+  deploy on this (AOTY-18). Grant the tag actions with any new resource type.
 - Testing role policies from the laptop uses `admin_assume_principal`. Turn it off afterwards.
 - **This repo uses GitHub's immutable OIDC subject claims:**
   `repo:eightyeighteyes@6600722/aoty-chart-toy@1466126436:...`, not
