@@ -38,7 +38,12 @@ class Client:
                timeout=TIMEOUT, urlopen=urllib.request.urlopen, sleep=time.sleep, clock=time.monotonic,
                rand=random.uniform):  # fmt: skip
     self.agent = agent
-    self.min_interval, self.max_attempts, self.jitter, self.timeout = min_interval, max_attempts, jitter, timeout
+    self.min_interval, self.max_attempts, self.jitter, self.timeout = (
+      min_interval,
+      max_attempts,
+      jitter,
+      timeout,
+    )
     self._urlopen, self._sleep, self._clock, self._rand = urlopen, sleep, clock, rand
     self._last = None
     self.stats = []  # one dict per attempt: status, slept, elapsed, retry_after
@@ -53,7 +58,11 @@ class Client:
     url = f"{API}{entity}/?{urllib.parse.urlencode({**params, 'fmt': 'json'})}"
     retry_after = self.min_interval
     for attempt in range(self.max_attempts):
-      gap = self.min_interval if attempt == 0 else max(self.min_interval, retry_after) + self._rand(0, self.jitter)
+      gap = (
+        self.min_interval
+        if attempt == 0
+        else max(self.min_interval, retry_after) + self._rand(0, self.jitter)
+      )
       wait = 0.0 if self._last is None else max(self._last + gap - self._clock(), 0.0)
       if deadline is not None and self._clock() + wait + self.timeout > deadline:
         self.stats.append({"status": "deadline", "slept": 0.0, "elapsed": 0.0, "retry_after": 0.0})

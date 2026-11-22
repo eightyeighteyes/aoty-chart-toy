@@ -183,7 +183,9 @@ def test_duplicate_messages_are_looked_up_once():
 
 def test_index_hit_skips_the_year_search_but_not_the_track_lookup():
   mb = FakeMB(("release", has("X"), [rel("X", 11)]))
-  out = resolve([msg("Artist", "X")], mb, year_from_index=lambda a: {"year": "2026", "id": "rg-i", "type": "Album"})
+  out = resolve(
+    [msg("Artist", "X")], mb, year_from_index=lambda a: {"year": "2026", "id": "rg-i", "type": "Album"}
+  )
   assert [c[0] for c in mb.calls] == ["release"]
   assert out.items[("artist", "x")]["tracks"] == 11
   assert out.stats["index_hits"] == 1

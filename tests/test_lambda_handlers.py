@@ -49,6 +49,4 @@ def test_terraforms_placeholder_never_acknowledges_sqs_messages():
   assert module.handler({}, None) == {"ok": True, "placeholder": "unknown"}
 
 
-@pytest.mark.parametrize("fn", ["mb"])  # sync: tests/test_sync_handler.py
-def test_workers_are_no_ops_until_their_stories(fn):
-  assert load(fn)({}, None) == {"ok": True, "source": f"lambdas/{fn}"}
+# The workers have their own tests: tests/test_sync_handler.py, tests/test_mb_handler.py.

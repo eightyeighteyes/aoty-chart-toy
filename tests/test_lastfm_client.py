@@ -89,7 +89,9 @@ def test_album_track_count_handles_lists_bare_objects_and_empty_tracklists():
 
 
 def test_album_track_count_not_found_is_none_but_other_errors_raise():
-  assert client(FakeHTTP((200, {"error": 6, "message": "Album not found"}))).album_track_count("A", "X") is None
+  assert (
+    client(FakeHTTP((200, {"error": 6, "message": "Album not found"}))).album_track_count("A", "X") is None
+  )
   with pytest.raises(lastfm.LastfmError):
     client(FakeHTTP((200, {"error": 10, "message": "bad key"}))).album_track_count("A", "X")
 
