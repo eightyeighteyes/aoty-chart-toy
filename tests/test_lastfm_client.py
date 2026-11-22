@@ -1,0 +1,93 @@
+"""The Lambdas' Last.fm client (lambdas/common/lastfm.py), against a fake urlopen."""
+
+import io
+import json
+import urllib.error
+import urllib.parse
+
+import pytest
+
+from common import lastfm
+
+
+class FakeHTTP:
+  """Replays (status, body) responses; records each request's query."""
+
+  def __init__(self, *responses):
+    self.responses = list(responses)
+    self.queries = []
+
+  def __call__(self, req, timeout):
+    self.queries.append(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.full_url).query)))
+    status, body = self.responses.pop(0)
+    if isinstance(body, Exception):
+      raise body
+    raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+    if status >= 400:
+      raise urllib.error.HTTPError(req.full_url, status, "err", {}, io.BytesIO(raw))
+    resp = io.BytesIO(raw)
+    resp.status = status
+    return resp
+
+
+def client(http, sleeps=None):
+  sleeps = [] if sleeps is None else sleeps
+  return lastfm.Client("KEY", urlopen=http, sleep=sleeps.append, clock=lambda: 0.0)
+
+
+def test_single_album_object_is_wrapped_in_a_list():
+  http = FakeHTTP((200, {"weeklyalbumchart": {"album": {"name": "Solo", "playcount": "3"}}}))
+  assert client(http).weekly_album_chart("alice", 10, 20) == [{"name": "Solo", "playcount": "3"}]
+  assert http.queries[0]["from"] == "10" and http.queries[0]["to"] == "20"
+  assert http.queries[0]["method"] == "user.getweeklyalbumchart"
+
+
+def test_retryable_codes_server_errors_and_network_errors_are_retried():
+  ok = {"recenttracks": {"track": [], "@attr": {"totalPages": "4"}}}
+  http = FakeHTTP(
+    (200, {"error": 29, "message": "rate limited"}),
+    (503, b"<html>busy</html>"),
+    (200, urllib.error.URLError("reset")),
+    (200, ok),
+  )
+  sleeps = []
+  assert client(http, sleeps).recent_tracks("alice", 0) == ([], 4)
+  assert len(http.queries) == 4
+  assert [s for s in sleeps if s >= 2] == [2, 4, 6]  # back-off between attempts
+
+
+def test_user_errors_raise_at_once_with_their_code():
+  http = FakeHTTP((404, {"error": 6, "message": "User not found"}))
+  with pytest.raises(lastfm.LastfmError) as e:
+    client(http).weekly_album_chart("nobody", 0, 1)
+  assert e.value.code == lastfm.NOT_FOUND
+  assert len(http.queries) == 1
+
+
+def test_giving_up_raises_the_last_error():
+  http = FakeHTTP(*[(200, {"error": 16, "message": "temporary"})] * lastfm.MAX_ATTEMPTS)
+  with pytest.raises(lastfm.LastfmError) as e:
+    client(http).recent_tracks("alice", 0)
+  assert e.value.code == 16
+
+
+def test_user_exists_is_false_only_for_not_found():
+  assert client(FakeHTTP((200, {"user": {"name": "alice"}}))).user_exists("alice")
+  assert not client(FakeHTTP((404, {"error": 6, "message": "User not found"}))).user_exists("x")
+  with pytest.raises(lastfm.LastfmError):
+    client(FakeHTTP((403, {"error": 17, "message": "private"}))).user_exists("x")
+
+
+def test_calls_are_paced():
+  t = [0.0]
+  sleeps = []
+
+  def sleep(s):
+    sleeps.append(s)
+    t[0] += s
+
+  http = FakeHTTP((200, {"user": {}}), (200, {"user": {}}))
+  c = lastfm.Client("KEY", min_interval=0.5, urlopen=http, sleep=sleep, clock=lambda: t[0])
+  c.user_exists("a")
+  c.user_exists("b")
+  assert sleeps == [0.5]
