@@ -9,7 +9,7 @@ target-version = "py313"
 # so the first reformat doesn't conflict with it. Remove this exclude then.
 extend-exclude = ["tools", "infra/**/build"]
 # lambdas/ is a path root too: the Lambdas (and aoty.py) import shared code as `common.*`.
-src = [".", "lambdas", "lambdas/sync"]
+src = [".", "lambdas", "lambdas/sync", "lambdas/mb"]
 
 [tool.ruff.format]
 quote-style = "preserve"
@@ -20,6 +20,6 @@ extend-select = ["I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# lambdas/sync: its zip puts sync_core.py at the root, so the handler imports it bare.
-pythonpath = [".", "lambdas", "lambdas/sync"]
+# lambdas/sync, lambdas/mb: each zip puts its *_core.py at the root, so handlers import it bare.
+pythonpath = [".", "lambdas", "lambdas/sync", "lambdas/mb"]
 addopts = "-ra --strict-markers"
