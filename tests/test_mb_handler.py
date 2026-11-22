@@ -445,3 +445,67 @@ def test_to_dynamo_types(h):
   assert h.to_dynamo({"a": "x", "b": 3, "c": None, "d": True}) == {
     "a": {"S": "x"}, "b": {"N": "3"}, "c": {"NULL": True}, "d": {"BOOL": True}
   }  # fmt: skip
+
+
+# ---- chart builder pokes (AOTY-21) ------------------------------------------------------
+
+
+class TimedLambda:
+  def __init__(self, clock, fail_chart=False):
+    self.clock, self.fail_chart, self.invokes = clock, fail_chart, []
+
+  def invoke(self, **kw):
+    if kw["FunctionName"] == "chart" and self.fail_chart:
+      raise RuntimeError("invoke failed")
+    self.invokes.append({**kw, "t": self.clock.t})
+
+  def charts(self):
+    return [kw for kw in self.invokes if kw["FunctionName"] == "chart"]
+
+
+def chart_world(h, n_albums, cost=10.0, fail_chart=False, ddb=None):
+  deps, sqs, clock = world(h, cost=cost, ddb=ddb)
+  deps.env = {**ENV, "CHART_FUNCTION": "chart"}
+  deps.lambda_ = TimedLambda(clock, fail_chart)
+  for i in range(n_albums):
+    sqs.send("q/cold", msg(f"P{i:03}"))
+  return deps, sqs, clock
+
+
+def test_charts_are_poked_after_the_first_batch_then_at_most_once_a_minute(h, capsys):
+  deps, sqs, clock = chart_world(h, 200)  # 10 batches, ~20 s each
+  out = h.handler({}, Context(clock, 900), deps)
+  pokes = deps.lambda_.charts()
+  assert out["batches"] == 10 and out["written"] == 200
+  assert pokes[0]["Payload"] == b'{"pending":true}' and pokes[0]["InvocationType"] == "Event"
+  assert pokes[0]["t"] <= 2 * 10.0 + 1  # right after the first batch's searches
+  gaps = [b["t"] - a["t"] for a, b in zip(pokes, pokes[1:-1])]
+  assert all(g >= h.CHART_POKE_S for g in gaps)
+  assert 2 <= len(pokes) < out["batches"]
+  assert pokes[-1]["t"] == clock.t or pokes[-1]["t"] >= pokes[-2]["t"]  # the end-of-run poke
+  assert emf(capsys)["chart_pokes"] == len(pokes)
+
+
+def test_nothing_written_means_no_chart_poke(h):
+  ddb = FakeDDB()
+  deps, sqs, clock = chart_world(h, 5, ddb=ddb)
+  h.handler({}, Context(clock, 900), deps)  # writes the 5
+  deps.lambda_.invokes.clear()
+  for i in range(5):
+    sqs.send("q/cold", msg(f"P{i:03}"))  # already resolved now
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["already_resolved"] == 5 and deps.lambda_.charts() == []
+
+
+def test_a_failed_chart_poke_doesnt_fail_the_run(h):
+  deps, sqs, clock = chart_world(h, 25, fail_chart=True)
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["written"] == 25 and sqs.left("q/cold") == 0
+  assert out["chart_pokes"] == 0
+
+
+def test_without_a_chart_function_nothing_is_poked(h):
+  deps, sqs, clock = world(h)
+  sqs.send("q/cold", msg("Solo"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["written"] == 1 and deps.lambda_.invokes == []
