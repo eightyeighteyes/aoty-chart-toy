@@ -16,6 +16,10 @@ import requests
 # Reuse the main script's config (API key, year, user list) so they can't drift.
 import aoty
 
+# Matching rules shared with the mb Lambda (AOTY-19); importable once aoty has set sys.path.
+from common.mbmatch import MIN_ALBUM_TRACKS, is_single, pick_release  # noqa: E402, F401
+from common.mbmatch import release_clause as _release_clause  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 
 TOP_N = 100
@@ -33,11 +37,8 @@ ART_CACHE_FILE = aoty.DATA_DIR / "lastfm_art_cache.json"
 # Releases per MusicBrainz search. Each album has several releases (editions,
 # regions, formats) and a search returns at most 100, so keep batches small.
 MB_TRACK_BATCH_SIZE = 10
-# Singles are left out of By Album and Weighted, where dividing by 1 track would put
-# them on top (user decision 2026-11-20). MusicBrainz's release-group type decides,
-# whatever the length: a 4-track "Single" is out, a 1-track "Album" is in. Only an
-# untyped release (Last.fm fallback count) falls back to "under MIN_ALBUM_TRACKS".
-MIN_ALBUM_TRACKS = 4
+# Singles (is_single, MIN_ALBUM_TRACKS) are left out of By Album and Weighted, where dividing
+# by 1 track would put them on top. The rule lives in common.mbmatch.
 # Weighted only ranks albums at least this many members played (user decision 2026-11-20).
 WEIGHTED_MIN_LISTENERS = 3
 
@@ -62,50 +63,6 @@ def load_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
   except (FileNotFoundError, json.JSONDecodeError):
     return {}
-
-
-_STATUS_RANK = {"Official": 0}
-
-
-def pick_release(artist, album, releases):
-  """{"tracks", "type"} of the release matching this artist + title, or None.
-
-  Same matching rule as aoty.pick_year: a search hit isn't a match, and an exact title
-  beats an edition-stripped one (aoty.title_tier). Among matches, prefer Official, then a
-  release group typed Album > EP > other, then the earliest date, which is usually the
-  standard edition rather than a later deluxe.
-  """
-  want_artist = aoty.norm(artist)
-  matches = []
-  for rel in releases:
-    count = rel.get("track-count")
-    if not count:
-      continue
-    tier = aoty.title_tier(album, rel.get("title", ""))
-    if tier is None:
-      continue
-    if want_artist not in aoty.credit_names(rel):
-      continue
-    rg_type = rel.get("release-group", {}).get("primary-type")
-    matches.append(
-      (
-        tier,
-        _STATUS_RANK.get(rel.get("status"), 1),
-        aoty._TYPE_RANK.get(rg_type, 2),
-        rel.get("date") or "9999",
-        count,
-        rg_type or "",
-      )
-    )
-  if not matches:
-    return None
-  *_, tracks, rg_type = min(matches)
-  return {"tracks": tracks, "type": rg_type or None}
-
-
-def _release_clause(artist, album):
-  e = aoty._lucene_escape
-  return f'(artist:"{e(artist)}" AND release:"{e(aoty.base_title(album))}")'
 
 
 def lastfm_track_count(artist, album):
@@ -173,16 +130,6 @@ def lookup_releases(rows):
     save()
   missing = {"tracks": None, "type": None}  # only after a failed request
   return {aoty.cache_key(*p): cache.get(aoty.cache_key(*p), missing) for p in pairs}
-
-
-def is_single(info):
-  """MusicBrainz's type decides: a 1-track Album (The Necks, Dopesmoker) is an album.
-  The track floor applies only when there's no type, i.e. a Last.fm fallback count."""
-  if not info["tracks"]:
-    return True  # no count: can't be scored per album
-  if info["type"]:
-    return info["type"] == "Single"
-  return info["tracks"] < MIN_ALBUM_TRACKS
 
 
 def album_art(artist, album):

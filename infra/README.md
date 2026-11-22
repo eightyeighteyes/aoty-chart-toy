@@ -26,7 +26,8 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | `users` table | `username` (lowercased). Deletion protection in prod. |
 | `albums` table | `artist_key` + `title_key` (`norm(album artist)`, `norm(base_title(album))`). Deletion protection in staging and prod, `prevent_destroy` everywhere; PITR in prod. |
 | `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` 2. |
-| `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. |
+| `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. Visibility 900 s (the mb timeout). |
+| mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an hourly EventBridge Scheduler schedule that invokes it through the `…-mb-schedule` role; with both queues empty a run makes no MusicBrainz request. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
 | `api`, `sync`, `mb` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
 | HTTP API | `$default` route → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttled to burst 20 / 10 req/s. |
@@ -68,7 +69,8 @@ How CI is kept from escalating:
 - CI roles and boundary policies live at IAM path `/kamp-aoty-ci/`. Deploy roles are explicitly
   denied all IAM actions on that path.
 - A deploy role can create and edit roles only at `/kamp-aoty/<env>/`, only with
-  `kamp-aoty-<env>-boundary` attached, and can pass them only to Lambda.
+  `kamp-aoty-<env>-boundary` attached, and can pass them only to Lambda and EventBridge
+  Scheduler (the mb backstop, AOTY-19).
 - HTTP APIs (random ids) are scoped by their `Environment` tag. Tag writes on APIs and event
   source mappings check both the requested and the existing tag, so a role can't relabel another
   env's resource as its own.
@@ -82,9 +84,12 @@ How CI is kept from escalating:
 Fork PRs get no OIDC token, so the plan role works only for branches in this repo.
 
 The deploy policies list only what this skeleton uses. A story that adds a new resource type
-(EventBridge rules, SNS, alarms, reserved concurrency) extends `global/ci_roles.tf` and the
-admin applies `global` first. Event source mappings (AOTY-18) are scoped by the
-`lambda:FunctionArn` condition, because their ARNs are random UUIDs.
+(SNS, alarms, …) extends `global/ci_roles.tf` and the admin applies `global` first. Event
+source mappings (AOTY-18) are scoped by the `lambda:FunctionArn` condition, because their ARNs
+are random UUIDs. Schedules (AOTY-19) are scoped by name (`schedule/default/kamp-aoty-<env>-*`)
+because they carry no tags. The schedule uses Scheduler rather than an EventBridge rule, because
+a rule needs `lambda:AddPermission` for `events.amazonaws.com`, which sandbox is denied.
+Reserved concurrency needs nothing extra: it's a `lambda:*` call on the env's own functions.
 
 ### Testing the roles from a laptop
 
@@ -289,11 +294,22 @@ aws sqs send-message --queue-url "$(aws sqs get-queue-url --queue-name kamp-aoty
 Then check `users` (`state`, `progress`) and `s3://kamp-aoty-staging-store/users/alice/2026/weeks.json.gz`.
 `"full": true` refetches every week; `"year"` defaults to 2026.
 
+The sync queues every undated album to `mb-hot`/`mb-cold` and starts the mb Lambda, which fills
+`kamp-aoty-<env>-albums`. To start it by hand (it exits at once if both queues are empty):
+
+```sh
+aws lambda invoke --function-name kamp-aoty-staging-mb --invocation-type Event --payload '{}' /dev/null
+```
+
+Each run logs one EMF line (namespace `kamp-aoty`, dimension `Environment`): `MbRequests`,
+`MbThrottled`, `MbRetryAfterSeconds`, `AlbumsResolved`/`Missed`/`Failed`/`AlreadyResolved`,
+`YearWasted`, `AlbumsPerSecond`, `HotQueueDepth`, `ColdQueueDepth`, `RunSeconds`.
+
 ## Follow-ups outside Terraform
 
 - **Lambda concurrency quota:** raised from 10 to 1,000 (requested 2026-11-21, approved by
-  2026-11-22; Service Quotas, `L-B99A9384`). Reserved concurrency is possible now: AOTY-19's
-  single MusicBrainz client and AOTY-26's caps can use it. The sync worker still uses its
+  2026-11-22; Service Quotas, `L-B99A9384`). The mb Lambda reserves 1 (AOTY-19); AOTY-26's
+  caps can use it too. The sync worker still uses its
   event source mapping's `maximum_concurrency` (2 in every env), which also caps the Last.fm rate.
   Check the quota with `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384`.
 - **Cost allocation tags:** activate `Project` and `Environment` in Billing once they appear (about 24 h

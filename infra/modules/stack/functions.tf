@@ -1,14 +1,15 @@
 # Placeholder Lambdas. Terraform owns configuration (role, env vars, timeouts); CD owns the
 # code (AOTY-17 deploys with `aws lambda update-function-code`). The placeholder zip is only
 # used when a function is first created, hence ignore_changes on the code attributes.
-# No reserved concurrency yet. The account quota is 1,000 since 2026-11-22 (it was 10, which
-# made any reservation fail), so AOTY-19/26 can add it now.
+# reserved = reserved concurrency (null = none). mb has exactly 1: it is the one MusicBrainz
+# client per environment (AOTY-19), so a second start waits instead of running alongside. The
+# account quota is 1,000 since 2026-11-22; at 10, any reservation failed.
 
 locals {
   functions = {
-    api  = { timeout = 30, memory = 256 }
-    sync = { timeout = 900, memory = 512 }
-    mb   = { timeout = 900, memory = 256 }
+    api  = { timeout = 30, memory = 256, reserved = null }
+    sync = { timeout = 900, memory = 512, reserved = null }
+    mb   = { timeout = 900, memory = 256, reserved = 1 }
   }
 
   function_env = {
@@ -73,6 +74,11 @@ locals {
           "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem", "dynamodb:Query",
         ]
         resources = [aws_dynamodb_table.albums.arn]
+      },
+      {
+        # Out of time with work left, it starts its own next run (it queues behind this one).
+        actions   = ["lambda:InvokeFunction"]
+        resources = ["arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-mb"]
       },
     ]
   }
@@ -153,15 +159,17 @@ resource "aws_cloudwatch_log_group" "fn" {
 resource "aws_lambda_function" "fn" {
   for_each = local.functions
 
-  function_name    = "${local.prefix}-${each.key}"
-  role             = aws_iam_role.fn[each.key].arn
-  runtime          = "python3.13"
-  architectures    = ["arm64"] # ~20% cheaper; packaging must use aarch64 wheels
-  handler          = "handler.handler"
-  timeout          = each.value.timeout
-  memory_size      = each.value.memory
-  filename         = data.archive_file.placeholder.output_path
-  source_code_hash = data.archive_file.placeholder.output_base64sha256
+  function_name = "${local.prefix}-${each.key}"
+  role          = aws_iam_role.fn[each.key].arn
+  runtime       = "python3.13"
+  architectures = ["arm64"] # ~20% cheaper; packaging must use aarch64 wheels
+  handler       = "handler.handler"
+  timeout       = each.value.timeout
+  memory_size   = each.value.memory
+
+  reserved_concurrent_executions = each.value.reserved == null ? -1 : each.value.reserved
+  filename                       = data.archive_file.placeholder.output_path
+  source_code_hash               = data.archive_file.placeholder.output_base64sha256
 
   environment {
     variables = local.function_env
@@ -172,6 +180,17 @@ resource "aws_lambda_function" "fn" {
   }
 
   depends_on = [aws_cloudwatch_log_group.fn, aws_iam_role_policy.fn]
+}
+
+# mb is started by async invokes (sync's poke, the hourly schedule, itself). While a run is
+# going, every other start is throttled, and Lambda retries throttled events by itself until
+# maximum_event_age, whatever maximum_retry_attempts says. Each retry finds the queues empty or
+# drains them, so that's harmless; an hour bounds the pile-up, and the schedule covers any
+# event that ages out. A run that errors isn't retried: its messages come back on their own.
+resource "aws_lambda_function_event_invoke_config" "mb" {
+  function_name                = aws_lambda_function.fn["mb"].function_name
+  maximum_event_age_in_seconds = 3600
+  maximum_retry_attempts       = 0
 }
 
 # The sync queue drives the sync worker (AOTY-18). One message per invocation; the handler

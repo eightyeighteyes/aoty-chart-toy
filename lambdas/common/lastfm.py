@@ -108,6 +108,23 @@ class Client:
     total = int((rt.get("@attr") or {}).get("totalPages") or 0)
     return as_list(rt.get("track")), total
 
+  def album_track_count(self, artist, album):
+    """Length of Last.fm's tracklist, or None when it has none (often) or no such album.
+
+    The mb lane's fallback when MusicBrainz has no matching release (AOTY-19), as in M0's
+    build_page.lastfm_track_count. Unlike M0, a failed request raises instead of returning
+    None, so the caller can tell "no count" (cached) from "try again later" (not cached).
+    """
+    try:
+      data = self.call("album.getinfo", artist=artist, album=album, autocorrect=1)
+    except LastfmError as e:
+      if e.code == NOT_FOUND:  # "Album not found" shares the code with "User not found"
+        return None
+      raise
+    tracks = (data.get("album") or {}).get("tracks") or {}
+    tracks = tracks.get("track") if isinstance(tracks, dict) else None
+    return len(as_list(tracks)) or None
+
   def user_exists(self, user):
     """False only on a definite "User not found"; other errors propagate."""
     try:

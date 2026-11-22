@@ -255,6 +255,15 @@ data "aws_iam_policy_document" "deploy" {
       values   = [each.key]
     }
   }
+  # The mb lane's hourly backstop (AOTY-19). Schedules carry no tags, so they're scoped by name.
+  statement {
+    sid = "Schedules"
+    actions = [
+      "scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule",
+      "scheduler:DeleteSchedule",
+    ]
+    resources = ["arn:aws:scheduler:${local.region}:${local.account}:schedule/default/kamp-aoty-${each.key}-*"]
+  }
   statement {
     sid     = "LogGroups"
     actions = ["logs:*"]
@@ -410,6 +419,17 @@ data "aws_iam_policy_document" "deploy" {
       values   = ["lambda.amazonaws.com"]
     }
   }
+  # The schedule's invoke role (AOTY-19); still a bounded role under this env's path.
+  statement {
+    sid       = "PassWorkloadRolesToScheduler"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${local.account}:role/kamp-aoty/${each.key}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
+  }
   statement {
     sid     = "NeverTouchCI"
     effect  = "Deny"
@@ -539,6 +559,11 @@ data "aws_iam_policy_document" "plan" {
       "arn:aws:apigateway:${local.region}::/apis/*",
       "arn:aws:apigateway:${local.region}::/tags/*",
     ]
+  }
+  statement {
+    sid       = "ScheduleMetadata"
+    actions   = ["scheduler:GetSchedule"]
+    resources = ["arn:aws:scheduler:${local.region}:${local.account}:schedule/default/kamp-aoty-*"]
   }
   statement {
     sid = "WorkloadRoleMetadata"

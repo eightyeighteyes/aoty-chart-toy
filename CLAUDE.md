@@ -49,6 +49,10 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `scripts/sandbox_reset.py` | AOTY-33: wipes sandbox data (queues, bucket versions, table items; `--keep-albums`), keeping its infrastructure. Dry run unless `--yes`; refuses anything that isn't a `kamp-aoty-sandbox-*` name in the expected account. Admin credentials. |
 | `lambdas/{api,sync,mb}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`. |
 | `lambdas/sync/` | Sync worker (AOTY-18). `sync_core.py` is pure (week ranges, settle rule, merging, mb selection, covers); `handler.py` does the S3/DynamoDB/SQS I/O behind an injectable `Deps`. Contract and store format are in the module docstrings. |
+| `lambdas/mb/` | MusicBrainz lane (AOTY-19). `mb_core.py` is pure (year then track lookups in M0's order, items); `handler.py` drains the queues and writes the `albums` table behind an injectable `Deps`. Contract in the module docstrings and "MusicBrainz lane" below. |
+| `lambdas/common/mbmatch.py`, `musicbrainz.py` | The matching rules (`pick_release_group`/`pick_year`, `pick_release`, `title_tier`, `is_single`, query clauses), shared by M0 (`aoty.py`/`build_page.py` re-export them) and the mb Lambda; and the standard-library MusicBrainz client with a per-call deadline. |
+| `tools/mb_parity.py` | AOTY-19 acceptance: runs `mb_core` on the laptop over `data/mb_bench/candidates.json` and diffs against M0's year and track caches into `data/mb_parity/run-<ts>/report.md`. A MusicBrainz client: run it alone. |
+| `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
 | `pyproject.toml`, `requirements-dev.txt` | ruff (2-space indent, 110 columns, `tools/` excluded until AOTY-12 merges) and pytest config; pinned dev tools. |
@@ -289,6 +293,35 @@ not daily totals from paging scrobbles (the story text was revised to match).
 - **Charts leave out scrobbles that have no album name** (`tools/sync_check.py`, 2026-11-21). For the
   lightest member, the chart total was 3,254 against 3,373 scrobbles: exactly the 119 with no album.
   Compare chart totals with scrobbles *that have an album*. Album-less plays can't rank as albums anyway.
+
+## MusicBrainz lane (AOTY-19, 2026-11-22)
+
+- **One client per environment**, not globally: the mb Lambda has reserved concurrency 1.
+  Staging, prod and sandbox each have one, and a laptop tool (`tools/mb_parity.py`,
+  `aoty.py`) is another. Run laptop tools while the deployed lanes are idle.
+- **The mb Lambda is the only writer of the `albums` table.** The sync worker reads it; any item,
+  a confirmed miss (`year` null) included, counts as resolved forever. AOTY-20's index (in S3)
+  will only skip the year search: the lane still writes the item and looks up tracks itself.
+- **Items are keyed by the message's `artist_key`/`title_key`**, never recomputed: sync's
+  `album_key` has a fallback for all-punctuation names that `norm` alone would miss.
+- Item fields: `year` (int or null), `rg_mbid`, `primary_type` (the year's release group),
+  `lastfm_mbid` (stored, not used for lookup), `looked_up_at`, and for target-year albums only
+  `tracks`, `tracks_type` (the matched release's group type, which `is_single` reads) and
+  `tracks_source` (`musicbrainz`, `lastfm` or null). **Other years have no tracks**, and sync
+  won't requeue them, so M4 needs a backfill (AOTY-36).
+- **An album is written whole or not at all.** If the year is found but the track lookup fails,
+  nothing is written and the year is looked up again next time (`YearWasted` in EMF). Unlike M0,
+  a failed Last.fm fallback is a failure, not a cached `None`.
+- **Time:** the client takes a deadline and never starts an attempt that might not finish by it
+  (one `mb_get` can take minutes over 8 tries). A run stops starting batches 30 s before its
+  deadline, releases that batch's failures (visibility 0), and invokes itself if work is left.
+- While a run goes, every other start is throttled and retried by Lambda until the 1 h max event
+  age. Harmless: each one exits fast on empty queues. The empty check long-polls both queues.
+- **Parity (`tools/mb_parity.py`, 2026-11-22 12:15 ET, laptop):** all 1,536 M0 cold-run candidates
+  resolved with none failed. Years were the same for all 1,530 that M0's cache had. The other 6 were
+  never looked up by M0; the new answers look right. Track counts and types were the same for all
+  568 that M0 had. There were 812 requests, 433 of them 503s (53%), taking 17.2 min at 1.48
+  albums/s, including track lookups.
 
 ## Page — design decisions
 

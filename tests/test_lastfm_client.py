@@ -78,6 +78,24 @@ def test_user_exists_is_false_only_for_not_found():
     client(FakeHTTP((403, {"error": 17, "message": "private"}))).user_exists("x")
 
 
+def test_album_track_count_handles_lists_bare_objects_and_empty_tracklists():
+  def count(body):
+    return client(FakeHTTP((200, body))).album_track_count("A", "X")
+
+  assert count({"album": {"tracks": {"track": [{"name": "1"}, {"name": "2"}]}}}) == 2
+  assert count({"album": {"tracks": {"track": {"name": "only"}}}}) == 1  # one track: a bare object
+  assert count({"album": {"tracks": ""}}) is None
+  assert count({"album": {}}) is None
+
+
+def test_album_track_count_not_found_is_none_but_other_errors_raise():
+  assert (
+    client(FakeHTTP((200, {"error": 6, "message": "Album not found"}))).album_track_count("A", "X") is None
+  )
+  with pytest.raises(lastfm.LastfmError):
+    client(FakeHTTP((200, {"error": 10, "message": "bad key"}))).album_track_count("A", "X")
+
+
 def test_calls_are_paced():
   t = [0.0]
   sleeps = []
