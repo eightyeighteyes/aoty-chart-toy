@@ -95,7 +95,8 @@ gateway. CD uploads its code to `code/index.zip`, as it updates the Lambdas' cod
 ## Visitor flow
 
 What a visit will look like once AOTY-21, 22 and 23 land. Today only `GET /api/health`
-exists.
+exists. It reports the env and the deployed commit's SHA, read from the zip's `build.json`
+(AOTY-35).
 
 ```mermaid
 sequenceDiagram

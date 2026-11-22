@@ -122,15 +122,19 @@ release PR merged → the same path, then release-please tags vX.Y.Z
 What a deploy (`deploy.yml`) does, as the env's deploy role:
 
 1. `python scripts/package_lambdas.py` builds `dist/{api,sync,mb}.zip` from `lambdas/` (Linux
-   arm64 wheels, byte-for-byte reproducible).
+   arm64 wheels, byte-for-byte reproducible per commit). Each zip carries a `build.json` with the
+   commit's SHA (`-dirty` if a packaged file isn't committed), which `/api/health` reports.
 2. `terraform apply` for `infra/envs/<env>` (skipped with `skip_terraform`).
-3. `update-function-code --publish` for each function, with `wait function-updated` before and after.
-   Each deploy leaves a numbered Lambda version.
+3. `update-function-code` for each function, with `wait function-updated` before and after, then
+   `publish-version`. Each deploy leaves a new numbered Lambda version described `<sha> by <actor>`,
+   a same-commit redeploy included.
 4. **Only if `web/index.html` exists:** uploads hashed assets with a year's cache, then
    `index.html` with `no-cache`, then removes deleted files (never `data/`), and invalidates
    `<base>*` on kamp.fm's distribution.
 5. Smoke test through kamp.fm:
-   - `<base>api/health` → 200, and the body must say `"source": "lambdas/api"` (deployed code, not the placeholder)
+   - `<base>api/health` → 200, and the body must say `"source": "lambdas/api"` (deployed code, not
+     the placeholder) and `"sha"` equal to the checked-out commit (not a stale `$LATEST`). A wrong
+     body is retried 5 times, 5 s apart.
    - `<base>data/users/__smoke__/chart.json` → 404
    - `<base>` → 200, once a shell exists
 
@@ -202,7 +206,9 @@ commits, so every branch commit becomes a changelog line: keep them Conventional
 
 `envs/sandbox/` is a third copy of the stack (`kamp-aoty-sandbox-*`) for trying a branch on
 real AWS before its PR merges. It's shared and the last deploy wins: each run's job summary
-says which ref and SHA it deployed, and who deployed it.
+says which ref and SHA it deployed, and who deployed it. To see what's live now, `curl
+<api_endpoint>/toys/aoty-sandbox/api/health` shows the SHA, and `aws lambda
+list-versions-by-function` shows who published each version.
 
 How it differs from staging:
 

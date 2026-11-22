@@ -9,11 +9,15 @@ import pytest
 LAMBDAS = Path(__file__).resolve().parent.parent / "lambdas"
 
 
-def load(fn):
+def load_module(fn):
   spec = importlib.util.spec_from_file_location(f"lambda_{fn}", LAMBDAS / fn / "handler.py")
   module = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(module)
-  return module.handler
+  return module
+
+
+def load(fn):
+  return load_module(fn).handler
 
 
 @pytest.fixture
@@ -26,7 +30,36 @@ def api(monkeypatch):
 def test_health_answers_under_the_env_base_path(api):
   out = api({"rawPath": "/toys/aoty-staging/api/health"}, None)
   assert out["statusCode"] == 200
-  assert json.loads(out["body"]) == {"ok": True, "source": "lambdas/api", "env": "staging"}
+  # A checkout has no build.json (only zips do), so the SHA is "unknown" here.
+  assert json.loads(out["body"]) == {"ok": True, "source": "lambdas/api", "env": "staging", "sha": "unknown"}
+
+
+def test_health_reports_the_stamped_sha(api, monkeypatch):
+  module = load_module("api")
+  monkeypatch.setattr(module, "BUILD_SHA", "abc123")
+  body = json.loads(module.handler({"rawPath": "/toys/aoty-staging/api/health"}, None)["body"])
+  assert body["sha"] == "abc123"
+
+
+def test_build_sha_reads_build_json(tmp_path):
+  build_sha = load_module("api")._build_sha
+  (tmp_path / "build.json").write_text('{"sha":"abc123"}\n')
+  assert build_sha(tmp_path / "build.json") == "abc123"
+
+
+@pytest.mark.parametrize("content", [None, "", "not json", "[]", "{}", '{"sha": 5}', '{"sha": ""}'])
+def test_build_sha_is_unknown_without_a_good_stamp(tmp_path, content):
+  path = tmp_path / "build.json"
+  if content is not None:
+    path.write_text(content)
+  assert load_module("api")._build_sha(path) == "unknown"
+
+
+def test_the_packaged_stamp_is_what_the_handler_reads(tmp_path):
+  from scripts import package_lambdas as pkg
+
+  (tmp_path / "build.json").write_bytes(pkg.build_json({"sha": "abc123"}))
+  assert load_module("api")._build_sha(tmp_path / "build.json") == "abc123"
 
 
 def test_api_responses_are_never_cached(api):

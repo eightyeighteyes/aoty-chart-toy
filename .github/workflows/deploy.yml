@@ -67,6 +67,12 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The commit being deployed, as the zips' build.json records it (AOTY-35). Not github.sha:
+      # via cd.yml's workflow_call that's main's tip, which can be newer than the checked-out
+      # workflow_run head_sha.
+      - name: build sha
+        run: echo "BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: package lambdas
         run: python scripts/package_lambdas.py
 
@@ -100,6 +106,8 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: lambda code
+        env:
+          ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
           for fn in api sync mb; do
@@ -107,9 +115,14 @@ jobs:
             # Wait first: a config change from the apply above leaves the function "InProgress",
             # and update-function-code would fail with ResourceConflictException.
             aws lambda wait function-updated --function-name "$name"
-            version=$(aws lambda update-function-code --function-name "$name" \
-              --zip-file "fileb://dist/$fn.zip" --publish --query Version --output text)
+            code_sha=$(aws lambda update-function-code --function-name "$name" \
+              --zip-file "fileb://dist/$fn.zip" --query CodeSha256 --output text)
             aws lambda wait function-updated --function-name "$name"
+            # Publish separately to label the version. --code-sha256 refuses to publish if $LATEST
+            # isn't the upload above. Every deploy gets a new version, even a same-commit redeploy:
+            # update-function-code modifies $LATEST even when the bytes match (seen in sandbox).
+            version=$(aws lambda publish-version --function-name "$name" --code-sha256 "$code_sha" \
+              --description "$BUILD_SHA by $ACTOR" --query Version --output text)
             echo "$name -> version $version"
           done
 
@@ -170,9 +183,24 @@ jobs:
             echo "$status $2"
             [ "$status" = "$1" ] || { echo "::error::expected $1, got $status for $2"; cat "$RUNNER_TEMP/body"; exit 1; }
           }
-          check 200 "${site}api/health"
-          # Prove the new code is live, not Terraform's placeholder, and in the right env.
-          jq -e --arg env "$AOTY_ENV" '.source == "lambdas/api" and .env == $env' "$RUNNER_TEMP/body" > /dev/null
+          # Prove this commit's code is live: not Terraform's placeholder, not an older $LATEST,
+          # and in the right env. A 200 with the wrong body is retried too, and the query string
+          # keeps any cache in front of the API out of it.
+          live=false
+          for attempt in 1 2 3 4 5; do
+            check 200 "${site}api/health?deploy=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}"
+            if jq -e --arg env "$AOTY_ENV" --arg sha "$BUILD_SHA" \
+              '.source == "lambdas/api" and .env == $env and .sha == $sha' "$RUNNER_TEMP/body" > /dev/null; then
+              live=true
+              break
+            fi
+            echo "attempt $attempt: health isn't $BUILD_SHA in $AOTY_ENV yet: $(cat "$RUNNER_TEMP/body")"
+            sleep 5
+          done
+          if [ "$live" != "true" ]; then
+            echo "::error::/api/health doesn't report $BUILD_SHA in $AOTY_ENV"
+            exit 1
+          fi
           # The site bucket is only reachable through kamp.fm's CloudFront.
           if [ "$AOTY_ENV" != "sandbox" ]; then
             check 404 "${site}data/users/__smoke__/chart.json"
@@ -191,7 +219,7 @@ jobs:
         run: |
           {
             echo "### Deploy to \`$AOTY_ENV\`: $STATUS"
-            echo "- ref: \`$REF\` (\`$(git rev-parse --short HEAD)\`)"
+            echo "- ref: \`$REF\` (\`${BUILD_SHA:-$(git rev-parse HEAD)}\`)"
             echo "- by: $ACTOR"
             echo "- terraform: $([ "$SKIP_TERRAFORM" = "true" ] && echo skipped || echo applied)"
           } >> "$GITHUB_STEP_SUMMARY"

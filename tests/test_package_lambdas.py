@@ -1,5 +1,7 @@
 """Lambda packaging (scripts/package_lambdas.py): what goes in each zip, and reproducibility."""
 
+import json
+import subprocess
 import zipfile
 
 import pytest
@@ -78,6 +80,93 @@ def test_entries_use_a_fixed_timestamp_and_mode(tree, tmp_path):
     for info in z.infolist():
       assert info.date_time == pkg.FIXED_DATE
       assert info.external_attr >> 16 == 0o100644
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_every_zip_carries_build_json_with_the_sha(tree, tmp_path):
+  jobs = tmp_path / "jobs"
+  (jobs / "index").mkdir(parents=True)
+  (jobs / "index" / "build.py").write_text("print('build')\n")
+  built = pkg.package_all(
+    tree, tmp_path / "dist", functions=("api", "sync"), jobs_dir=jobs, jobs={"index": "build.py"},
+    build={"sha": SHA},
+  )  # fmt: skip
+  assert len(built) == 3
+  for path in built:
+    with zipfile.ZipFile(path) as z:
+      assert json.loads(z.read("build.json")) == {"sha": SHA}
+      assert z.getinfo("build.json").date_time == pkg.FIXED_DATE
+
+
+def test_same_sha_same_bytes_new_sha_new_bytes(tree, tmp_path):
+  def build(out, sha):
+    return pkg.package_all(tree, tmp_path / out, functions=("api",), build={"sha": sha})[0].read_bytes()
+
+  assert build("a", SHA) == build("b", SHA)
+  assert build("c", SHA) != build("d", SHA[::-1])
+
+
+def test_a_build_json_in_the_source_is_an_error(tree, tmp_path):
+  (tree / "api" / "build.json").write_text("{}")
+  with pytest.raises(SystemExit, match="build.json"):
+    pkg.package_all(tree, tmp_path / "dist", functions=("api",), build={"sha": SHA})
+
+
+def test_the_repo_has_no_source_build_json():
+  for root in (pkg.REPO / "lambdas", pkg.REPO / "jobs"):
+    assert not any(name.endswith("build.json") for name, _ in pkg._files(root))
+
+
+def git(repo, *args):
+  subprocess.run(
+    ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+     "-c", "commit.gpgsign=false", *args],
+    check=True, capture_output=True,
+  )  # fmt: skip
+
+
+@pytest.fixture
+def repo(tree):
+  """tree, committed in its own git repo, with __pycache__ ignored as in the real repo."""
+  root = tree.parent
+  (root / ".gitignore").write_text("__pycache__/\n")
+  git(root, "init", "-q")
+  git(root, "add", ".")
+  git(root, "commit", "-q", "-m", "init")
+  head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True)
+  return root, head.stdout.strip()
+
+
+def test_git_sha_is_head_for_a_clean_tree(repo):
+  root, head = repo
+  assert pkg.git_sha(root, [root / "lambdas"]) == head
+
+
+def test_git_sha_is_dirty_for_an_edited_file(repo):
+  root, head = repo
+  (root / "lambdas" / "api" / "handler.py").write_text("changed\n")
+  assert pkg.git_sha(root, [root / "lambdas"]) == f"{head}-dirty"
+
+
+def test_git_sha_is_dirty_for_an_ignored_file_that_would_be_zipped(repo):
+  root, head = repo
+  (root / ".gitignore").write_text("__pycache__/\nsecret.py\n")
+  git(root, "commit", "-qam", "ignore")
+  head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True)
+  (root / "lambdas" / "api" / "secret.py").write_text("X = 1\n")
+  assert pkg.git_sha(root, [root / "lambdas"]) == f"{head.stdout.strip()}-dirty"
+
+
+def test_git_sha_ignores_changes_outside_the_sources(repo):
+  root, head = repo
+  (root / "notes.txt").write_text("not packaged\n")
+  assert pkg.git_sha(root, [root / "lambdas"]) == head
+
+
+def test_git_sha_is_unknown_outside_git(tree):
+  assert pkg.git_sha(tree.parent, [tree]) == "unknown"
 
 
 def test_missing_function_dir_is_an_error(tree, tmp_path):
