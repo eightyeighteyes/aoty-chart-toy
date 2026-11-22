@@ -326,26 +326,43 @@ def credit_names(rg):
 _TYPE_RANK = {"Album": 0, "EP": 1}
 
 
+def title_tier(album, title):
+  """How a MusicBrainz title matches a Last.fm one: 0 exactly, 1 edition-stripped, None not at all.
+
+  Callers sort on this first, so an exact match always beats a stripped one. Without that,
+  "1989 (Taylor's Version)" (stripped to "1989") took the 2014 "1989" release group's year
+  over its own 2023 one. Deluxe editions still resolve to the original: MusicBrainz keeps them
+  in the original release group, under the original title.
+  """
+  have = norm(title)
+  if have == norm(album):
+    return 0
+  if have == norm(base_title(album)):
+    return 1
+  return None
+
+
 def pick_year(artist, album, release_groups):
   """Year of the release group matching this artist + title, or None.
 
   A search hit is not a match: the phrase "1989" also hits "1989 [nightcore]",
-  so compare the titles ourselves. When several match (an album and a same-named
-  single, say), prefer Album, then EP, then the earliest date.
+  so compare the titles ourselves. An exact title beats an edition-stripped one
+  (title_tier); then, when several match (an album and a same-named single, say),
+  prefer Album, then EP, then the earliest date.
   """
   want_artist = norm(artist)
-  want_titles = {norm(album), norm(base_title(album))}
   matches = []
   for rg in release_groups:
     date = rg.get("first-release-date", "")
     if len(date) < 4:
       continue
-    if norm(rg.get("title", "")) not in want_titles:
+    tier = title_tier(album, rg.get("title", ""))
+    if tier is None:
       continue
     if want_artist not in credit_names(rg):
       continue
-    matches.append((_TYPE_RANK.get(rg.get("primary-type"), 2), date, date[:4]))
-  return min(matches)[2] if matches else None
+    matches.append((tier, _TYPE_RANK.get(rg.get("primary-type"), 2), date, date[:4]))
+  return min(matches)[-1] if matches else None
 
 
 def lookup_years(pairs, cache):

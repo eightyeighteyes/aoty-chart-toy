@@ -70,24 +70,26 @@ _STATUS_RANK = {"Official": 0}
 def pick_release(artist, album, releases):
   """{"tracks", "type"} of the release matching this artist + title, or None.
 
-  Same matching rule as aoty.pick_year: a search hit isn't a match. Among matches,
-  prefer Official, then a release group typed Album > EP > other, then the earliest
-  date, which is usually the standard edition rather than a later deluxe.
+  Same matching rule as aoty.pick_year: a search hit isn't a match, and an exact title
+  beats an edition-stripped one (aoty.title_tier). Among matches, prefer Official, then a
+  release group typed Album > EP > other, then the earliest date, which is usually the
+  standard edition rather than a later deluxe.
   """
   want_artist = aoty.norm(artist)
-  want_titles = {aoty.norm(album), aoty.norm(aoty.base_title(album))}
   matches = []
   for rel in releases:
     count = rel.get("track-count")
     if not count:
       continue
-    if aoty.norm(rel.get("title", "")) not in want_titles:
+    tier = aoty.title_tier(album, rel.get("title", ""))
+    if tier is None:
       continue
     if want_artist not in aoty.credit_names(rel):
       continue
     rg_type = rel.get("release-group", {}).get("primary-type")
     matches.append(
       (
+        tier,
         _STATUS_RANK.get(rel.get("status"), 1),
         aoty._TYPE_RANK.get(rg_type, 2),
         rel.get("date") or "9999",
@@ -97,8 +99,8 @@ def pick_release(artist, album, releases):
     )
   if not matches:
     return None
-  best = min(matches)
-  return {"tracks": best[3], "type": best[4] or None}
+  *_, tracks, rg_type = min(matches)
+  return {"tracks": tracks, "type": rg_type or None}
 
 
 def _release_clause(artist, album):
