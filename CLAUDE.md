@@ -33,6 +33,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `data/mb_track_count_cache.json` | Track count per album (MusicBrainz release search, Last.fm tracklist fallback), filled by `build_page.py`. ~2 min to rebuild for ~570 albums. |
 | `site/index.html` | Generated, self-contained page (only external deps: Google Fonts, Last.fm cover CDN). |
 | `tools/mb_cold_run.py` | MusicBrainz benchmark (AOTY-10). Cold lookups of a frozen, shuffled candidate list (`data/mb_bench/candidates.json`, no usernames) into `data/mb_bench/run-<ts>/`, rotating batch-size / interval arms. Never touches the real caches (path assert + checksum). `--limit 40 --chunk 10` is a 30 s dry run. Don't run anything else that hits MusicBrainz at the same time. |
+| `tools/mb_lambda.py` | AOTY-12 harness: deploys a throwaway us-east-1 Lambda (`tools/mb_lambda/handler.py`), runs `mb_cold_run` arm L there in 250-album slices (`sweep`), and unpacks each slice into `data/mb_bench/run-<ts>-lambda/`. `teardown` removes the function, role and log group. `mb_cold_run.py --offset/--limit` takes the same slices locally. |
 | `tools/mb_analyze.py` | Per-arm markdown tables for one or more `run-*` folders: 503 rate, server p50/p95, sleep vs server, retry cost, albums/s, rate-limit headers, years diff vs the real cache. |
 | `data/mb_requests.csv` | Per-attempt MusicBrainz stats appended by `mb_report` after normal runs (git-ignored). |
 | `tools/lastfm_spike.py` | Last.fm data-cost spike (AOTY-11): year-to-date distribution, `getRecentTracks` backfill, storage sizes, weekly/range album charts vs counted scrobbles, `extended=1` coverage. Writes `data/lastfm_spike/run-<ts>/report.md`, using member labels (`m01`, light/medium/heavy), never usernames. About 6 min; `--limit-pages 3` for a dry run, `--backfill-only` for a repeat timing run. |
@@ -140,6 +141,23 @@ failed page aborts the run rather than silently truncating. fmbot's per-album br
   - `mb_report` prints a per-run summary and appends per-attempt rows (status, timing, rate-limit
     headers) to `data/mb_requests.csv`.
 - `MB_HEADERS` User-Agent falls back to a placeholder contact (`contact@example.com`) unless `MB_CONTACT` is set in `.env`; MB asks for a real one.
+- **AWS Lambda is no worse than the laptop** (AOTY-12, 2026-11-21, `tools/mb_lambda.py`).
+  - Method: a no-VPC Lambda in us-east-1 ran arm L, which uses arm E's settings. At the same
+    time, the laptop ran the same 1,536 albums in the same order.
+  - Window 1, 17:22 ET: Lambda 1.64 vs laptop 1.68 albums/s (0.98x), with 48% vs 49% 503s.
+  - Window 2, 20:12 ET: Lambda 1.86 vs laptop 1.83 albums/s (1.02x), with 51% vs 51% 503s.
+  - Neither side lost an album, and both found the same years.
+  - Each window got a different outbound IP (one warm container per sweep). Neither shows any
+    sign of other AWS tenants sharing our allowance: the first `X-RateLimit-Remaining` per slice
+    was 0–383 of 400, about the same spread as the laptop's.
+  - MusicBrainz answers faster from Lambda: p50 ~0.37 s vs ~0.6 s.
+  - **Decision: the M1 `mb` lane stays a Lambda.** No Fargate and no NAT.
+  - **This AWS account's Lambda concurrency limit is 10**, so `put-function-concurrency` refuses
+    even 1, because AWS keeps 10 unreserved. A single MusicBrainz client (AOTY-19) needs a quota
+    increase or a DynamoDB lease.
+  - `mb_lambda.py deploy | run | sweep | teardown` uses the `aws` CLI. Invokes use no CLI
+    retries and a 910 s read timeout. The handler resets warm-container state
+    (`aoty.reset_run_state`) and stops 150 s before the 15-min cap.
 
 ## Last.fm data cost (AOTY-11 spike, 2026-11-21, 19 members)
 

@@ -8,6 +8,7 @@
 # The CSV and page also contain members' usernames and play counts.
 data/
 site/
+tools/mb_lambda/build/
 
 # Python
 __pycache__/

@@ -100,6 +100,19 @@ _MB_HEADER_COLUMNS = {
 }
 
 
+def reset_run_state():
+  """Start a fresh MusicBrainz run in this process: clear stats, pacing and run clock.
+
+  A normal run is one process, so it never needs this. A warm AWS Lambda container
+  keeps module globals between invocations (tools/mb_lambda/handler.py).
+  """
+  global _last_mb_request, _RUN_STARTED, _RUN_T0
+  MB_STATS.clear()
+  _last_mb_request = 0.0
+  _RUN_STARTED = time.strftime("%Y-%m-%dT%H:%M:%S")
+  _RUN_T0 = time.monotonic()
+
+
 def norm(s):
   """Loose comparison key: case, curly quotes, punctuation and spacing don't matter."""
   s = unicodedata.normalize("NFKC", s).casefold()
