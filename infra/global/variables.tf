@@ -1,7 +1,11 @@
-variable "github_repo" {
-  description = "owner/name of the repo whose workflows may assume the CI roles"
+# The repo uses GitHub's immutable OIDC subject claims, which embed the owner and repo IDs:
+# `repo:<owner>@<owner_id>/<repo>@<repo_id>:...`. Trusting that form, not the bare names, means a
+# deleted-and-recreated or renamed repo can't inherit the trust. Check the current prefix with:
+#   gh api repos/eightyeighteyes/aoty-chart-toy/actions/oidc/customization/sub
+variable "github_sub_prefix" {
+  description = "OIDC `sub` prefix for this repo's workflows (immutable form)"
   type        = string
-  default     = "eightyeighteyes/aoty-chart-toy"
+  default     = "repo:eightyeighteyes@6600722/aoty-chart-toy@1466126436"
 }
 
 variable "environments" {

@@ -17,10 +17,10 @@ locals {
   }
 
   oidc_sub = {
-    plan    = "repo:${var.github_repo}:pull_request"
-    staging = "repo:${var.github_repo}:environment:staging"
+    plan    = "${var.github_sub_prefix}:pull_request"
+    staging = "${var.github_sub_prefix}:environment:staging"
     # GitHub environment names; "production" matches the AOTY-17 release job.
-    prod = "repo:${var.github_repo}:environment:production"
+    prod = "${var.github_sub_prefix}:environment:production"
   }
 }
 
