@@ -2,9 +2,8 @@ import csv
 import json
 import os
 import random
-import re
+import sys
 import time
-import unicodedata
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,6 +11,13 @@ from pathlib import Path
 import requests
 
 HERE = Path(__file__).resolve().parent
+# Album identity is shared with the M1 Lambdas (lambdas/common/albumkey.py). Imported as
+# `common.albumkey` here too, so there is one module, not two copies under different names.
+sys.path.insert(0, str(HERE / "lambdas"))
+
+from common.albumkey import base_title, norm  # noqa: E402
+
+__all__ = ["base_title", "norm"]  # re-exported: build_page, tools and tests use aoty.norm
 
 
 def _load_dotenv(path):
@@ -71,14 +77,6 @@ MB_BACKOFF = "retry-after"
 MB_MAX_ATTEMPTS = 8
 MB_JITTER = 0.5
 
-# Edition suffixes Last.fm often has but MusicBrainz release-group titles don't,
-# e.g. "Album (Deluxe Edition)" or "Album [Remastered 2011]".
-_EDITION_RE = re.compile(
-  r"\s*[\(\[][^\)\]]*\b(deluxe|edition|remaster(ed)?|expanded|anniversary|bonus|"
-  r"special|version|reissue)\b[^\)\]]*[\)\]]\s*$",
-  re.IGNORECASE,
-)
-
 _last_mb_request = 0.0
 
 # One row per mb_search attempt (status, server time, sleep, rate-limit headers),
@@ -111,18 +109,6 @@ def reset_run_state():
   _last_mb_request = 0.0
   _RUN_STARTED = time.strftime("%Y-%m-%dT%H:%M:%S")
   _RUN_T0 = time.monotonic()
-
-
-def norm(s):
-  """Loose comparison key: case, curly quotes, punctuation and spacing don't matter."""
-  s = unicodedata.normalize("NFKC", s).casefold()
-  s = s.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
-  s = re.sub(r"[^\w']+", " ", s)
-  return " ".join(s.split())
-
-
-def base_title(album):
-  return _EDITION_RE.sub("", album).strip() or album
 
 
 def cache_key(artist, album):
