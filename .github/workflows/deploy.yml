@@ -1,0 +1,151 @@
+name: Deploy
+
+# One deploy, three ways in:
+#   - workflow_call from cd.yml: staging, after CI passes on main
+#   - push of a v* tag (release-please, via the GitHub App): production. The tag ref is what
+#     the `production` environment's deployment rule allows.
+#   - workflow_dispatch: rollback / redeploy, e.g.
+#       gh workflow run deploy.yml --ref v0.1.0 -f environment=production
+#     skip_terraform defaults to true there, so an old tag only rolls back code and the shell,
+#     never infrastructure.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+      skip_terraform:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        required: true
+      skip_terraform:
+        description: "Skip terraform apply (code + shell only). Keep on for rollbacks."
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy (${{ inputs.environment || 'production' }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'production' }}
+    # One deploy per env at a time; a queued one waits rather than cancelling a running apply.
+    concurrency:
+      group: deploy-${{ inputs.environment || 'production' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # GitHub environment "production" is infra env "prod".
+      AOTY_ENV: ${{ (inputs.environment || 'production') == 'production' && 'prod' || 'staging' }}
+      SKIP_TERRAFORM: ${{ inputs.skip_terraform == true }}
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: package lambdas
+        run: python scripts/package_lambdas.py
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.14.9"
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::424416271636:role/kamp-aoty-ci/kamp-aoty-${{ env.AOTY_ENV }}-deploy
+          role-session-name: aoty-deploy-${{ env.AOTY_ENV }}-${{ github.run_id }}
+          aws-region: us-east-1
+
+      - name: terraform
+        working-directory: infra/envs/${{ env.AOTY_ENV }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false -no-color
+          if [ "$SKIP_TERRAFORM" = "true" ]; then
+            echo "skip_terraform: not applying"
+          else
+            terraform apply -input=false -no-color -auto-approve -lock-timeout=5m
+          fi
+          terraform output -json stack > "$RUNNER_TEMP/stack.json"
+          {
+            echo "BASE_PATH=$(jq -r .base_path "$RUNNER_TEMP/stack.json")"
+            echo "S3_PREFIX=$(jq -r .s3_key_prefix "$RUNNER_TEMP/stack.json")"
+            echo "SITE_BUCKET=$(jq -r .site_bucket_name "$RUNNER_TEMP/stack.json")"
+          } >> "$GITHUB_ENV"
+
+      - name: lambda code
+        run: |
+          set -euo pipefail
+          for fn in api sync mb; do
+            name=$(jq -r ".function_names.$fn" "$RUNNER_TEMP/stack.json")
+            # Wait first: a config change from the apply above leaves the function "InProgress",
+            # and update-function-code would fail with ResourceConflictException.
+            aws lambda wait function-updated --function-name "$name"
+            version=$(aws lambda update-function-code --function-name "$name" \
+              --zip-file "fileb://dist/$fn.zip" --publish --query Version --output text)
+            aws lambda wait function-updated --function-name "$name"
+            echo "$name -> version $version"
+          done
+
+      # No shell yet (later stories add web/): skip, so /toys/aoty/ keeps returning 404 and the
+      # --delete pass below can never empty the prefix.
+      - name: static shell
+        id: shell
+        run: |
+          set -euo pipefail
+          if [ ! -f web/index.html ]; then
+            echo "no web/index.html: shell upload and invalidation skipped"
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dest="s3://$SITE_BUCKET/$S3_PREFIX"
+          # 1. Everything but index.html: hashed assets, cached for a year.
+          aws s3 sync web/ "$dest" --exclude index.html --exclude 'data/*' \
+            --cache-control "public, max-age=31536000, immutable"
+          # 2. index.html last, so it never points at assets that aren't uploaded yet.
+          aws s3 cp web/index.html "${dest}index.html" --cache-control "no-cache"
+          # 3. Remove what the new build dropped; data/ belongs to the chart builder.
+          aws s3 sync web/ "$dest" --delete --exclude 'data/*' --size-only
+          id=$(aws cloudfront create-invalidation --distribution-id EU1A3HSUCEQS9 \
+            --paths "${BASE_PATH}*" --query Invalidation.Id --output text)
+          aws cloudfront wait invalidation-completed --distribution-id EU1A3HSUCEQS9 --id "$id"
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+
+      - name: smoke test
+        env:
+          SHELL_DEPLOYED: ${{ steps.shell.outputs.deployed }}
+        run: |
+          set -euo pipefail
+          site="https://kamp.fm${BASE_PATH}"
+          check() {  # check <expected status> <url>
+            status=$(curl -s -o "$RUNNER_TEMP/body" -w '%{http_code}' --retry 3 --retry-all-errors "$2")
+            echo "$status $2"
+            [ "$status" = "$1" ] || { echo "::error::expected $1, got $status for $2"; cat "$RUNNER_TEMP/body"; exit 1; }
+          }
+          check 200 "${site}api/health"
+          # Prove the new code is live, not Terraform's placeholder.
+          jq -e '.source == "lambdas/api"' "$RUNNER_TEMP/body" > /dev/null
+          check 404 "${site}data/users/__smoke__/chart.json"
+          if [ "$SHELL_DEPLOYED" = "true" ]; then
+            check 200 "$site"
+          fi

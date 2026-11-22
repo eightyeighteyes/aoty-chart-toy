@@ -28,6 +28,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
+      # Workflow typos would otherwise only show up after merge (cd.yml / deploy.yml run from main).
+      - run: actionlint
 
   test:
     name: test
