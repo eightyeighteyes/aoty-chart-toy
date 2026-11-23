@@ -13,6 +13,11 @@
 /* Seam fix (keep it): paint the page colour on the root as well as body, so no compositor
    layer can show the browser's default backdrop (a flat grey seam) through a gap. */
 html { background: var(--bg); color-scheme: dark; min-height: 100%; }
+/* No rubber-band past the page's ends (AOTY-23). macOS Chrome fills the overscroll area with
+   the root background colour but skips the colour conversion the page gets, so it shows as a
+   slightly different strip (sampled #0d0c12 under a page that renders as #100f12) at the
+   bottom, or wherever focusing a field has scrolled to. */
+html, body { overscroll-behavior-y: none; }
 body {
   min-height: 100vh;
   margin: 0;
@@ -218,10 +223,9 @@ ol {
 
 /* The intro (AOTY-23). */
 .intro { max-width: 720px; margin: 0 auto; padding: 64px 40px 72px; }
-/* Seam fix, as for the chart (see html above): a focused field gets the form promoted to its
-   own GPU layer, and an unpainted layer shows the browser's default dark backdrop (#121212-ish,
-   sampled as #100f12) instead of --bg. Painting a background on them keeps the layer the page
-   colour. The form inherits its parent's: --bg on the intro, --panel inside a chart page's .state. */
+/* Belt and braces against compositor seams: the intro paints its own --bg, and the form
+   inherits its parent's (--bg on the intro, --panel inside a chart page's .state). The seam seen
+   first while building this page was overscroll, though: see overscroll-behavior on html. */
 .intro { background: var(--bg); }
 .lookup { background: inherit; }
 .intro-title {
