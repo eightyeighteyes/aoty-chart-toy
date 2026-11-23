@@ -374,10 +374,47 @@ def test_low_time_checkpoints_and_redelivers_at_once(h):
 
 def test_handler_reports_partial_as_a_batch_failure_with_zero_visibility(h, monkeypatch):
   env = Env(h, make_world(20))
-  monkeypatch.setattr(h, "sync_user", lambda msg, ctx, deps: "partial")
+  monkeypatch.setattr(h, "sync_user", lambda msg, ctx, deps, info=None: "partial")
   out, _ = env.record()
   assert out == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
   assert env.sqs.visibility == [{"QueueUrl": "q/sync", "ReceiptHandle": "r1", "VisibilityTimeout": 0}]
+
+
+def _emf_lines(capsys):
+  return [json.loads(x) for x in capsys.readouterr().out.splitlines() if '"_aws"' in x]
+
+
+class CountingLastfm(FakeLastfm):
+  """Counts chart calls the way lastfm.Client.calls does: a running total for the container."""
+
+  def weekly_album_chart(self, user, frm, to):
+    self.calls += 1
+    return super().weekly_album_chart(user, frm, to)
+
+
+def test_each_record_emits_one_metric_line_with_this_syncs_calls_only(h, capsys):
+  env = Env(h, make_world(5))
+  fm = CountingLastfm(env.scrobbles)
+  fm.calls = 100  # a warm container's earlier syncs
+  rec = {"messageId": "m1", "receiptHandle": "r1", "body": json.dumps({"username": "alice"}),
+         "attributes": {"ApproximateReceiveCount": "1"}}  # fmt: skip
+  h.handler({"Records": [rec]}, None, env.deps(fm))
+  (line,) = _emf_lines(capsys)
+  assert line["outcome"] == "done" and line["SyncsDone"] == 1 and line["SyncFailures"] == 0
+  assert line["LastfmCalls"] == fm.calls - 100 > 0
+  assert line["first_sync"] is True and line["weeks"] == 47
+  names = [m["Name"] for m in line["_aws"]["CloudWatchMetrics"][0]["Metrics"]]
+  assert names == ["SyncsDone", "SyncFailures", "LastfmCalls"]
+  assert "alice" not in json.dumps(line)
+
+
+def test_failed_and_terminal_records_are_counted_by_outcome(h, capsys):
+  env = Env(h, make_world(5))
+  env.record(chart_error=lastfm.NOT_FOUND, exists=True)  # unconfirmed: a failure, retried
+  env.record(chart_error=lastfm.PRIVATE)
+  env.record(msg={"username": "!!"})
+  outcomes = [(x["outcome"], x["SyncsDone"], x["SyncFailures"]) for x in _emf_lines(capsys)]
+  assert outcomes == [("failed", 0, 1), ("private", 0, 0), ("invalid", 0, 0)]
 
 
 def test_confirmed_not_found_and_private_users_are_marked_and_not_retried(h):
