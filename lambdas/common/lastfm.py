@@ -9,6 +9,7 @@ Behaviour comes from the AOTY-11 spike (tools/lastfm_spike.py):
 """
 
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -25,6 +26,9 @@ TIMEOUT = 30
 RETRY_CODES = {8, 11, 16, 29}
 NOT_FOUND = 6
 PRIVATE = 17
+# Answers about the user or album, not failures: they never count as LastfmErrors.
+EXPECTED_CODES = {NOT_FOUND, PRIVATE}
+NAMESPACE = "kamp-aoty"
 
 
 class LastfmError(Exception):
@@ -82,6 +86,14 @@ class Client:
       return None, status
 
   def call(self, method, **params):
+    try:
+      return self._call(method, params)
+    except LastfmError as e:
+      if e.code not in EXPECTED_CODES:
+        _emit_error(method, e.code)
+      raise
+
+  def _call(self, method, params):
     q = {"method": method, "api_key": self.api_key, "format": "json", **params}
     error = None
     for attempt in range(1, self.max_attempts + 1):
@@ -165,6 +177,28 @@ class Client:
   def user_exists(self, user):
     """False only on a definite "User not found"; other errors propagate."""
     return self.user_info(user) is not None
+
+
+def _emit_error(method, code):
+  """One EMF line per failed call (after its retries), for the Last.fm error alarm (AOTY-27).
+
+  Only inside a Lambda, so tests and laptop tools don't print metric lines. AOTY-41 adds a
+  LastfmCalls count beside it for a true error rate.
+  """
+  if not os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    return
+  print(json.dumps({
+    "_aws": {
+      "Timestamp": int(time.time() * 1000),
+      "CloudWatchMetrics": [{"Namespace": NAMESPACE, "Dimensions": [["Environment"]],
+                             "Metrics": [{"Name": "LastfmErrors", "Unit": "Count"}]}],
+    },
+    "Environment": os.environ.get("AOTY_ENV", ""),
+    "LastfmErrors": 1,
+    "method": method,
+    "code": str(code),
+    "function": os.environ["AWS_LAMBDA_FUNCTION_NAME"],
+  }))  # fmt: skip
 
 
 _api_key = {}

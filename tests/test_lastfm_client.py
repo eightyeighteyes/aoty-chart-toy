@@ -114,6 +114,41 @@ def test_album_track_count_not_found_is_none_but_other_errors_raise():
     client(FakeHTTP((200, {"error": 10, "message": "bad key"}))).album_track_count("A", "X")
 
 
+def _emf_lines(capsys):
+  return [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"_aws"' in line]
+
+
+def test_a_failed_call_emits_one_lastfm_errors_line_inside_a_lambda(monkeypatch, capsys):
+  monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "kamp-aoty-staging-sync")
+  monkeypatch.setenv("AOTY_ENV", "staging")
+  http = FakeHTTP(*[(200, {"error": 16, "message": "temporary"})] * lastfm.MAX_ATTEMPTS)
+  with pytest.raises(lastfm.LastfmError):
+    client(http).recent_tracks("alice", 0)
+  lines = _emf_lines(capsys)
+  assert len(lines) == 1  # once per call, not per attempt
+  line = lines[0]
+  assert line["LastfmErrors"] == 1 and line["Environment"] == "staging"
+  assert line["method"] == "user.getrecenttracks" and line["code"] == "16"
+  assert line["_aws"]["CloudWatchMetrics"][0]["Metrics"] == [{"Name": "LastfmErrors", "Unit": "Count"}]
+  assert "alice" not in json.dumps(line)
+
+
+def test_not_found_private_and_success_emit_nothing(monkeypatch, capsys):
+  monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "kamp-aoty-staging-api")
+  client(FakeHTTP((404, {"error": 6, "message": "User not found"}))).user_info("x")
+  with pytest.raises(lastfm.LastfmError):
+    client(FakeHTTP((403, {"error": 17, "message": "private"}))).user_exists("x")
+  client(FakeHTTP((200, {"user": {"name": "a"}}))).user_info("a")
+  assert _emf_lines(capsys) == []
+
+
+def test_no_metric_lines_outside_a_lambda(monkeypatch, capsys):
+  monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+  with pytest.raises(lastfm.LastfmError):
+    client(FakeHTTP((403, {"error": 10, "message": "bad key"}))).user_info("x")
+  assert _emf_lines(capsys) == []
+
+
 def test_calls_are_paced():
   t = [0.0]
   sleeps = []
