@@ -13,9 +13,9 @@ answer, errors included, is Cache-Control: no-store.
 POST sync, in order:
   1. A user with no row (or an expired not_found one) is checked with user.getInfo (3 s, one
      attempt). Not found: a not_found row with a one-day TTL (expires_at), then 404.
-  2. api_core.decide_sync: a running sync or the per-user cooldown (SYNC_COOLDOWN) answers 200
-     without queueing.
-  3. A new user is refused (503 busy) while the sync queue is over MAX_QUEUE_FOR_NEW: random
+  2. api_core.decide_sync: a running sync or the per-user cooldown (sync_cooldown_seconds) answers
+     200 without queueing.
+  3. A new user is refused (503 busy) while the sync queue is over max_queue_for_new: random
      real names cost ~50 Last.fm calls each and would starve users already here.
   4. A conditional UpdateItem marks the row queued and stamps sync_requested_at. Losing the
      condition means another request just queued it: 200 in_progress.
@@ -27,6 +27,9 @@ land; its "syncing" would then fail the condition and the cooldown would never b
 
 POST requires content-type application/json (415 otherwise) and no CORS headers are sent, so a
 plain cross-site form can't trigger syncs. Logs name users by a hash, never by username.
+
+The cooldown, the new-user queue limit and the other knobs are runtime settings in SSM
+(common/guardrails.py, AOTY-26), so they change without a deploy.
 """
 
 import hashlib
@@ -38,13 +41,11 @@ from pathlib import Path
 
 import api_core as core
 
-from common import dynamo, lastfm
+from common import dynamo, guardrails, lastfm
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
-DEFAULT_COOLDOWN_S = 600
-MAX_QUEUE_FOR_NEW = 50
 NOT_FOUND_TTL_S = 86400
 LASTFM_TIMEOUT_S = 3
 
@@ -66,11 +67,14 @@ BUILD_SHA = _build_sha(Path(__file__).with_name("build.json"))
 
 class Deps:
   """What the user routes touch, so tests can pass fakes. The Last.fm client is made on first
-  use (it reads the key from SSM), so health checks never wait for SSM."""
+  use (it reads the key from SSM), so health checks never wait for SSM. settings() returns the
+  current guardrails.Settings (cached by guardrails.Reader in the real thing)."""
 
-  def __init__(self, *, ddb, sqs, env, lastfm_client=None, lastfm_factory=None, clock=time.time):
+  def __init__(self, *, ddb, sqs, env, lastfm_client=None, lastfm_factory=None, clock=time.time,
+               settings=None):  # fmt: skip
     self.ddb, self.sqs, self.env, self.clock = ddb, sqs, env, clock
     self._lastfm, self._lastfm_factory = lastfm_client, lastfm_factory
+    self.settings = settings or (lambda: guardrails.DEFAULTS)
 
   @property
   def lastfm(self):
@@ -88,7 +92,9 @@ class Deps:
       key = lastfm.api_key_from_ssm(boto3.client("ssm"), f"{env['SSM_PREFIX']}lastfm_api_key")
       return lastfm.Client(key, max_attempts=1, timeout=LASTFM_TIMEOUT_S)
 
-    return cls(ddb=boto3.client("dynamodb"), sqs=boto3.client("sqs"), env=env, lastfm_factory=make_lastfm)
+    reader = guardrails.Reader(boto3.client("ssm"), env["SSM_PREFIX"], env_name=env.get("AOTY_ENV", ""))
+    return cls(ddb=boto3.client("dynamodb"), sqs=boto3.client("sqs"), env=env, lastfm_factory=make_lastfm,
+               settings=reader.get)  # fmt: skip
 
 
 _deps = None
@@ -133,7 +139,7 @@ def handler(event, context, deps=None):
 
 
 def _cooldown(deps):
-  return int(deps.env.get("SYNC_COOLDOWN") or DEFAULT_COOLDOWN_S)
+  return deps.settings().sync_cooldown_seconds
 
 
 def get_status(deps, name):
@@ -169,7 +175,7 @@ def post_sync(deps, name, headers):
   decision = core.decide_sync(row, now, cooldown)
   if decision != "queue":
     return _response(200, {"queued": False, "reason": decision, "status": core.status(row, now, cooldown)})
-  if not row.get("last_synced_at") and _queue_depth(deps) > MAX_QUEUE_FOR_NEW:
+  if not row.get("last_synced_at") and _queue_depth(deps) > deps.settings().max_queue_for_new:
     return _response(503, {"error": "busy"})
 
   previous = {k: row.get(k) for k in ("state", "sync_requested_at")}

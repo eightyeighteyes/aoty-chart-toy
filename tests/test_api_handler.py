@@ -7,12 +7,12 @@ from pathlib import Path
 import api_core as core
 import pytest
 
-from common import dynamo
+from common import dynamo, guardrails
 
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "api" / "handler.py"
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
-ENV = {"USERS_TABLE": "users", "SYNC_QUEUE_URL": "q/sync", "SYNC_COOLDOWN": "600"}
+ENV = {"USERS_TABLE": "users", "SYNC_QUEUE_URL": "q/sync"}
 
 
 @pytest.fixture
@@ -95,9 +95,10 @@ class FakeLastfm:
     return self.name
 
 
-def deps(h, ddb=None, sqs=None, fm=None, now=NOW):
+def deps(h, ddb=None, sqs=None, fm=None, now=NOW, **settings):
+  s = guardrails.Settings(**settings)
   return h.Deps(ddb=ddb or FakeDDB(), sqs=sqs or FakeSQS(), env=ENV, lastfm_client=fm or FakeLastfm(),
-                clock=lambda: now)  # fmt: skip
+                clock=lambda: now, settings=lambda: s)  # fmt: skip
 
 
 def call(h, d, method, name, action, ctype="application/json"):
@@ -209,9 +210,18 @@ def test_a_foreign_casing_from_lastfm_isnt_stored(h):
 
 
 def test_new_users_wait_when_the_queue_is_busy(h):
-  d = deps(h, sqs=FakeSQS(depth=h.MAX_QUEUE_FOR_NEW + 1))
+  d = deps(h, sqs=FakeSQS(depth=51), max_queue_for_new=50)
   code, body = sync(h, d)
   assert code == 503 and body["error"] == "busy" and d.sqs.sent == []
+  assert sync(h, deps(h, sqs=FakeSQS(depth=51)))[0] == 202  # the default limit is higher
+
+
+def test_the_cooldown_is_a_runtime_setting(h):
+  d = deps(h)
+  sync(h, d)
+  d.ddb.rows["alice"].update(state="done", sync_started_at=NOW + 1, sync_finished_at=NOW + 60)
+  code, body = sync(h, deps(h, d.ddb, d.sqs, now=NOW + 700, sync_cooldown_seconds=3600))
+  assert code == 200 and body["reason"] == "cooldown" and body["status"]["cooldown_until"] == NOW + 3600
 
 
 def test_known_users_still_queue_when_busy(h):

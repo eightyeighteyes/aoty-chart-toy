@@ -30,7 +30,6 @@ locals {
     MB_FUNCTION    = "${local.prefix}-mb"
     CHART_FUNCTION = "${local.prefix}-chart"
     SITE_PREFIX    = local.s3_key_prefix
-    SYNC_COOLDOWN  = tostring(var.sync_cooldown_seconds)
   }
 
   queue_consume = [

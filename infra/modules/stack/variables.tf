@@ -52,9 +52,3 @@ variable "api_throttle_rate" {
   type        = number
   default     = 10
 }
-
-variable "sync_cooldown_seconds" {
-  description = "A page visit queues a user's sync at most this often (AOTY-22)"
-  type        = number
-  default     = 600
-}
