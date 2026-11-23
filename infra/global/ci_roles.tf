@@ -410,6 +410,20 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # The env's one dashboard (AOTY-41, modules/stack/dashboard.tf), by its exact name: every
+  # dashboard past the account's 3 free ones costs $3/month, and any branch can deploy as the
+  # sandbox role. Dashboard ARNs have no region. Dashboards take no tags.
+  statement {
+    sid       = "OwnDashboard"
+    actions   = ["cloudwatch:PutDashboard", "cloudwatch:GetDashboard", "cloudwatch:DeleteDashboards"]
+    resources = ["arn:aws:cloudwatch::${local.account}:dashboard/kamp-aoty-${each.key}-dashboard"]
+  }
+  statement {
+    sid       = "ListDashboards"
+    actions   = ["cloudwatch:ListDashboards"]
+    resources = ["*"]
+  }
+
   # CD invalidates its env's base path after a shell upload (AOTY-17). IAM can't scope an
   # invalidation by path, so either env's role could invalidate the other's (or kamp's) paths;
   # the worst case is a cache refill, and the workflow only ever sends its own <base>*.
@@ -665,6 +679,11 @@ data "aws_iam_policy_document" "plan" {
     sid       = "DescribeAlarms"
     actions   = ["cloudwatch:DescribeAlarms"]
     resources = ["*"]
+  }
+  statement {
+    sid       = "DashboardMetadata"
+    actions   = ["cloudwatch:GetDashboard"]
+    resources = ["arn:aws:cloudwatch::${local.account}:dashboard/kamp-aoty-*"]
   }
   statement {
     sid       = "ScheduleMetadata"
