@@ -49,7 +49,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `.github/workflows/ci.yml` | CI (AOTY-16): `lint`, `test`, `terraform` (fmt + validate), `terraform-plan` (staging + prod via the OIDC plan role, one PR comment edited in place). All four are required on `main`. |
 | `.github/workflows/cd.yml`, `deploy.yml` | CD (AOTY-17): after CI passes on `main`, deploy staging, then release-please; a `v*` tag deploys prod; `workflow_dispatch` for rollback, or to deploy any branch to sandbox (`-f environment=sandbox -f skip_terraform=false`, needs a reviewer). Flow, rollback and the release App setup are in `infra/README.md`, "Deploys and releases". |
 | `scripts/sandbox_reset.py` | AOTY-33: wipes sandbox data (queues, bucket versions, table items; `--keep-albums`), keeping its infrastructure. Dry run unless `--yes`; refuses anything that isn't a `kamp-aoty-sandbox-*` name in the expected account. Admin credentials. |
-| `lambdas/{api,sync,mb,chart}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`, each stamped with a `build.json` `{"sha"}` (`-dirty` for uncommitted or untracked packaged files) that `/api/health` reports and CD's smoke test checks (AOTY-35). Don't add a `build.json` to the source: packaging rejects it. |
+| `lambdas/{api,sync,mb,chart,uptime}/handler.py` | Lambda code CD deploys (Terraform only creates functions). Shared code goes in `lambdas/common/` (imported as `common.*`; `albumkey` holds `norm`/`base_title`, which `aoty.py` re-exports), runtime deps in `lambdas/requirements.txt` (standard library only so far). `scripts/package_lambdas.py` builds reproducible arm64 zips into `dist/`, each stamped with a `build.json` `{"sha"}` (`-dirty` for uncommitted or untracked packaged files) that `/api/health` reports and CD's smoke test checks (AOTY-35). Don't add a `build.json` to the source: packaging rejects it. |
 | `lambdas/sync/` | Sync worker (AOTY-18). `sync_core.py` is pure (week ranges, settle rule, merging, mb selection, covers); `handler.py` does the S3/DynamoDB/SQS I/O behind an injectable `Deps`. Contract and store format are in the module docstrings. |
 | `lambdas/mb/` | MusicBrainz lane (AOTY-19). `mb_core.py` is pure (year then track lookups in M0's order, items); `handler.py` drains the queues and writes the `albums` table behind an injectable `Deps`. Contract in the module docstrings and "MusicBrainz lane" below. |
 | `lambdas/common/mbmatch.py`, `musicbrainz.py` | The matching rules (`pick_release_group`/`pick_year`, `pick_release`, `title_tier`, `is_single`, query clauses), shared by M0 (`aoty.py`/`build_page.py` re-export them) and the mb Lambda; and the standard-library MusicBrainz client with a per-call deadline. |
@@ -60,6 +60,8 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`: no member filter, dots or Weighted) `intro.js` (the intro page's pure rules, AOTY-23) and `firstvisit.js` (the banner's and first visit's rules, AOTY-24), both tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base>` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
+| `lambdas/uptime/` | Hourly uptime check (AOTY-27). `uptime_core.py` is pure (URLs, what counts as up); `handler.py` fetches `kamp.fm<base>`, `api/health` and the SSM `uptime_user`'s chart.json, and emits `UptimeChecks`/`UptimeFailures` even on a crash. |
+| `infra/modules/stack/alarms.tf`, `infra/global/alerts.tf` | AOTY-27: the alarms (one table, `alarms` = full/basic/none per env), and the global `kamp-aoty-alerts` topic and $40 budget. Runbook: `infra/README.md`, "Alarms". |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
@@ -494,6 +496,33 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   doesn't loop. Index re-checks that change an album already on a chart show up at the next sync.
 - Sandbox has no kamp.fm path: test the Lambda half there (chart.json lands in its site bucket),
   and the page with `tools/serve_shell.py`.
+
+## Monitoring (AOTY-27, 2026-11-23)
+
+- **One SNS topic for everything**, `kamp-aoty-alerts` in `infra/global/`: every env's alarms,
+  the budget, and AOTY-37's stale-index alarms when they come. The email subscription is made by
+  hand (`infra/README.md`, "Alerts"): the repo is public, so the address must never be in it.
+- **Tiers:** prod `full` (about 18 alarms), staging `basic` (DLQs and uptime), sandbox `none`.
+  The sandbox deploy role gets **no** alarm writes: any branch can use it.
+- Free tier is 10 alarms for the whole account, so the rest is about $0.10/month each. A new
+  alarm goes in prod only unless staging really needs it.
+- **Thresholds come from measurements, not "any wait":**
+  - The sync queue age limit is 4 h, because `max_queue_for_new` 500 at the load test's ~2.3
+    syncs/min is a ~3.6 h line by design.
+  - mb throughput counts misses as well as resolved albums, or the daily re-check pass would fire it.
+  - The 503 threshold is 85%, because 45–61% is normal.
+- **The DLQ alarms keep their state on missing data.** SQS stops publishing for an untouched queue
+  after about 6 h, even with messages in it, and that would otherwise send a false "OK".
+- **API 5xx is counted from the access log**, not API Gateway's 5xx metric. The api's own 503s
+  (busy, paused) are deliberate. `status` is a string in the jsonencoded log, so the filter
+  compares strings. The env is in the metric name (`ApiServerErrors-prod`), because a filter with a
+  default value can't have dimensions.
+- `LastfmErrors` is one EMF line per failed `Client.call`, after retries, leaving out 6 and 17. It is
+  printed only inside a Lambda (`AWS_LAMBDA_FUNCTION_NAME`). AOTY-41 adds `LastfmCalls`.
+- **The budget is account-wide**, because kamp-site shares the account and a cost allocation tag
+  only counts from the day it was activated.
+- Sync continuations (`partial`) count toward `maxReceiveCount` 5, so a sync that needs more than
+  5 runs reaches the DLQ: AOTY-46.
 
 ## Page — design decisions
 
