@@ -6,8 +6,10 @@ answer, errors included, is Cache-Control: no-store.
 
   GET  <base>api/health               200 {ok, source, env, sha} (CD's smoke test)
   POST <base>api/users/<name>/sync    202 {queued: true, status} | 200 {queued: false, reason, status}
+                                      (reason: in_progress, cooldown or paused)
                                       400 bad name, 404 no such Last.fm user, 415 not JSON,
-                                      503 Last.fm or SQS unavailable, or too busy for a new user
+                                      503 Last.fm or SQS unavailable, too busy for a new user
+                                      (busy), or new users paused (paused)
   GET  <base>api/users/<name>/status  200 status (api_core.status) | 404 unknown user
 
 POST sync, in order:
@@ -29,7 +31,11 @@ POST requires content-type application/json (415 otherwise) and no CORS headers 
 plain cross-site form can't trigger syncs. Logs name users by a hash, never by username.
 
 The cooldown, the new-user queue limit and the other knobs are runtime settings in SSM
-(common/guardrails.py, AOTY-26), so they change without a deploy.
+(common/guardrails.py, AOTY-26), so they change without a deploy. The kill switch:
+  pause_new_users  a user with no finished sync gets 503 paused, before any Last.fm call
+  pause_syncs      nothing is queued: existing users get 200 paused (their chart still serves),
+                   new users 503 paused. Messages already queued still drain; the hard stop is
+                   disabling the sync event source mapping (infra/README.md).
 """
 
 import hashlib
@@ -156,10 +162,12 @@ def post_sync(deps, name, headers):
   ctype = next((v for k, v in headers.items() if k.lower() == "content-type"), "")
   if not ctype.lower().startswith("application/json"):
     return _response(415, {"error": "send content-type: application/json"})
-  now, cooldown = int(deps.clock()), _cooldown(deps)
+  now, cooldown, settings = int(deps.clock()), _cooldown(deps), deps.settings()
   row = _get_user(deps, name)
   display = None
   if not row or (row.get("state") == "not_found" and (row.get("expires_at") or 0) <= now):
+    if settings.new_users_paused:  # before user.getInfo: a pause spends nothing on Last.fm
+      return _response(503, {"error": "paused"})
     try:
       canonical = deps.lastfm.user_info(name)
     except Exception as e:  # LastfmError, a timeout, SSM: say "try later", never "no such user"
@@ -179,7 +187,13 @@ def post_sync(deps, name, headers):
   if decision != "queue":
     body = {"queued": False, "reason": decision, "status": core.status(row, now, cooldown, depth)}
     return _response(200, body)
-  if not row.get("last_synced_at") and _queue_depth(deps) > deps.settings().max_queue_for_new:
+  new = not row.get("last_synced_at")
+  if new and settings.new_users_paused:
+    return _response(503, {"error": "paused"})
+  if settings.pause_syncs:  # an existing user: their chart still serves; the banner stays quiet
+    body = {"queued": False, "reason": "paused", "status": core.status(row, now, cooldown, depth)}
+    return _response(200, body)
+  if new and _queue_depth(deps) > settings.max_queue_for_new:
     return _response(503, {"error": "busy"})
 
   previous = {k: row.get(k) for k in ("state", "sync_requested_at")}

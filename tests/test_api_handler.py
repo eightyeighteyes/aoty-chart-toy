@@ -242,6 +242,49 @@ def test_new_users_wait_when_the_queue_is_busy(h):
   assert sync(h, deps(h, sqs=FakeSQS(depth=51)))[0] == 202  # the default limit is higher
 
 
+def test_pausing_new_users_refuses_them_before_asking_lastfm(h):
+  fm = FakeLastfm()
+  d = deps(h, fm=fm, pause_new_users=True)
+  code, body = sync(h, d)
+  assert code == 503 and body["error"] == "paused"
+  assert fm.calls == 0 and d.ddb.rows == {} and d.sqs.sent == []
+
+
+def test_a_cold_container_that_cant_read_ssm_pauses_new_users(h):
+  d = deps(h, loaded=False)
+  assert sync(h, d)[1]["error"] == "paused"
+
+
+def test_pausing_new_users_leaves_existing_users_syncing(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
+  assert sync(h, deps(h, ddb, pause_new_users=True))[0] == 202
+
+
+def test_a_known_name_that_never_finished_a_sync_counts_as_new(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "error", "sync_requested_at": NOW - 5000}
+  assert sync(h, deps(h, ddb, pause_new_users=True))[1]["error"] == "paused"
+
+
+def test_pausing_syncs_queues_nothing_and_existing_users_hear_paused(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
+  d = deps(h, ddb, pause_syncs=True)
+  code, body = sync(h, d)
+  assert code == 200 and body["queued"] is False and body["reason"] == "paused"
+  assert body["status"]["stage"] == "idle" and d.sqs.sent == []
+  assert ddb.rows["alice"]["state"] == "done"
+  assert sync(h, d, "bob")[1]["error"] == "paused"
+
+
+def test_a_paused_user_already_queued_is_still_in_progress(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5}
+  code, body = sync(h, deps(h, ddb, pause_new_users=True))
+  assert code == 200 and body["reason"] == "in_progress"
+
+
 def test_the_cooldown_is_a_runtime_setting(h):
   d = deps(h)
   sync(h, d)
