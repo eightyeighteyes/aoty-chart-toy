@@ -22,8 +22,8 @@ resource "aws_dynamodb_table" "users" {
 
 # Guardrail counters (AOTY-26), apart from users because the chart builder Scans that table:
 #   ip#<hash>#<hour>  {names: string set of hashed usernames, expires_at}  the per-IP new-name limit
-#   queue             {joined, started}  queue tickets handed out and used up (queue position)
-#   stats             {first_syncs, first_sync_seconds}  measured first-sync time (estimated wait)
+#   queue             {joined, started}  queue tickets handed out and used up (queue position), and
+#                     {first_syncs, first_sync_seconds}  measured first-sync time (estimated wait)
 # Only the ip# items set expires_at. Nothing here is precious: an empty table just restarts counts.
 resource "aws_dynamodb_table" "guard" {
   name         = "${local.prefix}-guard"

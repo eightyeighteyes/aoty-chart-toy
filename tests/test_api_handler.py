@@ -37,10 +37,14 @@ class FakeDDB:
 
   def _guard_update(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
                     ConditionExpression=None, **kw):  # fmt: skip
-    """The api's per-IP update: ADD a name tag to a set if there's room or it's already there."""
-    assert UpdateExpression == "ADD #n :h SET #e = if_not_exists(#e, :exp)"
+    """The api's guard updates: the per-IP name set, and the queue counters."""
     item = self.guard.setdefault(Key["id"]["S"], {})
     v = ExpressionAttributeValues
+    if Key["id"]["S"] == "queue":  # ADD #x :one
+      field = ExpressionAttributeNames[UpdateExpression.split()[1]]
+      item[field] = item.get(field, 0) + 1
+      return {"Attributes": {field: {"N": str(item[field])}}}
+    assert UpdateExpression == "ADD #n :h SET #e = if_not_exists(#e, :exp)"
     names, tag, limit = item.get("names", set()), v[":t"]["S"], int(v[":lim"]["N"])
     if names and len(names) >= limit and tag not in names:
       raise ConditionFailed()
@@ -49,6 +53,9 @@ class FakeDDB:
     return {}
 
   def get_item(self, TableName, Key, **kw):
+    if TableName == "guard":
+      item = self.guard.get(Key["id"]["S"])
+      return {"Item": {k: {"N": str(v)} for k, v in item.items()}} if item else {}
     row = self.rows.get(Key["username"]["S"])
     if row is None:
       return {}
@@ -327,13 +334,13 @@ def test_known_users_dont_count_against_the_ip(h):
   ddb = FakeDDB()
   ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
   d = deps(h, ddb, new_users_per_ip_hour=1)
-  assert sync(h, d, "alice")[0] == 202 and ddb.guard == {}
+  assert sync(h, d, "alice")[0] == 202 and list(ddb.guard) == ["queue"]
 
 
 def test_the_guard_table_stores_no_address_or_name(h):
   d = deps(h)
   sync(h, d, "alice", ip="198.51.100.7")
-  ((key, item),) = d.ddb.guard.items()
+  ((key, item),) = [(k, v) for k, v in d.ddb.guard.items() if k.startswith("ip#")]
   assert "198.51.100.7" not in key and "alice" not in str(item)
   assert item["expires_at"] == (NOW // 3600 + 2) * 3600
 
@@ -436,13 +443,61 @@ def test_status_of_an_unknown_or_not_found_user_is_404(h):
   assert status(h, deps(h, ddb), "nobody")[0] == 404
 
 
-def test_status_reads_progress_and_queue_depth(h):
+def test_status_reads_progress_and_the_place_in_line(h):
   ddb = FakeDDB()
-  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5,
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5, "queue_ticket": 40,
                        "progress": {"weeks_done": 0, "weeks_total": 4, "plays": 0}}  # fmt: skip
-  code, body = status(h, deps(h, ddb, FakeSQS(depth=3)))
-  assert code == 200 and body["stage"] == "queued" and body["queue_ahead_approx"] == 3
+  ddb.guard["queue"] = {"joined": 45, "started": 33}
+  code, body = status(h, deps(h, ddb, FakeSQS(depth=12)))
+  assert code == 200 and body["stage"] == "queued" and body["queue"] == {"position": 7}
   assert body["weeks"] == {"done": 0, "total": 4}
+
+
+def test_queueing_hands_out_tickets_in_order(h):
+  d = deps(h)
+  sync(h, d, "alice")
+  sync(h, d, "bob")
+  assert d.ddb.rows["alice"]["queue_ticket"] == 1 and d.ddb.rows["bob"]["queue_ticket"] == 2
+
+
+def test_a_failed_send_burns_its_ticket(h):
+  ddb = FakeDDB()
+  sync(h, deps(h, ddb, FakeSQS(fail=True)))
+  assert ddb.guard["queue"] == {"joined": 1, "started": 1} and "queue_ticket" not in ddb.rows["alice"]
+
+
+def test_losing_the_race_burns_the_ticket(h):
+  def other_request(rows):
+    rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW}
+
+  ddb = FakeDDB(race=other_request)
+  sync(h, deps(h, ddb))
+  assert ddb.guard["queue"] == {"joined": 1, "started": 1}
+
+
+def test_replacing_a_stale_mark_burns_its_old_ticket(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {
+    "username": "alice",
+    "state": "queued",
+    "sync_requested_at": NOW - 7200,
+    "queue_ticket": 9,
+  }
+  ddb.guard["queue"] = {"joined": 9, "started": 0}
+  assert sync(h, deps(h, ddb, FakeSQS(depth=0)))[0] == 202
+  assert ddb.rows["alice"]["queue_ticket"] == 10 and ddb.guard["queue"]["started"] == 1
+
+
+def test_no_ticket_still_queues(h):
+  class NoGuard(FakeDDB):
+    def update_item(self, TableName, **kw):
+      if TableName == "guard" and kw["Key"]["id"]["S"] == "queue":
+        raise RuntimeError("DynamoDB down")
+      return super().update_item(TableName, **kw)
+
+  ddb = NoGuard()
+  code, body = sync(h, deps(h, ddb))
+  assert code == 202 and "queue_ticket" not in ddb.rows["alice"] and "queue" not in body["status"]
 
 
 def test_status_matches_the_core(h):

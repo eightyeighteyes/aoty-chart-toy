@@ -19,6 +19,7 @@ YEAR_START = calendar.timegm((2026, 1, 1, 0, 0, 0))
 ENV = {
   "USERS_TABLE": "users",
   "ALBUMS_TABLE": "albums",
+  "GUARD_TABLE": "guard",
   "STORE_BUCKET": "store",
   "SYNC_QUEUE_URL": "q/sync",
   "MB_HOT_URL": "q/hot",
@@ -152,6 +153,7 @@ class FakeDDB:
   def __init__(self, resolved=(), unprocessed_once=False):
     self.users, self.resolved = {}, set(resolved)
     self.unprocessed_once, self.batch_gets = unprocessed_once, 0
+    self.guard = Counter()  # the guard table's queue item
 
   def get_item(self, TableName, Key):
     item = self.users.get(Key["username"]["S"])
@@ -163,6 +165,12 @@ class FakeDDB:
   def update_item(
     self, TableName, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues
   ):
+    if TableName == "guard":
+      assert Key == {"id": {"S": "queue"}} and UpdateExpression.startswith("ADD ")
+      for part in UpdateExpression.removeprefix("ADD ").split(", "):
+        name, value = part.split(" ")
+        self.guard[ExpressionAttributeNames[name]] += _py(ExpressionAttributeValues[value])
+      return
     row = self.users.setdefault(Key["username"]["S"], {})
     sets, _, removes = UpdateExpression.removeprefix("SET ").partition(" REMOVE ")
     for part in sets.split(", "):
@@ -653,3 +661,44 @@ def test_a_terminal_stop_records_the_finish(h):
   env.run(chart_error=lastfm.PRIVATE)
   row = env.ddb.users["alice"]
   assert row["state"] == "private" and row["sync_finished_at"] == NOW
+
+
+# ---- queue tickets and the measured wait (AOTY-26) ---------------------------------------
+
+
+def test_starting_a_sync_uses_up_its_queue_ticket_once(h):
+  env = Env(h, make_world(5))
+  env.ddb.users["alice"] = {"username": "alice", "state": "queued", "queue_ticket": 41}
+  env.run()
+  assert "queue_ticket" not in env.ddb.users["alice"] and env.ddb.guard["started"] == 1
+  env.now += 3600
+  env.run()  # no ticket this time (say a direct invoke): nothing counted
+  assert env.ddb.guard["started"] == 1
+
+
+def test_a_clean_first_sync_records_its_time(h):
+  env = Env(h, make_world(5))
+  env.run()
+  assert env.ddb.guard["first_syncs"] == 1 and env.ddb.guard["first_sync_seconds"] >= 1
+  env.now += 3600
+  env.run()  # a return sync isn't a first sync
+  assert env.ddb.guard["first_syncs"] == 1
+
+
+def test_a_resumed_first_sync_isnt_timed(h):
+  env = Env(h, make_world(20))
+  assert env.run(context=Context([900_000] * 5 + [30_000]))[0] == "partial"
+  assert env.run()[0] == "done"
+  assert env.ddb.guard["first_syncs"] == 0  # only the tail would have been timed
+
+
+def test_counter_trouble_never_fails_a_sync(h):
+  class Broken(FakeDDB):
+    def update_item(self, TableName, **kw):
+      if TableName == "guard":
+        raise RuntimeError("DynamoDB down")
+      return super().update_item(TableName, **kw)
+
+  env = Env(h, make_world(5), ddb=Broken())
+  env.ddb.users["alice"] = {"username": "alice", "state": "queued", "queue_ticket": 3}
+  assert env.run()[0] == "done"

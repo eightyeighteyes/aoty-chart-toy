@@ -203,10 +203,27 @@ def test_status_body():
 
 
 def test_status_extras_for_queued_and_error():
-  queued = core.status({"state": "queued", "sync_requested_at": NOW - 5}, NOW, COOL, queue_depth=7)
-  assert queued["stage"] == "queued" and queued["queue_ahead_approx"] == 7
-  failed = core.status({"state": "private", "sync_finished_at": NOW}, NOW, COOL, queue_depth=7)
-  assert failed["reason"] == "private" and "queue_ahead_approx" not in failed
+  row = {"state": "queued", "sync_requested_at": NOW - 5, "queue_ticket": 50}
+  queued = core.status(row, NOW, COOL, queue_depth=70, queue={"started": 40})
+  assert queued["stage"] == "queued" and queued["queue"] == {"position": 10}
+  assert "queue" not in core.status(row, NOW, COOL, queue_depth=70)  # counters unreadable
+  assert "queue" not in core.status({**row, "queue_ticket": None}, NOW, COOL, 70, {"started": 40})
+  failed = core.status({"state": "private", "sync_finished_at": NOW, "queue_ticket": 50}, NOW, COOL, 7, {})
+  assert failed["reason"] == "private" and "queue" not in failed
+
+
+def test_the_place_in_line_stays_within_the_queue():
+  assert core.queue_place(50, 3, {"started": 10}, 2) == {"position": 3}  # FIFO groups jumped ahead
+  assert core.queue_place(50, 90, {"started": 60}, 2) == {"position": 1}  # later tickets started first
+  assert core.queue_place(5, None, {}, 2) == {"position": 1}
+
+
+def test_a_wait_is_estimated_only_from_enough_first_syncs():
+  few = {"started": 0, "first_syncs": core.WAIT_MIN_SAMPLES - 1, "first_sync_seconds": 1000}
+  assert "wait_s" not in core.queue_place(10, 99, few, 2)
+  enough = {"started": 0, "first_syncs": 20, "first_sync_seconds": 20 * 60}
+  assert core.queue_place(10, 99, enough, 2)["wait_s"] == 5 * 60  # 10 in line, 2 at a time, 60 s each
+  assert core.queue_place(1, 99, enough, 2)["wait_s"] == 60  # next up: just its own sync
 
 
 def test_status_without_chart_fields():

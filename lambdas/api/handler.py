@@ -90,7 +90,7 @@ class Deps:
     self._lastfm, self._lastfm_factory = lastfm_client, lastfm_factory
     self.settings = settings or (lambda: guardrails.DEFAULTS)
     self.origin_secrets = origin_secrets or (lambda: ())
-    self.depth_cache = None  # (expires, depth), see _queue_depth
+    self.depth_cache = self.counters_cache = None  # (expires, value): _queue_depth, _queue_counters
 
   @property
   def lastfm(self):
@@ -167,13 +167,20 @@ def _cooldown(deps):
   return deps.settings().sync_cooldown_seconds
 
 
+def _status(deps, row, now, cooldown):
+  """core.status, with the queue's depth and counters read only for a queued row."""
+  if row.get("state") != "queued":
+    return core.status(row, now, cooldown)
+  counters = _queue_counters(deps) if row.get("queue_ticket") is not None else None
+  concurrency = int(deps.env.get("SYNC_CONCURRENCY") or 2)
+  return core.status(row, now, cooldown, _queue_depth(deps), counters, concurrency)
+
+
 def get_status(deps, name):
   row = _get_user(deps, name)
   if not row or row.get("state") == "not_found":
     return _response(404, {"error": "unknown user"})
-  now = int(deps.clock())
-  depth = _queue_depth(deps) if row.get("state") == "queued" else None
-  return _response(200, core.status(row, now, _cooldown(deps), depth))
+  return _response(200, _status(deps, row, int(deps.clock()), _cooldown(deps)))
 
 
 def post_sync(deps, name, headers, ip, trusted=False):
@@ -209,23 +216,23 @@ def post_sync(deps, name, headers, ip, trusted=False):
   depth = _queue_depth(deps) if row.get("state") == "queued" else None
   decision = core.decide_sync(row, now, cooldown, depth)
   if decision != "queue":
-    body = {"queued": False, "reason": decision, "status": core.status(row, now, cooldown, depth)}
-    return _response(200, body)
+    return _response(200, {"queued": False, "reason": decision, "status": _status(deps, row, now, cooldown)})
   new = not row.get("last_synced_at")
   if new and settings.new_users_paused:
     return _response(503, {"error": "paused"})
   if settings.pause_syncs:  # an existing user: their chart still serves; the banner stays quiet
-    body = {"queued": False, "reason": "paused", "status": core.status(row, now, cooldown, depth)}
-    return _response(200, body)
+    return _response(200, {"queued": False, "reason": "paused", "status": _status(deps, row, now, cooldown)})
   if new and _queue_depth(deps) > settings.max_queue_for_new:
     return _response(503, {"error": "busy"})
 
-  previous = {k: row.get(k) for k in ("state", "sync_requested_at")}
-  if not _mark_queued(deps, name, now, cooldown, display):
+  previous = {k: row.get(k) for k in ("state", "sync_requested_at", "queue_ticket")}
+  ticket = _take_ticket(deps)
+  if not _mark_queued(deps, name, now, cooldown, display, ticket):
+    _burn_tickets(deps, ticket)
     row = _get_user(deps, name)
-    depth = _queue_depth(deps)
-    body = {"queued": False, "reason": "in_progress", "status": core.status(row, now, cooldown, depth)}
-    return _response(200, body)
+    return _response(
+      200, {"queued": False, "reason": "in_progress", "status": _status(deps, row, now, cooldown)}
+    )
   try:
     deps.sqs.send_message(
       QueueUrl=deps.env["SYNC_QUEUE_URL"],
@@ -236,10 +243,14 @@ def post_sync(deps, name, headers, ip, trusted=False):
   except Exception:
     log.exception("could not queue a sync for %s", _tag(name))
     _restore(deps, name, previous)
+    _burn_tickets(deps, ticket)
     return _response(503, {"error": "queue_unavailable"})
   log.info("sync queued for %s", _tag(name))
+  # A stale mark being replaced held a ticket no sync will use up: burn it, or everyone behind
+  # it would read one place further back for good.
+  _burn_tickets(deps, previous["queue_ticket"])
   row = _get_user(deps, name)
-  return _response(202, {"queued": True, "status": core.status(row, now, cooldown, _queue_depth(deps))})
+  return _response(202, {"queued": True, "status": _status(deps, row, now, cooldown)})
 
 
 # ---- users table --------------------------------------------------------------------------
@@ -272,15 +283,18 @@ def _update(deps, name, fields, remove=()):
                        ExpressionAttributeValues=values)  # fmt: skip
 
 
-def _mark_queued(deps, name, now, cooldown, display):
-  """Set state=queued and sync_requested_at, unless another request beat us to it. True if set.
+def _mark_queued(deps, name, now, cooldown, display, ticket=None):
+  """Set state=queued and sync_requested_at (and queue_ticket), unless another request beat us
+  to it. True if set.
 
   The condition repeats decide_sync atomically: no recent request, and no live sync (one idle
-  past STUCK_AFTER counts as dead).
+  past STUCK_AFTER counts as dead; decide_sync has already kept a queued row in a long queue).
   """
   fields = {"state": "queued", "sync_requested_at": now}
   if display:
     fields["display_name"] = display
+  if ticket is not None:
+    fields["queue_ticket"] = ticket
   names = {"#s": "state", "#rq": "sync_requested_at", "#st": "sync_started_at",
            **{f"#f{i}": k for i, k in enumerate(fields)}}  # fmt: skip
   values = dynamo.to_item({
@@ -319,11 +333,60 @@ def _restore(deps, name, previous):
     if keep:
       _update(deps, name, keep, remove=gone)
     else:
+      names = {f"#r{i}": k for i, k in enumerate(gone)}
       deps.ddb.update_item(TableName=deps.env["USERS_TABLE"], Key={"username": {"S": name}},
-                           UpdateExpression="REMOVE #a, #b",
-                           ExpressionAttributeNames={"#a": "state", "#b": "sync_requested_at"})  # fmt: skip
+                           UpdateExpression="REMOVE " + ", ".join(names),
+                           ExpressionAttributeNames=names)  # fmt: skip
   except Exception:
     log.exception("could not undo the queued mark for %s", _tag(name))
+
+
+# ---- queue tickets (AOTY-26; the counters are api_core.queue_place's) ----------------------
+
+QUEUE_KEY = {"id": {"S": "queue"}}
+
+
+def _take_ticket(deps):
+  """The next place in line (the queue item's joined counter), or None if it can't be had: the
+  sync is queued anyway, just without a position to show."""
+  try:
+    out = deps.ddb.update_item(
+      TableName=deps.env["GUARD_TABLE"], Key=QUEUE_KEY, UpdateExpression="ADD #j :one",
+      ExpressionAttributeNames={"#j": "joined"}, ExpressionAttributeValues={":one": {"N": "1"}},
+      ReturnValues="UPDATED_NEW",
+    )  # fmt: skip
+    return int(out["Attributes"]["joined"]["N"])
+  except Exception:
+    log.exception("could not take a queue ticket")
+    return None
+
+
+def _burn_tickets(deps, ticket):
+  """Count a ticket no sync will start with as used up, so the places behind it move up."""
+  if ticket is None:
+    return
+  try:
+    deps.ddb.update_item(
+      TableName=deps.env["GUARD_TABLE"], Key=QUEUE_KEY, UpdateExpression="ADD #s :one",
+      ExpressionAttributeNames={"#s": "started"}, ExpressionAttributeValues={":one": {"N": "1"}},
+    )  # fmt: skip
+  except Exception:
+    log.exception("could not burn a queue ticket")
+
+
+def _queue_counters(deps):
+  """The queue item's counters, cached like the depth; None when unreadable (no position shown)."""
+  now = deps.clock()
+  if deps.counters_cache and now < deps.counters_cache[0]:
+    return deps.counters_cache[1]
+  try:
+    item = deps.ddb.get_item(TableName=deps.env["GUARD_TABLE"], Key=QUEUE_KEY).get("Item") or {}
+    counters = {k: int(v["N"]) for k, v in item.items() if "N" in v}
+  except Exception:
+    log.exception("could not read the queue counters")
+    return None
+  deps.counters_cache = (now + DEPTH_TTL_S, counters)
+  return counters
 
 
 IP_WINDOW_S = 3600

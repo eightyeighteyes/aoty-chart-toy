@@ -143,7 +143,14 @@ def sync_user(msg, context, deps):
     first_page = _first_recent_page(deps, username, year)
     if first_page is not None:
       started["preview"] = json.dumps({"wall": core.wall_from_tracks(first_page[0])}, separators=(",", ":"))
-  _update_user(deps, username, started)
+  # The queue ticket the api handed out (AOTY-26) is used up when the sync starts, so the users
+  # still waiting move up a place. The FIFO group means no other worker has this user now.
+  ticket = user.get("queue_ticket")
+  _update_user(deps, username, started, remove=("queue_ticket",) if ticket is not None else ())
+  if ticket is not None:
+    _guard_add(deps, {"started": 1})
+  # A clean first sync (no earlier attempt) measures the job time a queue's wait is estimated from.
+  timed_first = not store.get("last_seen_uts") and not user.get("sync_started_at")
   log.info("sync %s year=%s full=%s weeks=%d", tag, year, full, len(todo))
 
   try:
@@ -185,6 +192,8 @@ def sync_user(msg, context, deps):
   if store.get("last_seen_uts"):
     done["last_seen_uts"] = store["last_seen_uts"]
   _update_user(deps, username, done, remove=("error_code",))
+  if timed_first:
+    _guard_add(deps, {"first_syncs": 1, "first_sync_seconds": max(1, done["sync_finished_at"] - now)})
   start_chart_build(deps, username, year, now)
   log.info("sync %s done: %d weeks, %d plays, %d queued for mb, %d Last.fm calls",
            tag, len(todo), progress["plays"], queued, getattr(deps.lastfm, "calls", 0))  # fmt: skip
@@ -427,6 +436,23 @@ def _update_user(deps, username, fields, remove=()):
     ExpressionAttributeNames=names,
     ExpressionAttributeValues=values,
   )
+
+
+def _guard_add(deps, counts):
+  """ADD counts to the guard table's queue item (AOTY-26). Best effort: a lost count only skews
+  the queue position or the wait estimate a little, never a sync."""
+  names = {f"#c{i}": k for i, k in enumerate(counts)}
+  values = {f":c{i}": {"N": str(v)} for i, v in enumerate(counts.values())}
+  try:
+    deps.ddb.update_item(
+      TableName=deps.env["GUARD_TABLE"],
+      Key={"id": {"S": "queue"}},
+      UpdateExpression="ADD " + ", ".join(f"#c{i} :c{i}" for i in range(len(counts))),
+      ExpressionAttributeNames=names,
+      ExpressionAttributeValues=values,
+    )
+  except Exception:
+    log.exception("could not update the queue counters")
 
 
 def _mark_failed(deps, msg, err, state):
