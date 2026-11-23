@@ -75,8 +75,15 @@
     </div>
   </header>
   <div id="ranking"></div>
-
-  <footer id="footer">Data from Last.fm scrobbles · release years from MusicBrainz</footer>
 </main>
+
+<!-- Credits on every page (AOTY-29). Static, and deliberately without an id: app.js only fills
+     #footer-user, so nothing can overwrite the credits. Last.fm's API terms (2.7) ask for a
+     "powered by AudioScrobbler" credit linking to Last.fm; text, no logo (7.1). -->
+<footer class="credits">
+  <p class="credits-user" id="footer-user" hidden></p>
+  <p>data from last.fm, <a href="https://www.last.fm/">powered by audioscrobbler</a> · release years from <a href="https://musicbrainz.org/">musicbrainz</a> · covers from <a href="https://www.last.fm/">last.fm</a> and the <a href="https://coverartarchive.org/">cover art archive</a></p>
+  <p>not affiliated with last.fm or musicbrainz.</p>
+</footer>
 </body>
 </html>

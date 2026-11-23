@@ -32,7 +32,7 @@ body {
 .poster {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 36px 40px 48px;  /* the kamp bar sits above */
+  padding: 36px 40px 28px;  /* the top bar sits above, the credits below */
 }
 header { margin-bottom: 36px; }
 .eyebrow {
@@ -300,14 +300,24 @@ ol {
 .row-numbers .stats { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) { .row { animation: none; } }
 
-footer { color: var(--muted); font-size: 12px; margin-top: 28px; text-align: center; }
+/* Credits (AOTY-29): every page, below main. Its own gutters now that it isn't inside .poster. */
+.credits {
+  max-width: 1080px; margin: 0 auto; padding: 0 40px 32px;
+  color: var(--muted); font-size: 12px; line-height: 1.6; text-align: center;
+}
+.credits p { margin: 0; }
+.credits .credits-user { margin-bottom: 6px; }
+.credits a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.credits a:hover, .credits a:focus-visible { color: var(--ink); }
+.credits a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 3px; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
 @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
 
 @media (max-width: 820px) {
-  .poster { padding: 24px 16px 36px; }
+  .poster { padding: 24px 16px 24px; }
   .topbar { padding: 14px 16px 0; }
+  .credits { padding: 0 16px 24px; }
   .intro { padding: 36px 16px 48px; }
   .lookup-row button { flex: 1 1 100%; }
   .hero { grid-template-columns: 1fr; padding: 20px; gap: 20px; }
