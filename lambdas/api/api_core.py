@@ -7,11 +7,17 @@ The users row (written by api, sync and the chart builder) carries:
   sync_requested_at  when the api last queued a sync: drives the cooldown
   sync_started_at    when the sync worker started (sync); last_synced_at is the same instant
   sync_finished_at   when it finished, done or terminal (sync)
-  progress           {weeks_done, weeks_total, plays} (sync; plays at each checkpoint and at the end)
+  progress           {weeks_done, weeks_total, plays, albums, top_artist, top_album, top_plays}
+                     (sync, after every week; albums and top_* count every play, any release year)
+  preview            JSON {"wall": [{artist, album, art, fallbacks}]}: a first sync's newest albums
+                     for the first-visit cover wall (sync, AOTY-24); removed by the chart builder once
+                     a chart ranks anything. It's the user's public recent listening, the same as
+                     their Last.fm profile shows, served to anyone who asks for their status.
   chart_built_at, chart_pending, chart_plays, chart_albums, chart_hits   (chart builder)
   display_name       Last.fm's casing (sync, or api on a new user)
 """
 
+import json
 import re
 from urllib.parse import unquote
 
@@ -86,6 +92,25 @@ def new_plays(row):
   return max(0, plays - row["chart_plays"])
 
 
+_WALL_FIELDS = ("artist", "album", "art")
+
+
+def preview_wall(raw):
+  """The cover wall from the users row's preview JSON; [] when missing or malformed."""
+  try:
+    wall = json.loads(raw).get("wall") if raw else None
+  except (ValueError, AttributeError):
+    return []
+  if not isinstance(wall, list):
+    return []
+  out = []
+  for w in wall:
+    if isinstance(w, dict) and all(isinstance(w.get(k), str) for k in _WALL_FIELDS):
+      fallbacks = [u for u in w.get("fallbacks") or [] if isinstance(u, str)]
+      out.append({**{k: w[k] for k in _WALL_FIELDS}, "fallbacks": fallbacks})
+  return out
+
+
 def status(row, now, cooldown, queue_depth=None):
   """The status a page polls: stage, progress and timestamps. No usernames beyond the user's own."""
   progress = row.get("progress") or {}
@@ -107,6 +132,15 @@ def status(row, now, cooldown, queue_depth=None):
     "chart_built_at": row.get("chart_built_at"),
     "cooldown_until": requested + cooldown if requested and now - requested < cooldown else None,
   }
+  if progress.get("top_plays"):
+    out["so_far"] = {
+      "albums": progress.get("albums", 0),
+      "top": {"artist": progress.get("top_artist", ""), "album": progress.get("top_album", ""),
+              "plays": progress["top_plays"]},
+    }  # fmt: skip
+  wall = preview_wall(row.get("preview"))
+  if wall:
+    out["wall"] = wall
   if out["stage"] == "error":
     out["reason"] = row.get("state")
   if out["stage"] == "queued" and queue_depth is not None:
