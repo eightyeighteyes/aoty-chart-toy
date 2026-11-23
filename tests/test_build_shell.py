@@ -186,7 +186,9 @@ def test_nothing_overwrites_the_credits():
   # The footer has no id, and only #footer-user is filled from script (never innerHTML).
   html, js = (bs.SRC / "index.html").read_text(), (bs.SRC / "app.js").read_text()
   assert '<footer class="credits">' in html and '$("footer")' not in js
-  assert 'id="footer-user"' in html and "innerHTML" not in js.split("function profileLine")[1].split("\n  }\n")[0]
+  assert (
+    'id="footer-user"' in html and "innerHTML" not in js.split("function profileLine")[1].split("\n  }\n")[0]
+  )
 
 
 def test_app_js_sets_up_the_switches_once_and_polls_politely():
