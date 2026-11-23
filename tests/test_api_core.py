@@ -1,5 +1,7 @@
 """The API's pure core (lambdas/api/api_core.py): routing, the sync decision, status stages."""
 
+import json
+
 import api_core as core
 import pytest
 
@@ -163,3 +165,32 @@ def test_status_without_chart_fields():
   out = core.status({"username": "bob", "state": "queued", "sync_requested_at": NOW}, NOW, COOL)
   assert out["albums"] == {"checked": None, "total": None, "hits": None}
   assert out["display_name"] == "bob" and out["new_plays"] == 0
+
+
+# ---- first-visit fields (AOTY-24) ---------------------------------------------------------
+
+
+def test_status_carries_the_running_stats():
+  progress = {"weeks_done": 9, "weeks_total": 47, "plays": 812, "albums": 140,
+              "top_artist": "Band", "top_album": "LP", "top_plays": 61}  # fmt: skip
+  out = core.status({"state": "syncing", "sync_started_at": NOW, "progress": progress}, NOW, COOL)
+  assert out["so_far"] == {"albums": 140, "top": {"artist": "Band", "album": "LP", "plays": 61}}
+
+
+def test_no_running_stats_before_any_plays():
+  progress = {"weeks_done": 0, "weeks_total": 47, "plays": 0, "albums": 0, "top_plays": 0}
+  out = core.status({"state": "syncing", "sync_started_at": NOW, "progress": progress}, NOW, COOL)
+  assert "so_far" not in out and "wall" not in out
+
+
+def test_status_carries_the_wall_and_drops_malformed_entries():
+  good = {"artist": "Band", "album": "LP", "art": "https://lastfm.freetls.fastly.net/i/u/300x300/a.jpg",
+          "fallbacks": ["https://lastfm.freetls.fastly.net/i/u/ar0/a.jpg", 7]}  # fmt: skip
+  preview = json.dumps({"wall": [good, {"artist": "No", "album": None, "art": ""}, "junk"]})
+  out = core.status({"state": "syncing", "sync_started_at": NOW, "preview": preview}, NOW, COOL)
+  assert out["wall"] == [{**good, "fallbacks": good["fallbacks"][:1]}]
+
+
+@pytest.mark.parametrize("raw", ["", "not json", "[1, 2]", '{"wall": "x"}', '{"wall": []}'])
+def test_a_bad_or_empty_preview_means_no_wall(raw):
+  assert "wall" not in core.status({"state": "syncing", "sync_started_at": NOW, "preview": raw}, NOW, COOL)

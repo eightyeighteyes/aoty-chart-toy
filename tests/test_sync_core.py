@@ -236,3 +236,46 @@ def test_covers_match_by_mbid_first_then_by_key_and_skip_now_playing_and_placeho
   assert albums[join_key(("solo", "ep"))]["image"] == ""
   assert core.missing_top_covers(store) == 1
   assert core.newest_uts(tracks) == 101
+
+
+# ---- first-visit preview (AOTY-24) --------------------------------------------------------
+
+
+def wall_track(artist, album, uts, image=""):
+  return {"artist": {"#text": artist}, "album": {"#text": album, "mbid": ""},
+          "image": [{"size": "extralarge", "#text": image}], "date": {"uts": str(uts)}}  # fmt: skip
+
+
+def test_the_wall_is_distinct_albums_newest_first_with_csp_hosts_and_fallbacks():
+  img = "https://lastfm-img.freetls.fastly.net/i/u/300x300/abc.jpg"
+  tracks = [
+    {"artist": {"#text": "Now"}, "album": {"#text": "Playing"}, "image": [], "@attr": {"nowplaying": "true"}},
+    wall_track("Band", "LP", 300, img),
+    wall_track("band", "LP (Deluxe Edition)", 290, img),  # same key: shown once
+    wall_track("Solo", "EP", 280),
+    wall_track("Nobody", "", 270),  # no album name: can't be keyed
+  ]
+  wall = core.wall_from_tracks(tracks)
+  assert [(w["artist"], w["album"]) for w in wall] == [("Band", "LP"), ("Solo", "EP")]
+  assert wall[0]["art"] == "https://lastfm.freetls.fastly.net/i/u/300x300/abc.jpg"
+  assert wall[0]["fallbacks"] == [
+    "https://lastfm.freetls.fastly.net/i/u/ar0/abc.jpg",
+    "https://lastfm.freetls.fastly.net/i/u/174s/abc.jpg",
+  ]
+  assert wall[1]["art"] == "" and wall[1]["fallbacks"] == []  # the artist-name tile
+
+
+def test_the_wall_is_capped():
+  tracks = [wall_track(f"A{i}", f"B{i}", 1000 - i) for i in range(100)]
+  assert len(core.wall_from_tracks(tracks)) == core.WALL_N
+  assert len(core.wall_from_tracks(tracks, n=5)) == 5
+
+
+def test_running_stats_count_albums_and_name_the_most_played():
+  store = core.new_store(2026)
+  assert core.running_stats(store) == {"albums": 0, "top_artist": "", "top_album": "", "top_plays": 0}
+  plays, meta = core.chart_plays([row("Band", "LP", 7), row("Solo", "EP", 3)])
+  core.merge_week(store, (JAN1, FIRST_BOUNDARY), plays, meta, NOV21)
+  plays, meta = core.chart_plays([row("Solo", "EP", 9)])
+  core.merge_week(store, (FIRST_BOUNDARY, FIRST_BOUNDARY + core.WEEK), plays, meta, NOV21)
+  assert core.running_stats(store) == {"albums": 2, "top_artist": "Solo", "top_album": "EP", "top_plays": 12}

@@ -95,9 +95,12 @@ class FakeDDB:
     self, TableName, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues
   ):
     row = self.users.setdefault(Key["username"]["S"], {"username": Key["username"]["S"]})
-    for part in UpdateExpression.removeprefix("SET ").split(", "):
+    sets, _, removes = UpdateExpression.removeprefix("SET ").partition(" REMOVE ")
+    for part in sets.split(", "):
       name, value = part.split(" = ")
       row[ExpressionAttributeNames[name]] = dynamo.from_item({"v": ExpressionAttributeValues[value]})["v"]
+    for name in filter(None, removes.split(", ")):
+      row.pop(ExpressionAttributeNames[name], None)
 
   def batch_get_item(self, RequestItems):
     self.batch_gets += 1
@@ -372,6 +375,17 @@ def test_the_users_row_gets_the_status_fields(h, world):
   row = ddb.users["alice"]
   # The store has Known (9, 2026), Waiting (4, no item yet) and Old (20, 1999).
   assert (row["chart_plays"], row["chart_albums"], row["chart_hits"], row["chart_pending"]) == (33, 3, 1, 1)
+
+
+def test_the_first_visit_wall_is_removed_once_the_chart_ranks_albums(h, world):
+  s3, ddb = world
+  ddb.users["alice"]["preview"] = '{"wall":[]}'
+  ddb.albums.pop(key("A", "Known"))  # nothing from 2026 known yet: the chart ranks nothing
+  h.handler({"username": "alice"}, None, Deps(s3, ddb))
+  assert ddb.users["alice"]["preview"] == '{"wall":[]}'
+  ddb.add_album("A", "Known")
+  h.handler({"username": "alice", "requested_at": NOW + 1}, None, Deps(s3, ddb, clock=NOW + 2))
+  assert "preview" not in ddb.users["alice"]
 
 
 def test_chart_plays_is_the_same_sum_sync_reports(h, world):

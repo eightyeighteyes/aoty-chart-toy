@@ -278,7 +278,10 @@ def test_first_sync_backfills_the_year_and_matches_counted_scrobbles(h):
   assert join_key(("artist 5", "album 005")) in store["albums"]
   user = env.ddb.users["alice"]
   assert user["state"] == "done" and user["last_full_sync_at"] == NOW
-  assert user["progress"] == {"weeks_done": 47, "weeks_total": 47, "plays": len(scrobbles)}
+  assert user["progress"] == {
+    "weeks_done": 47, "weeks_total": 47, "plays": len(scrobbles), "albums": 200,
+    "top_artist": "Various Artists", "top_album": "Album 000", "top_plays": 200,
+  }  # fmt: skip
   assert user["last_seen_uts"] == max(s["uts"] for s in scrobbles)
 
 
@@ -553,6 +556,96 @@ def test_plays_grow_at_checkpoints_and_start_from_the_store(h):
   checkpoints.clear()
   env.run()
   assert checkpoints[0] == len(scrobbles)  # a return sync starts from what's stored, not 0
+
+
+def test_progress_is_written_after_every_week(h):
+  env = Env(h, make_world(20))
+  seen = []
+  update = env.ddb.update_item
+
+  def spy(**kw):
+    update(**kw)
+    p = env.ddb.users.get("alice", {}).get("progress")
+    if p and (not seen or seen[-1] != p["weeks_done"]):
+      seen.append(p["weeks_done"])
+
+  env.ddb.update_item = spy
+  env.run()
+  assert seen == list(range(48))
+
+
+# ---- first-visit cover wall (AOTY-24) -----------------------------------------------------
+
+
+def _recent_calls(fm):
+  original = fm.recent_tracks
+  fm.recent_pages = []
+
+  def spy(user, frm, page=1, limit=200):
+    fm.recent_pages.append(page)
+    return original(user, frm, page=page, limit=limit)
+
+  fm.recent_tracks = spy
+
+
+def test_a_first_sync_writes_the_wall_before_reading_weeks(h):
+  scrobbles = make_world(80)
+  env = Env(h, scrobbles)
+  rows_at_first_week = []
+  fm = FakeLastfm(scrobbles)
+  chart = fm.weekly_album_chart
+
+  def spy(user, frm, to):
+    if not rows_at_first_week:
+      rows_at_first_week.append(dict(env.ddb.users["alice"]))
+    return chart(user, frm, to)
+
+  fm.weekly_album_chart = spy
+  _recent_calls(fm)
+  h.sync_user({"username": "alice"}, None, env.deps(fm))
+  row = rows_at_first_week[0]
+  wall = json.loads(row["preview"])["wall"]
+  assert 0 < len(wall) <= core.WALL_N
+  newest = max(scrobbles, key=lambda s: s["uts"])
+  assert wall[0]["album"] == newest["album"] and wall[0]["art"] == f"https://img/{newest['album']}.jpg"
+  assert fm.recent_pages.count(1) == 1  # the harvest reused the wall's page
+
+
+def test_a_partial_first_sync_doesnt_fetch_the_wall_twice(h):
+  env = Env(h, make_world(20))
+  env.run(context=Context([900_000] * 5 + [30_000]))
+  wall = env.ddb.users["alice"]["preview"]
+  fm = FakeLastfm(env.scrobbles)
+  _recent_calls(fm)
+  assert h.sync_user({"username": "alice"}, None, env.deps(fm)) == "done"
+  assert fm.recent_pages[0] == 1 and fm.recent_pages.count(1) == 1  # only the harvest's own
+  assert env.ddb.users["alice"]["preview"] == wall
+
+
+def test_a_return_sync_writes_no_wall(h):
+  env = Env(h, make_world(20))
+  env.run()
+  env.ddb.users["alice"].pop("preview")  # as the chart builder does once a chart ranks albums
+  env.now += 3600
+  env.run()
+  assert "preview" not in env.ddb.users["alice"]
+
+
+def test_a_failed_wall_page_doesnt_fail_the_sync(h):
+  env = Env(h, make_world(20))
+  fm = FakeLastfm(env.scrobbles)
+  calls = []
+
+  def flaky(user, frm, page=1, limit=200):
+    calls.append(page)
+    if len(calls) == 1:
+      raise lastfm.LastfmError(16, "fake")
+    return FakeLastfm(env.scrobbles).recent_tracks(user, frm, page=page, limit=limit)
+
+  fm.recent_tracks = flaky
+  assert h.sync_user({"username": "alice"}, None, env.deps(fm)) == "done"
+  assert "preview" not in env.ddb.users["alice"]
+  assert env.ddb.users["alice"]["last_seen_uts"]  # the harvest still ran
 
 
 def test_a_terminal_stop_records_the_finish(h):

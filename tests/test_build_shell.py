@@ -103,8 +103,10 @@ def test_placeholders_name_year_title_and_icon_are_filled(tmp_path):
   assert f"your {bs.TARGET_YEAR}, " in html
   assert f'<meta name="aoty-name" content="{bs.NAME}">' in html
   assert f'<link rel="icon" type="image/svg+xml" href="{BASE}{published["favicon.svg"]}">' in html
-  # intro.js loads before app.js, which reads globalThis.aotyIntro.
+  # intro.js and firstvisit.js load before app.js, which reads their globals.
   assert html.index(published["intro.js"]) < html.index(published["app.js"])
+  assert html.index(published["firstvisit.js"]) < html.index(published["app.js"])
+  assert f'<meta name="aoty-year" content="{bs.TARGET_YEAR}">' in html
 
 
 def test_the_year_matches_the_lambdas():

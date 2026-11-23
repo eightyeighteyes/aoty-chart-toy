@@ -15,8 +15,10 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
                                         chart's generated_at so the page repaints in place);
                                         a second POST within 10 min answers "cooldown". The
                                         intro's errors: nobody* (404), lastfm-down, busy-busy,
-                                        broken (503s), private-* (a known private profile). Only
-                                        names with a chart under --data ever get one. With
+                                        broken (503s), private-* (a known private profile). First
+                                        visits (AOTY-24): newbie* (the cover wall, then charts that
+                                        rank nothing, then fill in) and nothing* (no albums from the
+                                        year). Other names only get a chart if --data has one. With
                                         --proxy, api/ and data/ go to that env instead: kamp.fm
                                         for staging and prod; for sandbox, its execute-api URL
                                         and its site bucket (it has no CloudFront path).
@@ -33,12 +35,14 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path[:0] = [str(REPO), str(REPO / "lambdas"), str(REPO / "lambdas" / "chart")]
+sys.path[:0] = [str(REPO), str(REPO / "lambdas"), str(REPO / "lambdas" / "chart"), str(REPO / "lambdas" / "api")]
 
+import api_core  # noqa: E402
 import chart_core  # noqa: E402
 from common.albumkey import album_key, join_key  # noqa: E402
 from scripts import build_shell  # noqa: E402
@@ -96,33 +100,131 @@ def sample_chart(username, n=120):
 
 
 FAKE_SYNC_S = (2, 8, 12)  # queued until 2 s, reading until 8 s, building until 12 s, then idle
+COOLDOWN = 600
+# The fake status goes through the real api_core.status(), from users rows like the ones sync
+# and the chart builder write, so the preview can't drift from the API.
+
+
+def _stamp(uts):
+  return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(uts))
 
 
 def fake_status(started, now, chart_file):
-  """The status API's answer for a pretend sync that began at `started` (AOTY-22 preview).
+  """The status API's answer for a returning user's pretend sync that began at `started` (AOTY-22).
 
   On reaching idle it stamps the chart's generated_at, so the page sees a newer chart and
   repaints it in place, as it would after a real sync.
   """
-  e = now - started
+  e, s = now - started, int(started)
   q, r, b = FAKE_SYNC_S
-  base = {"display_name": None, "weeks": {"done": 0, "total": 4}, "scrobbles": 0, "new_plays": 0,
-          "albums": {"checked": None, "total": None, "hits": None}, "last_synced_at": int(started),
-          "chart_built_at": None, "cooldown_until": int(started) + 600}  # fmt: skip
+  row = {"username": chart_file.parent.name, "sync_requested_at": s, "chart_built_at": s - 3600,
+         "chart_plays": 1000, "chart_albums": 120, "chart_pending": 0, "chart_hits": 120}  # fmt: skip
   if e < q:
-    return {**base, "stage": "queued", "queue_ahead_approx": 0}
-  if e < r:
-    return {**base, "stage": "reading", "weeks": {"done": min(4, int((e - q) / (r - q) * 4)), "total": 4}}
+    row["state"] = "queued"
+    return api_core.status(row, now, COOLDOWN, queue_depth=0)
+  row.update(state="syncing", sync_started_at=s + q, last_synced_at=s + q)
+  row["progress"] = {"weeks_done": min(4, int((e - q) / (r - q) * 4)), "weeks_total": 4, "plays": 1000}
+  if e >= r:
+    row.update(state="done", sync_finished_at=s + r)
+    row["progress"] = {"weeks_done": 4, "weeks_total": 4, "plays": 1042}
+  if e >= b:
+    row["chart_built_at"], row["chart_plays"] = s + b, 1042
+    if chart_file.is_file():
+      chart = json.loads(chart_file.read_text(encoding="utf-8"))
+      if chart.get("generated_at") != _stamp(s + b):
+        chart["generated_at"] = _stamp(s + b)
+        chart_file.write_text(json.dumps(chart), encoding="utf-8")
+  return api_core.status(row, now, COOLDOWN)
+
+
+# ---- first visits (AOTY-24) ---------------------------------------------------------------
+#
+# newbie*   a new user: queued, reading (the cover wall and running stats), building, then
+#           release years checked with charts that rank nothing at first and fill in after.
+# nothing*  the same, but none of their albums came out this year: it ends on that message.
+# Both serve chart.json from the fake too (nothing is written under --data).
+FIRST_S = {"queued": 2, "reading": 16, "building": 18, "dating": 40}  # each stage's end
+FIRST_WEEKS, FIRST_ALBUMS, FIRST_PLAYS = 47, 640, 21_500
+REBUILD_S = 4  # the chart builder's rebuilds while albums are dated
+
+
+def first_visit_kind(name):
+  return next((k for k in ("newbie", "nothing") if name.startswith(k)), None)
+
+
+def fake_wall(n=60):
+  """Covers for the wall: coloured squares as data: URIs (the CSP allows data:), a few with no
+  cover (the artist-name tile) and a few broken ones (the fallback chain, then the tile)."""
+  wall = []
+  for i in range(n):
+    artist, album = f"Sample Artist {i % 23}", f"Recent Album {i:02d}"
+    art, fallbacks = "", []
+    if i % 9 == 4:
+      art = "https://lastfm.freetls.fastly.net/i/u/300x300/doesnotexist.jpg"
+    elif i % 11 != 7:
+      hue = (i * 47) % 360
+      svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><defs><linearGradient id='g'>"
+             f"<stop offset='0' stop-color='hsl({hue},60%,45%)'/><stop offset='1' stop-color='hsl({(hue + 60) % 360},70%,30%)'/>"
+             "</linearGradient></defs><rect width='10' height='10' fill='url(#g)'/></svg>")  # fmt: skip
+      art = "data:image/svg+xml," + urllib.parse.quote(svg)
+    wall.append({"artist": artist, "album": album, "art": art, "fallbacks": fallbacks})
+  return wall
+
+
+def _first_hits(kind, e):
+  """This-year albums found by e seconds in: none for nothing*, else growing from 4 s into dating."""
+  into = e - FIRST_S["building"] - 4
+  if kind == "nothing" or into < 0:
+    return 0
+  return min(120, 6 + int(into * 6))
+
+
+def _first_built(e):
+  """The latest chart build at e seconds: right after building, then every REBUILD_S."""
+  b = FIRST_S["building"]
   if e < b:
-    return {**base, "stage": "building", "weeks": {"done": 4, "total": 4}, "new_plays": 42}
-  built = int(started + b)
-  if chart_file.is_file():
-    chart = json.loads(chart_file.read_text(encoding="utf-8"))
-    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(built))
-    if chart.get("generated_at") != stamp:
-      chart["generated_at"] = stamp
-      chart_file.write_text(json.dumps(chart), encoding="utf-8")
-  return {**base, "stage": "idle", "weeks": {"done": 4, "total": 4}, "chart_built_at": built}
+    return None
+  return b + min(int((e - b) // REBUILD_S) * REBUILD_S, FIRST_S["dating"] - b)
+
+
+def fake_first_status(kind, started, now, name):
+  """The status API's answer for a pretend first visit (AOTY-24)."""
+  e, s = now - started, int(started)
+  row = {"username": name, "sync_requested_at": s}
+  if e < FIRST_S["queued"]:
+    row["state"] = "queued"
+    return api_core.status(row, now, COOLDOWN, queue_depth=3)
+  read = min(1.0, (e - FIRST_S["queued"]) / (FIRST_S["reading"] - FIRST_S["queued"]))
+  albums = int(FIRST_ALBUMS * read)
+  row.update(state="syncing", sync_started_at=s + FIRST_S["queued"], last_synced_at=s + FIRST_S["queued"])
+  row["progress"] = {"weeks_done": int(FIRST_WEEKS * read), "weeks_total": FIRST_WEEKS,
+                     "plays": int(FIRST_PLAYS * read), "albums": albums, "top_artist": "Sample Artist 3",
+                     "top_album": "Most Played So Far", "top_plays": int(212 * read)}  # fmt: skip
+  row["preview"] = json.dumps({"wall": fake_wall()})
+  if e >= FIRST_S["reading"]:
+    row.update(state="done", sync_finished_at=s + FIRST_S["reading"])
+  built = _first_built(e)
+  if built is not None:
+    at = built  # the chart as of its last build
+    dated = min(1.0, (at - FIRST_S["building"]) / (FIRST_S["dating"] - FIRST_S["building"]))
+    hits = _first_hits(kind, at)
+    row.update(chart_built_at=s + built, chart_albums=FIRST_ALBUMS, chart_hits=hits,
+               chart_pending=FIRST_ALBUMS - int(FIRST_ALBUMS * dated), chart_plays=FIRST_PLAYS)  # fmt: skip
+    if hits:
+      row.pop("preview")  # as the chart builder does once a chart ranks anything
+  return api_core.status(row, now, COOLDOWN)
+
+
+def fake_first_chart(kind, started, now, name):
+  """chart.json for a pretend first visit: None (404) before the first build, then a chart
+  stamped with its build time that ranks this year's albums found so far."""
+  built = _first_built(now - started)
+  if built is None:
+    return None
+  chart = sample_chart(name, n=_first_hits(kind, built))
+  chart["generated_at"] = _stamp(int(started) + built)
+  chart["pending"] = FIRST_ALBUMS - int(FIRST_ALBUMS * min(1.0, (built - FIRST_S["building"]) / (FIRST_S["dating"] - FIRST_S["building"])))
+  return chart
 
 
 KAMP = {"prod": "https://kamp.fm/toys/aoty/", "staging": "https://kamp.fm/toys/aoty-staging/"}
@@ -211,19 +313,38 @@ def handler_for(base, out, data, proxy=None):
       special = fake_outcome(name) if action == "sync" and method == "POST" else None
       if special:
         return self.send(special[0], json.dumps(special[1]).encode(), "application/json")
+      def status_for(name):
+        kind = first_visit_kind(name)
+        if kind:
+          return fake_first_status(kind, syncs[name], now, name)
+        return fake_status(syncs[name], now, data / "users" / name / "chart.json")
+
       if action == "sync" and method == "POST":
-        fresh = name not in syncs or now - syncs[name] > 600
+        fresh = name not in syncs or now - syncs[name] > COOLDOWN
         if fresh:
           syncs[name] = now
-        status = fake_status(syncs[name], now, data / "users" / name / "chart.json")
-        body = {"queued": fresh, "status": status} if fresh else {"queued": False, "reason": "cooldown", "status": status}
+        status = status_for(name)
+        if fresh:
+          body = {"queued": True, "status": status}
+        else:
+          body = {"queued": False, "reason": "in_progress" if status["stage"] != "idle" else "cooldown",
+                  "status": status}  # fmt: skip
         return self.send(202 if fresh else 200, json.dumps(body).encode(), "application/json")
       if action == "status" and method == "GET":
         if name not in syncs:
           return self.send(404, b'{"error":"unknown user"}', "application/json")
-        status = fake_status(syncs[name], now, data / "users" / name / "chart.json")
-        return self.send(200, json.dumps(status).encode(), "application/json")
+        return self.send(200, json.dumps(status_for(name)).encode(), "application/json")
       return self.send(405, b'{"error":"method not allowed"}', "application/json")
+
+    def first_visit_chart(self, rest):
+      """Serve chart.json for newbie* / nothing* from the fake: True if this path was one."""
+      parts = rest.split("/")  # data, users, <name>, chart.json
+      if len(parts) != 4 or parts[3] != "chart.json" or not first_visit_kind(parts[2].lower()):
+        return False
+      name = parts[2].lower()
+      chart = fake_first_chart(first_visit_kind(name), syncs[name], time.time(), name) if name in syncs else None
+      self.send(*((200, json.dumps(chart).encode()) if chart else (404, b"{}")), "application/json", "no-cache")
+      return True
 
     def do_POST(self):
       path = self.path.split("?", 1)[0]
@@ -243,6 +364,8 @@ def handler_for(base, out, data, proxy=None):
       if rest.startswith("api/"):
         return self.api("GET", rest)
       if rest.startswith("data/"):
+        if self.first_visit_chart(rest):
+          return None
         f = data / rest[len("data/") :]
         return self.file(f, "no-cache") if f.is_file() else self.send(404, b"{}", "application/json")
       f = out / rest
