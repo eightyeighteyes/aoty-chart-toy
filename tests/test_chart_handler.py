@@ -400,7 +400,7 @@ def test_chart_plays_is_the_same_sum_sync_reports(h, world):
 
 # ---- groups (AOTY-50, beta) -------------------------------------------------------------
 
-GROUP = "abcdefghijklmnopqrstuvwxyz"  # 26 base32 characters, as tools/beta_group.py makes
+GROUP = "the-server"  # a slug, as tools/beta_group.py makes
 GROUP_CHART = ("site", f"toys/aoty-test/data/groups/{GROUP}/chart.json")
 
 

@@ -49,7 +49,8 @@ NAMESPACE = "kamp-aoty"
 BATCH_GET = 100  # DynamoDB BatchGetItem limit
 RETRIES = 4
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
-GROUP_ID_RE = re.compile(r"^[a-z2-7]{26}$")  # tools/beta_group.py: 128 random bits, base32
+# A group's slug, its URL (tools/beta_group.py): lowercase letters, digits and inner dashes.
+GROUP_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$")
 # album.getInfo cover lookups per build: at Last.fm's 0.5 s pacing, ~60 s at most. A heavy
 # user's first chart needed ~50; the next build continues where this one stopped.
 COVER_LOOKUPS = 120

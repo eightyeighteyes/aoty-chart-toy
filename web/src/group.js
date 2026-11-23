@@ -11,7 +11,7 @@
 
   const MODES = ["track", "album", "weighted"];
   const GROUP_VERSION = 1;
-  const ID_RE = /^[a-z2-7]{26}$/;
+  const ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;  // the group's slug, as the chart builder's
 
   // The members, sorted as the chart lists them, and the index of `name` among them (any
   // casing), or -1 for Everyone / an unknown name.

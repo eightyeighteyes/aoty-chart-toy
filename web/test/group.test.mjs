@@ -55,5 +55,6 @@ test("only this group's chart is accepted", () => {
   assert.ok(valid(chart, ID));
   assert.ok(!valid({...chart, id: "zzzzzzzzzzzzzzzzzzzzzzzzzz"}, ID));
   assert.ok(!valid({...chart, kind: "user"}, ID));
-  assert.ok(ID_RE.test(ID) && !ID_RE.test("../users"));
+  assert.ok(ID_RE.test(ID) && ID_RE.test("the-server") && !ID_RE.test("../users"));
+  assert.ok(!ID_RE.test("-edge") && !ID_RE.test("edge-") && !ID_RE.test("Caps"));
 });
