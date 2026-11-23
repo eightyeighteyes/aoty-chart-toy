@@ -28,6 +28,8 @@ One run, until both queues are empty or time runs short:
   5. Failed albums are neither written nor deleted. They come back after the queue's
      visibility timeout (sooner when the run stopped for time), and after 5 receives go to the
      dead-letter queue.
+  6. Once items are written, poke the chart builder (AOTY-21) with {"pending": true}: after the
+     first such batch, then at most once a minute, and at the end of the run (ChartPoke).
 With both queues empty, a run makes no MusicBrainz request. Each run logs one EMF line.
 """
 
@@ -56,6 +58,7 @@ BATCH_GET, BATCH_WRITE, DELETE_BATCH = 100, 25, 10  # DynamoDB / SQS limits
 RETRIES = 4
 NAMESPACE = "kamp-aoty"
 MANIFEST_TTL_S = 3600
+CHART_POKE_S = 60  # at most one chart-builder poke a minute (ChartPoke)
 SHARD_CACHE = 128  # a batch of 20 albums reads at most 40 shards (~250 KB parsed each)
 
 
@@ -163,10 +166,12 @@ def run(deps, context):
   deadline = started + remaining - DEADLINE_MARGIN_S
   totals = {"messages": 0, "already_resolved": 0, "resolved": 0, "missed": 0, "failed": 0,
             "year_wasted": 0, "invalid": 0, "batches": 0, "rechecks": 0, "index_hits": 0,
-            "index_untrusted": 0, "index_misses": 0, "index_errors": 0, "tracks_reused": 0}  # fmt: skip
+            "index_untrusted": 0, "index_misses": 0, "index_errors": 0, "tracks_reused": 0,
+            "written": 0, "chart_pokes": 0}  # fmt: skip
   queues = [("hot", deps.env["MB_HOT_URL"]), ("cold", deps.env["MB_COLD_URL"])]
   out_of_time = False
   year_from_index, index_age = _open_index(deps, totals)
+  charts = ChartPoke(deps, totals)
 
   while True:
     if deps.mono() + MIN_BATCH_S > deadline:
@@ -177,10 +182,12 @@ def run(deps, context):
       break
     totals["batches"] += 1
     _process(deps, msgs, deadline, totals, year_from_index)
+    charts.after_batch()
     if deps.mono() + MIN_BATCH_S > deadline:
       out_of_time = True
       break
 
+  charts.at_end()
   depths = _depths(deps, queues)
   poked = False
   if out_of_time and sum(depths.values()):
@@ -190,6 +197,41 @@ def run(deps, context):
   elapsed = deps.mono() - started
   _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age)
   return {**totals, "out_of_time": out_of_time, "self_invoked": poked}
+
+
+class ChartPoke:
+  """Ask the chart builder (AOTY-21) to rebuild charts with pending albums, as items land.
+
+  Right after the first batch that writes items (so a new user's chart fills in quickly), then
+  at most every CHART_POKE_S, and once at the end for anything written since. The builder only
+  rebuilds users whose pending albums now have items. Best effort: a failed invoke is logged
+  and never fails the batch; the next poke covers it.
+  """
+
+  def __init__(self, deps, totals):
+    self.deps, self.totals = deps, totals
+    self.fn = deps.env.get("CHART_FUNCTION")
+    self.last, self.seen = None, 0
+
+  def _due(self):
+    return self.fn and self.totals["written"] > self.seen
+
+  def _poke(self):
+    self.seen = self.totals["written"]
+    self.last = self.deps.mono()
+    try:
+      self.deps.lambda_.invoke(FunctionName=self.fn, InvocationType="Event", Payload=b'{"pending":true}')
+      self.totals["chart_pokes"] += 1
+    except Exception:
+      log.exception("could not start the chart builder")
+
+  def after_batch(self):
+    if self._due() and (self.last is None or self.deps.mono() - self.last >= CHART_POKE_S):
+      self._poke()
+
+  def at_end(self):
+    if self._due():
+      self._poke()
 
 
 def _open_index(deps, totals):
@@ -326,6 +368,7 @@ def _process(deps, msgs, deadline, totals, year_from_index=None):
     log.warning("%d release index lookups failed; those albums went to the live search",
                 result.stats["index_errors"])  # fmt: skip
   _write(deps, list(result.items.values()))
+  totals["written"] += len(result.items)
   _delete(deps, [h for k in result.items for h in handles[k]])
   if deps.mono() + MIN_BATCH_S > deadline:
     _release(deps, [h for k in result.failed for h in handles[k]])
@@ -428,6 +471,7 @@ def _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age=None):
     "batches": totals["batches"],
     "out_of_time": out_of_time,
     "self_invoked": poked,
+    "chart_pokes": totals["chart_pokes"],
     "slept_s": round(mb["slept_s"], 1),
     "server_s": round(mb["server_s"], 1),
   }

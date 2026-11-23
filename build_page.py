@@ -6,7 +6,6 @@ Run aoty.py first, then this. Album art comes from Last.fm's album.getInfo.
 import csv
 import html
 import json
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,6 +16,8 @@ import requests
 import aoty
 
 # Matching rules shared with the mb Lambda (AOTY-19); importable once aoty has set sys.path.
+# Cover fallbacks are shared with the chart builder (AOTY-21).
+from common.covers import art_fallbacks  # noqa: E402
 from common.mbmatch import MIN_ALBUM_TRACKS, is_single, pick_release  # noqa: E402, F401
 from common.mbmatch import release_clause as _release_clause  # noqa: E402
 
@@ -305,19 +306,6 @@ def page_data(kept, rankings, arts, members):
     "rankings": {m: [[index[r["key"]], round(s, 3)] for r, s in pairs] for m, pairs in rankings.items()},
     "descs": {m: desc.format(total=total, min_listeners=WEIGHTED_MIN_LISTENERS) for m, _, desc in MODES},
   }
-
-
-def art_fallbacks(url):
-  """Other sizes of the same Last.fm image, to try if the chosen one fails to load.
-
-  The CDN resizes on first request and can cache a 404 for one size (seen 2026-11-20:
-  JUNK POP's 300x300 404'd in the browser while every other size was fine).
-  """
-  m = re.match(r"(https://[^/]+/i/u/)(?:[^/]+/)?([^/]+)$", url)
-  if not m:
-    return []
-  base, name = m.groups()
-  return [f"{base}{size}{name}" for size in ("ar0/", "174s/") if f"{base}{size}{name}" != url]
 
 
 # Renders the chosen ranking for the chosen member from the #aoty-data JSON. A plain

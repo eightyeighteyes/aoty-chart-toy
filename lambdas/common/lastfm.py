@@ -14,6 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from common import covers
+
 API = "https://ws.audioscrobbler.com/2.0/"
 USER_AGENT = "kamp-aoty/0.1 (+https://kamp.fm/toys/aoty/)"
 MIN_INTERVAL = 0.5
@@ -125,15 +127,36 @@ class Client:
     tracks = tracks.get("track") if isinstance(tracks, dict) else None
     return len(as_list(tracks)) or None
 
-  def user_exists(self, user):
-    """False only on a definite "User not found"; other errors propagate."""
+  def album_image(self, artist, album):
+    """album.getInfo's largest cover URL, or "" when Last.fm has none or no such album.
+
+    The chart builder's fallback for albums whose scrobbles carried no cover (AOTY-21). A failed
+    request raises, so the caller can tell "no cover" (cached) from "try again" (not cached).
+    """
     try:
-      self.call("user.getinfo", user=user)
+      data = self.call("album.getinfo", artist=artist, album=album, autocorrect=1)
     except LastfmError as e:
       if e.code == NOT_FOUND:
-        return False
+        return ""
       raise
-    return True
+    return covers.image_url((data.get("album") or {}).get("image"))
+
+  def user_info(self, user):
+    """The user's name in Last.fm's own casing, or None on a definite "User not found".
+
+    Other errors propagate. The chart page redirects to this casing (AOTY-21).
+    """
+    try:
+      data = self.call("user.getinfo", user=user)
+    except LastfmError as e:
+      if e.code == NOT_FOUND:
+        return None
+      raise
+    return (data.get("user") or {}).get("name") or user
+
+  def user_exists(self, user):
+    """False only on a definite "User not found"; other errors propagate."""
+    return self.user_info(user) is not None
 
 
 _api_key = {}

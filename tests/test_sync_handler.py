@@ -24,6 +24,7 @@ ENV = {
   "MB_HOT_URL": "q/hot",
   "MB_COLD_URL": "q/cold",
   "MB_FUNCTION": "mb",
+  "CHART_FUNCTION": "chart",
 }
 
 
@@ -68,9 +69,11 @@ def world_totals(scrobbles):
 
 
 class FakeLastfm:
-  def __init__(self, scrobbles, *, kill_after=None, chart_error=None, exists=True):
+  def __init__(self, scrobbles, *, kill_after=None, chart_error=None, exists=True, display_name="AliCe",
+               info_error=None):  # fmt: skip
     self.scrobbles = scrobbles
     self.kill_after, self.chart_error, self.exists = kill_after, chart_error, exists
+    self.display_name, self.info_error = display_name, info_error
     self.chart_calls, self.calls = [], 0
 
   def weekly_album_chart(self, user, frm, to):
@@ -101,6 +104,12 @@ class FakeLastfm:
 
   def user_exists(self, user):
     return self.exists
+
+  def user_info(self, user):
+    self.info_calls = getattr(self, "info_calls", 0) + 1
+    if self.info_error is not None:
+      raise lastfm.LastfmError(self.info_error, "fake")
+    return self.display_name if self.exists else None
 
 
 class FakeS3:
@@ -202,11 +211,22 @@ class FakeSQS:
 
 
 class FakeLambda:
-  def __init__(self):
-    self.invokes = []
+  def __init__(self, fail=False):
+    self.all, self.fail = [], fail
 
   def invoke(self, **kw):
-    self.invokes.append(kw)
+    if self.fail:
+      raise RuntimeError("invoke failed")
+    self.all.append(kw)
+
+  @property
+  def invokes(self):
+    """The mb lane pokes."""
+    return [kw for kw in self.all if kw["FunctionName"] == "mb"]
+
+  @property
+  def charts(self):
+    return [json.loads(kw["Payload"]) for kw in self.all if kw["FunctionName"] == "chart"]
 
 
 class Context:
@@ -444,3 +464,50 @@ def test_the_year_is_a_parameter(h):
   assert result == "done"
   assert fm.chart_calls[-1][1] == calendar.timegm((2027, 1, 1, 0, 0, 0))
   assert ("store", "users/alice/2026/weeks.json.gz") in env.s3.objects
+
+
+# ---- chart builder hook (AOTY-21) ---------------------------------------------------------
+
+
+def test_a_sync_starts_one_chart_build_with_its_time(h):
+  env = Env(h, make_world(5))
+  env.run(msg={"username": "Alice"})
+  assert env.lam.charts == [{"username": "alice", "year": 2026, "requested_at": NOW}]
+  assert [kw["InvocationType"] for kw in env.lam.all if kw["FunctionName"] == "chart"] == ["Event"]
+
+
+def test_a_failed_chart_poke_doesnt_fail_the_sync(h):
+  env = Env(h, make_world(5))
+  env.lam.fail = True
+  env.ddb.resolved = set(world_totals(make_world(5)))  # nothing for mb, so only chart is invoked
+  result, _ = env.run()
+  assert result == "done"
+  assert env.ddb.users["alice"]["state"] == "done"
+
+
+def test_the_display_name_is_stored_before_the_chart_build(h):
+  env = Env(h, make_world(5))
+  _, fm = env.run()
+  user = env.ddb.users["alice"]
+  assert user["display_name"] == "AliCe" and user["display_name_at"] == NOW
+  assert fm.info_calls == 1
+
+
+def test_the_display_name_is_refreshed_monthly_not_every_sync(h):
+  env = Env(h, make_world(5))
+  env.run()
+  env.now += 3600
+  _, fm = env.run()
+  assert getattr(fm, "info_calls", 0) == 0
+  env.now += h.DISPLAY_NAME_MAX_AGE
+  _, fm = env.run(display_name="ALICE")
+  assert fm.info_calls == 1 and env.ddb.users["alice"]["display_name"] == "ALICE"
+
+
+def test_a_failed_or_foreign_display_name_isnt_stored(h):
+  env = Env(h, make_world(5))
+  result, _ = env.run(info_error=16)
+  assert result == "done" and "display_name" not in env.ddb.users["alice"]
+  env.now += 3600
+  env.run(display_name="mallory")
+  assert "display_name" not in env.ddb.users["alice"]

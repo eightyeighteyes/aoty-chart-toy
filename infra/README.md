@@ -30,7 +30,8 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an hourly EventBridge Scheduler schedule that invokes it through the `…-mb-schedule` role; with both queues empty a run makes no MusicBrainz request. |
 | Release index build (AOTY-20) | `kamp-aoty-<env>-index` ECS cluster (FARGATE_SPOT only) and task definition: 1 vCPU / 4 GB, x86_64 (Spot runs no ARM64), AWS's public `lambda/python:3.13` image pinned by digest, fetching its code from `s3://<store>/code/index.zip`. Runs in the default VPC's public subnets with a public IP and the default security group: no NAT. `…-index-daily` schedule at 06:15 UTC (off in sandbox) runs the exact revision Terraform made, through the `…-index-schedule` role. Logs in `/ecs/kamp-aoty-<env>-index`. See "Release index" below. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
-| `api`, `sync`, `mb` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
+| Chart builder (AOTY-21) | The chart Lambda has **reserved concurrency 1**, so builds never overlap and an older read can't overwrite a newer chart. Started by async invokes from sync (`{"username", "requested_at"}`) and mb (`{"pending": true}`); same invoke config as mb. Writes `<prefix>data/users/<u>/chart.json` (`Cache-Control: no-cache`) to the site bucket and `users/<u>/<year>/chart_pending.json` to the store. See "Charts" below. |
+| `api`, `sync`, `mb`, `chart` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
 | HTTP API | `$default` route → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttled to burst 20 / 10 req/s. |
 | Log groups | 14-day retention, including API access logs. |
 
@@ -121,22 +122,25 @@ release PR merged → the same path, then release-please tags vX.Y.Z
 
 What a deploy (`deploy.yml`) does, as the env's deploy role:
 
-1. `python scripts/package_lambdas.py` builds `dist/{api,sync,mb}.zip` from `lambdas/` (Linux
+1. `python scripts/package_lambdas.py` builds `dist/{api,sync,mb,chart}.zip` from `lambdas/` (Linux
    arm64 wheels, byte-for-byte reproducible per commit). Each zip carries a `build.json` with the
    commit's SHA (`-dirty` if a packaged file isn't committed), which `/api/health` reports.
 2. `terraform apply` for `infra/envs/<env>` (skipped with `skip_terraform`).
 3. `update-function-code` for each function, with `wait function-updated` before and after, then
    `publish-version`. Each deploy leaves a new numbered Lambda version described `<sha> by <actor>`,
    a same-commit redeploy included.
-4. **Only if `web/index.html` exists:** uploads hashed assets with a year's cache, then
-   `index.html` with `no-cache`, then removes deleted files (never `data/`), and invalidates
-   `<base>*` on kamp.fm's distribution.
+4. **Not in sandbox:** `scripts/build_shell.py --base <base>` builds the user page shell (AOTY-21)
+   into `dist/web`. CD uploads its content-hashed `assets/` with a year's immutable cache, never
+   deleting old ones (open tabs still ask for them), then `index.html` with `no-cache`, then
+   invalidates `<base>*` on kamp.fm's distribution. `data/` belongs to the chart builder and is
+   never touched. Old assets pile up at a few KB per deploy; pruning them is AOTY-39.
 5. Smoke test through kamp.fm:
    - `<base>api/health` → 200, and the body must say `"source": "lambdas/api"` (deployed code, not
      the placeholder) and `"sha"` equal to the checked-out commit (not a stale `$LATEST`). A wrong
      body is retried 5 times, 5 s apart.
    - `<base>data/users/__smoke__/chart.json` → 404
-   - `<base>` → 200, once a shell exists
+   - `<base>` and `<base>user/__smoke__` → 200 with this env's shell, and every asset it names is
+     in this build and loads.
 
 **Rollback** redeploys code and the shell from an older tag without touching infrastructure:
 
@@ -239,7 +243,7 @@ code and checks `<api_endpoint>/toys/aoty-sandbox/api/health`. GitHub only lists
 .venv/bin/python scripts/package_lambdas.py
 terraform -chdir=infra/envs/sandbox init
 terraform -chdir=infra/envs/sandbox apply
-for fn in api sync mb; do aws lambda update-function-code --function-name kamp-aoty-sandbox-$fn \
+for fn in api sync mb chart; do aws lambda update-function-code --function-name kamp-aoty-sandbox-$fn \
   --zip-file fileb://dist/$fn.zip --publish; done
 ```
 
@@ -317,6 +321,34 @@ Each run logs one EMF line (namespace `kamp-aoty`, dimension `Environment`): `Mb
 `YearWasted`, `AlbumsPerSecond`, `HotQueueDepth`, `ColdQueueDepth`, `RunSeconds`, and for the
 release index `IndexHits`/`Untrusted`/`Misses`/`Errors`, `IndexAgeHours` (absent with no usable
 index), `Rechecks`, `TracksReused`.
+
+## Charts (AOTY-21)
+
+After each sync the worker starts the chart Lambda, which writes
+`<prefix>data/users/<u>/chart.json`: the top 100 By Track and By Album, covers with fallbacks
+(the scrobbles' Last.fm image or else `album.getInfo`'s, its other sizes, then the Cover Art
+Archive), and how many of the user's albums the mb lane hasn't answered yet. The getInfo
+answers are cached in the store's `users/<u>/<year>/chart_covers.json`. While any are pending, the mb lane's pokes rebuild the chart as they
+resolve. The page is `kamp.fm<base>user/<name>`, in any casing.
+
+To build one by hand (it skips nothing when `requested_at` is left out):
+
+```sh
+aws lambda invoke --function-name kamp-aoty-staging-chart --invocation-type Event \
+  --cli-binary-format raw-in-base64-out --payload '{"username": "alice"}' /dev/null
+aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.json -
+```
+
+Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
+`CoverLookups`.
+
+**Acceptance:** `tools/chart_check.py --env staging --user <name>` compares a deployed chart
+with M0's rules on the same store and albums items, and exits 1 on a difference.
+
+**Previewing the page** without a deploy (sandbox has no kamp.fm path):
+`tools/serve_shell.py --sample alice` serves the shell at `http://127.0.0.1:8000/toys/aoty/`,
+with kamp.fm's routing and CSP, and a synthetic chart. To preview a real one, copy its
+`chart.json` to `data/shell_preview/users/<u>/chart.json` first.
 
 ## Release index (AOTY-20)
 

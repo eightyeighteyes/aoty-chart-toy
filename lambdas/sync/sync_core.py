@@ -16,6 +16,7 @@ import calendar
 from collections import Counter
 
 from common.albumkey import album_key, is_complete, join_key, split_key
+from common.covers import PLACEHOLDER, image_url  # noqa: F401  (shared with the chart builder)
 
 STORE_VERSION = 1
 DAY = 86400
@@ -32,7 +33,6 @@ CAP_ROWS = 950  # responses are capped at ~1,000 rows; at or above this, split t
 MIN_SPLIT = DAY
 HOT_N = 150  # the user's top albums by plays go to mb-hot; the rest to mb-cold
 REQUEUE_AFTER = 7 * DAY
-PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f"  # Last.fm's default "no image" star
 
 
 class CapError(Exception):
@@ -184,15 +184,6 @@ def split_hot_cold(store, unresolved):
 # ---- covers from getRecentTracks ---------------------------------------------------------
 
 
-def image_url(images):
-  """Largest image URL, or "" when missing or Last.fm's placeholder star."""
-  url = ""
-  for im in images or []:
-    if im.get("#text"):
-      url = im["#text"]
-  return "" if not url or PLACEHOLDER in url else url
-
-
 def dated(tracks):
   """Drop the now-playing row: it has no date and ignores from/to."""
   return [t for t in tracks if (t.get("date") or {}).get("uts")]
@@ -206,7 +197,8 @@ def apply_covers(store, tracks):
   """Fill missing album covers from recent tracks: album MBID first, then the album key.
 
   Scrobbles carry the track artist, not the album artist, so compilations and featured-artist
-  tracks rarely match by key; AOTY-21's album.getInfo fallback covers those. Returns the
+  tracks rarely match by key; the chart builder's album.getInfo fallback covers those for
+  albums a chart shows (AOTY-21). Returns the
   number of albums given a cover.
   """
   albums = store["albums"]

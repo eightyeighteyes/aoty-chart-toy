@@ -110,7 +110,7 @@ jobs:
           ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
-          for fn in api sync mb; do
+          for fn in api sync mb chart; do
             name=$(jq -r ".function_names.$fn" "$RUNNER_TEMP/stack.json")
             # Wait first: a config change from the apply above leaves the function "InProgress",
             # and update-function-code would fail with ResourceConflictException.
@@ -140,27 +140,23 @@ jobs:
           aws s3 cp dist/index.zip "s3://$bucket/$key" --only-show-errors
           echo "dist/index.zip -> s3://$bucket/$key"
 
-      # No shell yet (later stories add web/): skip, so /toys/aoty/ keeps returning 404 and the
-      # --delete pass below can never empty the prefix. Never for sandbox, which kamp.fm doesn't
-      # serve (and whose role has no CloudFront access).
+      # The user page shell (web/src, AOTY-21). Never for sandbox, which kamp.fm doesn't serve
+      # (and whose role has no CloudFront access); preview it with tools/serve_shell.py instead.
       - name: static shell
         id: shell
         if: env.AOTY_ENV != 'sandbox'
         run: |
           set -euo pipefail
-          if [ ! -f web/index.html ]; then
-            echo "no web/index.html: shell upload and invalidation skipped"
-            echo "deployed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # The shell (AOTY-21) is built per env: its asset URLs are absolute and include the base.
+          python scripts/build_shell.py --base "$BASE_PATH" --out dist/web
           dest="s3://$SITE_BUCKET/$S3_PREFIX"
-          # 1. Everything but index.html: hashed assets, cached for a year.
-          aws s3 sync web/ "$dest" --exclude index.html --exclude 'data/*' \
+          # 1. Content-hashed assets, cached for a year. Never --delete: an open tab, or an
+          #    index.html still cached at the edge for a few seconds, asks for the previous build's
+          #    names. data/ belongs to the chart builder and is never touched here.
+          aws s3 cp dist/web/assets/ "${dest}assets/" --recursive --only-show-errors \
             --cache-control "public, max-age=31536000, immutable"
           # 2. index.html last, so it never points at assets that aren't uploaded yet.
-          aws s3 cp web/index.html "${dest}index.html" --cache-control "no-cache"
-          # 3. Remove what the new build dropped; data/ belongs to the chart builder.
-          aws s3 sync web/ "$dest" --delete --exclude 'data/*' --size-only
+          aws s3 cp dist/web/index.html "${dest}index.html" --cache-control "no-cache" --only-show-errors
           id=$(aws cloudfront create-invalidation --distribution-id EU1A3HSUCEQS9 \
             --paths "${BASE_PATH}*" --query Invalidation.Id --output text)
           aws cloudfront wait invalidation-completed --distribution-id EU1A3HSUCEQS9 --id "$id"
@@ -207,6 +203,19 @@ jobs:
           fi
           if [ "$SHELL_DEPLOYED" = "true" ]; then
             check 200 "$site"
+            # A deep page path gets the shell too (kamp.fm's shell function), and it must be this
+            # build's: every asset it names has to load.
+            check 200 "${site}user/__smoke__"
+            cp "$RUNNER_TEMP/body" "$RUNNER_TEMP/shell.html"
+            grep -q "<meta name=\"aoty-base\" content=\"${BASE_PATH}\">" "$RUNNER_TEMP/shell.html" \
+              || { echo "::error::${site}user/__smoke__ isn't the shell for ${BASE_PATH}"; exit 1; }
+            assets=$(grep -oE "${BASE_PATH}assets/[A-Za-z0-9._-]+" "$RUNNER_TEMP/shell.html" | sort -u)
+            [ -n "$assets" ] || { echo "::error::the shell names no assets"; exit 1; }
+            for path in $assets; do
+              grep -qF "${path#"$BASE_PATH"}" <(cd dist/web && find assets -type f) \
+                || { echo "::error::kamp.fm serves an older shell: $path isn't in this build"; exit 1; }
+              check 200 "https://kamp.fm${path}"
+            done
           fi
 
       # Sandbox is shared and the last deploy wins, so record what's there now and who put it.
