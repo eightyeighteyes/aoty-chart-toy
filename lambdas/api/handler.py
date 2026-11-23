@@ -13,8 +13,10 @@ answer, errors included, is Cache-Control: no-store.
   GET  <base>api/users/<name>/status  200 status (api_core.status) | 404 unknown user
 
 POST sync, in order:
-  1. A user with no row (or an expired not_found one) is checked with user.getInfo (3 s, one
-     attempt). Not found: a not_found row with a one-day TTL (expires_at), then 404.
+  1. A user with no row (or an expired not_found one) is new. Unless new users are paused, the
+     name counts against the caller's IP (new_users_per_ip_hour distinct names, 429 over it),
+     then is checked with user.getInfo (3 s, one attempt). Not found: a not_found row with a
+     one-day TTL (expires_at), then 404.
   2. api_core.decide_sync: a running sync or the per-user cooldown (sync_cooldown_seconds) answers
      200 without queueing.
   3. A new user is refused (503 busy) while the sync queue is over max_queue_for_new: random
@@ -136,10 +138,12 @@ def handler(event, context, deps=None):
   if deps is None:
     _deps = _deps or Deps.from_env()
     deps = _deps
+  headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
   try:
     if action == "status":
       return get_status(deps, name)
-    return post_sync(deps, name, event.get("headers") or {})
+    source_ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
+    return post_sync(deps, name, headers, core.client_ip(headers, source_ip, trusted=False))
   except Exception:
     log.exception("%s failed for %s", action, _tag(name))
     return _response(503, {"error": "unavailable"})
@@ -158,8 +162,9 @@ def get_status(deps, name):
   return _response(200, core.status(row, now, _cooldown(deps), depth))
 
 
-def post_sync(deps, name, headers):
-  ctype = next((v for k, v in headers.items() if k.lower() == "content-type"), "")
+def post_sync(deps, name, headers, ip):
+  """headers: lowercase names. ip: the viewer, for the per-IP limit on new names."""
+  ctype = headers.get("content-type", "")
   if not ctype.lower().startswith("application/json"):
     return _response(415, {"error": "send content-type: application/json"})
   now, cooldown, settings = int(deps.clock()), _cooldown(deps), deps.settings()
@@ -168,6 +173,10 @@ def post_sync(deps, name, headers):
   if not row or (row.get("state") == "not_found" and (row.get("expires_at") or 0) <= now):
     if settings.new_users_paused:  # before user.getInfo: a pause spends nothing on Last.fm
       return _response(503, {"error": "paused"})
+    _log_header_shape(headers)
+    if not _allow_new_name(deps, name, ip, now, settings.new_users_per_ip_hour):
+      log.info("new-name limit reached for %s", _tag(name))
+      return _response(429, {"error": "too_many_new"})
     try:
       canonical = deps.lastfm.user_info(name)
     except Exception as e:  # LastfmError, a timeout, SSM: say "try later", never "no such user"
@@ -300,6 +309,46 @@ def _restore(deps, name, previous):
                            ExpressionAttributeNames={"#a": "state", "#b": "sync_requested_at"})  # fmt: skip
   except Exception:
     log.exception("could not undo the queued mark for %s", _tag(name))
+
+
+IP_WINDOW_S = 3600
+
+
+def _allow_new_name(deps, name, ip, now, limit):
+  """Count name against ip's distinct new names this hour; False once over limit.
+
+  The guard table item ip#<hash>#<hour> holds a string set of hashed names. Adding a name is
+  conditional: room left, or the name is already there, so retrying the same name (say after
+  lastfm_unavailable) never uses up the allowance. Items expire an hour after their window.
+  """
+  hour = now // IP_WINDOW_S
+  tag = core.name_tag(name)
+  try:
+    deps.ddb.update_item(
+      TableName=deps.env["GUARD_TABLE"],
+      Key={"id": {"S": core.ip_limit_key(ip, hour)}},
+      UpdateExpression="ADD #n :h SET #e = if_not_exists(#e, :exp)",
+      ConditionExpression="attribute_not_exists(#n) OR size(#n) < :lim OR contains(#n, :t)",
+      ExpressionAttributeNames={"#n": "names", "#e": "expires_at"},
+      ExpressionAttributeValues={
+        ":h": {"SS": [tag]}, ":t": {"S": tag}, ":lim": {"N": str(limit)},
+        ":exp": {"N": str((hour + 2) * IP_WINDOW_S)},
+      },
+    )  # fmt: skip
+  except Exception as e:
+    if _error_code(e) == "ConditionalCheckFailedException":
+      return False
+    raise
+  return True
+
+
+def _log_header_shape(headers):
+  """Which client-IP headers arrive, without any address (AOTY-26: confirm before trusting)."""
+  xff = [p for p in (headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+  log.info(
+    "ip headers: viewer_address=%s xff_entries=%d origin_header=%s",
+    "cloudfront-viewer-address" in headers, len(xff), "x-kamp-origin" in headers,
+  )  # fmt: skip
 
 
 DEPTH_TTL_S = 10  # status polls from a crowd of queued pages would otherwise each call SQS

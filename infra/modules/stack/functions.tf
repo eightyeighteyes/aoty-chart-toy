@@ -22,6 +22,7 @@ locals {
     SSM_PREFIX     = local.ssm_prefix
     USERS_TABLE    = aws_dynamodb_table.users.name
     ALBUMS_TABLE   = aws_dynamodb_table.albums.name
+    GUARD_TABLE    = aws_dynamodb_table.guard.name
     SITE_BUCKET    = aws_s3_bucket.site.bucket
     STORE_BUCKET   = aws_s3_bucket.store.bucket
     SYNC_QUEUE_URL = aws_sqs_queue.main["sync"].url
@@ -49,8 +50,18 @@ locals {
         actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         resources = [aws_dynamodb_table.users.arn]
       },
+      {
+        # The per-IP new-name limit, queue tickets and the measured wait (AOTY-26).
+        actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+        resources = [aws_dynamodb_table.guard.arn]
+      },
     ]
     sync = [
+      {
+        # Using up queue tickets and recording first-sync times (AOTY-26).
+        actions   = ["dynamodb:UpdateItem"]
+        resources = [aws_dynamodb_table.guard.arn]
+      },
       { actions = local.queue_consume, resources = [aws_sqs_queue.main["sync"].arn] },
       {
         actions   = ["sqs:SendMessage"]

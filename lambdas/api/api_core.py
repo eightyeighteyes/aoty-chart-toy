@@ -17,6 +17,8 @@ The users row (written by api, sync and the chart builder) carries:
   display_name       Last.fm's casing (sync, or api on a new user)
 """
 
+import hashlib
+import ipaddress
 import json
 import re
 from urllib.parse import unquote
@@ -47,6 +49,43 @@ def route(method, path, base):
   if method != ("POST" if action == "sync" else "GET"):
     return "method", None
   return action, unquote(m.group(1)).strip().lower()
+
+
+def client_ip(headers, source_ip, trusted):
+  """The viewer's IP for the per-IP limit.
+
+  Only a request that carried kamp.fm's origin secret came through CloudFront (trusted): then the
+  viewer is CloudFront-Viewer-Address (ip:port, set by CloudFront, if forwarded), else the last
+  X-Forwarded-For entry that isn't the edge itself (requestContext's sourceIp). Anything earlier
+  in X-Forwarded-For is whatever the client sent. Untrusted requests (sandbox, or execute-api
+  before the lock is enforced) use sourceIp. headers has lowercase names (payload v2).
+  """
+  if trusted:
+    viewer = (headers.get("cloudfront-viewer-address") or "").strip()
+    if viewer:
+      return viewer.rsplit(":", 1)[0].strip("[]")
+    parts = [p.strip() for p in (headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+    if parts and parts[-1] == source_ip:
+      parts.pop()
+    if parts:
+      return parts[-1]
+  return source_ip or ""
+
+
+def ip_limit_key(ip, hour):
+  """The guard table key counting one IP's new names in one hour. IPv6 is grouped by /64, since
+  one subscriber usually holds a whole /64. Hashed: the table never stores an address."""
+  try:
+    addr = ipaddress.ip_address(ip)
+    bucket = str(ipaddress.ip_network(f"{ip}/64", strict=False)) if addr.version == 6 else str(addr)
+  except ValueError:
+    bucket = ip
+  return f"ip#{hashlib.sha256(bucket.encode()).hexdigest()[:16]}#{hour}"
+
+
+def name_tag(name):
+  """The short hash of a username that the per-IP set holds."""
+  return hashlib.sha256(name.encode()).hexdigest()[:12]
 
 
 def _last_activity(row):

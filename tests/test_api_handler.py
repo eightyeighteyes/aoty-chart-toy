@@ -12,7 +12,7 @@ from common import dynamo, guardrails
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "api" / "handler.py"
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
-ENV = {"USERS_TABLE": "users", "SYNC_QUEUE_URL": "q/sync"}
+ENV = {"USERS_TABLE": "users", "GUARD_TABLE": "guard", "SYNC_QUEUE_URL": "q/sync"}
 
 
 @pytest.fixture
@@ -33,6 +33,20 @@ class FakeDDB:
 
   def __init__(self, race=None):
     self.rows, self.race = {}, race  # race(rows) runs just before a conditional update
+    self.guard = {}  # the guard table: id -> item (plain values)
+
+  def _guard_update(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                    ConditionExpression=None, **kw):  # fmt: skip
+    """The api's per-IP update: ADD a name tag to a set if there's room or it's already there."""
+    assert UpdateExpression == "ADD #n :h SET #e = if_not_exists(#e, :exp)"
+    item = self.guard.setdefault(Key["id"]["S"], {})
+    v = ExpressionAttributeValues
+    names, tag, limit = item.get("names", set()), v[":t"]["S"], int(v[":lim"]["N"])
+    if names and len(names) >= limit and tag not in names:
+      raise ConditionFailed()
+    item["names"] = names | set(v[":h"]["SS"])
+    item.setdefault("expires_at", int(v[":exp"]["N"]))
+    return {}
 
   def get_item(self, TableName, Key, **kw):
     row = self.rows.get(Key["username"]["S"])
@@ -44,7 +58,10 @@ class FakeDDB:
     return {"Item": item}
 
   def update_item(self, TableName, Key, UpdateExpression, ExpressionAttributeNames=None,
-                  ExpressionAttributeValues=None, ConditionExpression=None):  # fmt: skip
+                  ExpressionAttributeValues=None, ConditionExpression=None, **kw):  # fmt: skip
+    if TableName == "guard":
+      return self._guard_update(Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                                ConditionExpression)  # fmt: skip
     name = Key["username"]["S"]
     names = ExpressionAttributeNames or {}
     values = dynamo.from_item(ExpressionAttributeValues or {})
@@ -101,9 +118,10 @@ def deps(h, ddb=None, sqs=None, fm=None, now=NOW, **settings):
                 clock=lambda: now, settings=lambda: s)  # fmt: skip
 
 
-def call(h, d, method, name, action, ctype="application/json"):
-  event = {"rawPath": f"{BASE}api/users/{name}/{action}", "requestContext": {"http": {"method": method}},
-           "headers": {"content-type": ctype} if ctype else {}}  # fmt: skip
+def call(h, d, method, name, action, ctype="application/json", ip="198.51.100.7", headers=None):
+  event = {"rawPath": f"{BASE}api/users/{name}/{action}",
+           "requestContext": {"http": {"method": method, "sourceIp": ip}},
+           "headers": {**({"content-type": ctype} if ctype else {}), **(headers or {})}}  # fmt: skip
   out = h.handler(event, None, d)
   assert out["headers"]["cache-control"] == "no-store"
   return out["statusCode"], json.loads(out["body"])
@@ -283,6 +301,40 @@ def test_a_paused_user_already_queued_is_still_in_progress(h):
   ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5}
   code, body = sync(h, deps(h, ddb, pause_new_users=True))
   assert code == 200 and body["reason"] == "in_progress"
+
+
+def test_one_ip_gets_a_few_distinct_new_names_an_hour(h):
+  fm = FakeLastfm()
+  d = deps(h, fm=fm, new_users_per_ip_hour=2)
+  assert sync(h, d, "alice")[0] == 202
+  assert sync(h, d, "bob")[0] == 202
+  code, body = sync(h, d, "carol")
+  assert code == 429 and body["error"] == "too_many_new" and fm.calls == 2
+  assert sync(h, d, "carol", ip="203.0.113.9")[0] == 202  # another IP has its own allowance
+  later = deps(h, d.ddb, d.sqs, fm, now=NOW + 3600, new_users_per_ip_hour=2)
+  assert sync(h, later, "carol")[0] == 202  # a new hour
+
+
+def test_retrying_a_name_doesnt_use_up_the_allowance(h):
+  ddb = FakeDDB()
+  down = deps(h, ddb, fm=FakeLastfm(error=TimeoutError("slow")), new_users_per_ip_hour=1)
+  assert sync(h, down, "alice")[1]["error"] == "lastfm_unavailable"
+  assert sync(h, deps(h, ddb, new_users_per_ip_hour=1), "alice")[0] == 202
+
+
+def test_known_users_dont_count_against_the_ip(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
+  d = deps(h, ddb, new_users_per_ip_hour=1)
+  assert sync(h, d, "alice")[0] == 202 and ddb.guard == {}
+
+
+def test_the_guard_table_stores_no_address_or_name(h):
+  d = deps(h)
+  sync(h, d, "alice", ip="198.51.100.7")
+  ((key, item),) = d.ddb.guard.items()
+  assert "198.51.100.7" not in key and "alice" not in str(item)
+  assert item["expires_at"] == (NOW // 3600 + 2) * 3600
 
 
 def test_the_cooldown_is_a_runtime_setting(h):

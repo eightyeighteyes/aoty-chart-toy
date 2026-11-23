@@ -40,6 +40,35 @@ def test_routed_names_still_need_validation():
   assert not core.USERNAME_RE.match(name)
 
 
+# ---- the client IP ------------------------------------------------------------------------
+
+EDGE = "130.176.1.1"
+
+
+def test_an_untrusted_request_uses_the_source_ip():
+  headers = {"x-forwarded-for": "6.6.6.6", "cloudfront-viewer-address": "6.6.6.6:1234"}
+  assert core.client_ip(headers, "198.51.100.7", trusted=False) == "198.51.100.7"
+
+
+def test_a_trusted_request_prefers_the_viewer_address():
+  assert core.client_ip({"cloudfront-viewer-address": "198.51.100.7:46532"}, EDGE, True) == "198.51.100.7"
+  v6 = {"cloudfront-viewer-address": "2001:db8::1:46532"}
+  assert core.client_ip(v6, EDGE, True) == "2001:db8::1"
+
+
+@pytest.mark.parametrize("xff", ["198.51.100.7", f"198.51.100.7, {EDGE}", f"6.6.6.6, 198.51.100.7, {EDGE}"])
+def test_a_trusted_request_takes_the_last_forwarded_entry_before_the_edge(xff):
+  assert core.client_ip({"x-forwarded-for": xff}, EDGE, True) == "198.51.100.7"
+
+
+def test_ipv6_is_limited_per_64_and_keys_hide_the_address():
+  a = core.ip_limit_key("2001:db8:1:2:aaaa::1", 7)
+  assert a == core.ip_limit_key("2001:db8:1:2:bbbb::9", 7) != core.ip_limit_key("2001:db8:1:3::1", 7)
+  assert core.ip_limit_key("198.51.100.7", 7) != core.ip_limit_key("198.51.100.8", 7)
+  assert "2001" not in a and a.endswith("#7")
+  assert core.ip_limit_key("not-an-ip", 7).startswith("ip#")
+
+
 # ---- the sync decision ----------------------------------------------------------------
 
 
