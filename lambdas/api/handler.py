@@ -54,7 +54,7 @@ from pathlib import Path
 
 import api_core as core
 
-from common import dynamo, guardrails, lastfm
+from common import dynamo, emf, guardrails, lastfm
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -98,6 +98,10 @@ class Deps:
       self._lastfm = self._lastfm_factory()
     return self._lastfm
 
+  def lastfm_calls(self):
+    """The client's running count of HTTP attempts, without creating it (that reads SSM)."""
+    return getattr(self._lastfm, "calls", 0) if self._lastfm is not None else 0
+
   @classmethod
   def from_env(cls):
     import boto3  # in the Lambda runtime; not needed by tests
@@ -128,11 +132,39 @@ def _response(status, body):
 
 
 def handler(event, context, deps=None):
+  """Dispatch; a POST sync's outcome is counted once here, whichever return it took (AOTY-41)."""
+  info = {}
+  started = time.time()
+  out = _dispatch(event or {}, context, deps, info)
+  if info.get("action") == "sync":
+    _emit(info, out, time.time() - started)
+  return out
+
+
+def _emit(info, out, seconds):
+  """One EMF line per POST sync: SyncRequests and LastfmCalls (this request's user.getInfo, if
+  any); the outcome is a plain field for the dashboard's Logs Insights table. Status polls
+  aren't counted: a queued crowd's polling would drown everything else. No username."""
+  try:
+    body = json.loads(out.get("body") or "{}")
+  except ValueError:
+    body = {}
+  emf.emit(
+    os.environ.get("AOTY_ENV", ""),
+    {"SyncRequests": (1, "Count"), "LastfmCalls": (info.get("lastfm_calls", 0), "Count")},
+    source="api",
+    outcome=core.sync_outcome(out.get("statusCode"), body, info.get("new", False)),
+    status=out.get("statusCode"),
+    seconds=round(seconds, 3),
+  )
+
+
+def _dispatch(event, context, deps, info):
   global _deps
-  event = event or {}
   base = os.environ.get("BASE_PATH", "/")
   method = ((event.get("requestContext") or {}).get("http") or {}).get("method", "GET").upper()
   action, name = core.route(method, event.get("rawPath", ""), base)
+  info["action"] = action
   if action == "health":
     # "source" tells CD's smoke test this is deployed code, not Terraform's placeholder, and
     # "sha" which commit: the smoke test fails unless it's the one just deployed.
@@ -148,6 +180,7 @@ def handler(event, context, deps=None):
     _deps = _deps or Deps.from_env()
     deps = _deps
   headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+  calls_before = deps.lastfm_calls()  # the client outlives the request: count the difference
   try:
     # Through kamp.fm's CloudFront, the request carries the origin secret. Health above is exempt,
     # so a mis-set secret can't fail CD's smoke test.
@@ -157,10 +190,12 @@ def handler(event, context, deps=None):
     if action == "status":
       return get_status(deps, name)
     source_ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
-    return post_sync(deps, name, headers, core.client_ip(headers, source_ip, trusted), trusted)
+    return post_sync(deps, name, headers, core.client_ip(headers, source_ip, trusted), trusted, info)
   except Exception:
     log.exception("%s failed for %s", action, _tag(name))
     return _response(503, {"error": "unavailable"})
+  finally:
+    info["lastfm_calls"] = deps.lastfm_calls() - calls_before
 
 
 def _cooldown(deps):
@@ -183,9 +218,11 @@ def get_status(deps, name):
   return _response(200, _status(deps, row, int(deps.clock()), _cooldown(deps)))
 
 
-def post_sync(deps, name, headers, ip, trusted=False):
+def post_sync(deps, name, headers, ip, trusted=False, info=None):
   """headers: lowercase names. ip: the viewer, for the per-IP limit on new names. trusted: the
-  origin secret matched (logged with the header shape)."""
+  origin secret matched (logged with the header shape). info, if given, gets "new" (a user's
+  first sync) for the metric line."""
+  info = {} if info is None else info
   ctype = headers.get("content-type", "")
   if not ctype.lower().startswith("application/json"):
     return _response(415, {"error": "send content-type: application/json"})
@@ -218,6 +255,7 @@ def post_sync(deps, name, headers, ip, trusted=False):
   if decision != "queue":
     return _response(200, {"queued": False, "reason": decision, "status": _status(deps, row, now, cooldown)})
   new = not row.get("last_synced_at")
+  info["new"] = new
   if new and settings.new_users_paused:
     return _response(503, {"error": "paused"})
   if settings.pause_syncs:  # an existing user: their chart still serves; the banner stays quiet

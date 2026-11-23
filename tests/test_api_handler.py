@@ -509,6 +509,41 @@ def test_status_matches_the_core(h):
   assert status(h, deps(h, ddb))[1] == core.status(row, NOW, 600)
 
 
+# ---- metrics (AOTY-41) ------------------------------------------------------------------
+
+
+def _emf(capsys):
+  return [json.loads(x) for x in capsys.readouterr().out.splitlines() if '"_aws"' in x]
+
+
+def test_each_sync_request_emits_one_line_with_its_outcome(h, capsys):
+  d = deps(h)
+  sync(h, d, "alice")  # a new user, queued
+  sync(h, d, "alice")  # still queued
+  sync(h, d, "alice", ctype="text/plain")
+  sync(h, d, "-bad-")
+  status(h, d)  # polls are never counted
+  lines = _emf(capsys)
+  assert [x["outcome"] for x in lines] == ["new_user", "in_progress", "not_json", "bad_name"]
+  assert all(x["SyncRequests"] == 1 for x in lines)
+  assert "alice" not in json.dumps(lines)
+
+
+def test_lastfm_calls_are_this_requests_only(h, capsys):
+  fm = FakeLastfm()
+  fm.calls = 40  # earlier requests on a warm container
+  d = deps(h, fm=fm)
+  sync(h, d, "alice")  # one user.getInfo
+  sync(h, d, "alice")  # none: a known user in the cooldown
+  assert [x["LastfmCalls"] for x in _emf(capsys)] == [1, 0]
+
+
+def test_refusals_are_named_after_their_error(h, capsys):
+  sync(h, deps(h, pause_new_users=True), "bob")
+  sync(h, deps(h, fm=FakeLastfm(error=TimeoutError("slow"))), "carol")
+  assert [x["outcome"] for x in _emf(capsys)] == ["paused", "lastfm_unavailable"]
+
+
 def test_logs_never_name_the_user(h, caplog):
   with caplog.at_level("INFO"):
     sync(h, deps(h), "alice")

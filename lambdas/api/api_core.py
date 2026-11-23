@@ -54,6 +54,23 @@ def route(method, path, base):
   return action, unquote(m.group(1)).strip().lower()
 
 
+# Answers for the sync request's metric line (AOTY-41), by status where the body can't tell them
+# apart. 503 errors and 200 reasons are already short names.
+_STATUS_OUTCOMES = {400: "bad_name", 403: "origin_refused", 404: "unknown_user", 415: "not_json"}
+
+
+def sync_outcome(status, body, new=False):
+  """One word for how a POST sync ended, for the api's EMF line: queued / new_user, a 200
+  reason (cooldown, in_progress, paused), a 503 or 429 error (paused, busy, too_many_new,
+  lastfm_unavailable, queue_unavailable, unavailable), or one of _STATUS_OUTCOMES."""
+  if status == 202:
+    return "new_user" if new else "queued"
+  if status in _STATUS_OUTCOMES:
+    return _STATUS_OUTCOMES[status]
+  body = body if isinstance(body, dict) else {}
+  return str(body.get("reason") or body.get("error") or status)
+
+
 def client_ip(headers, source_ip, trusted):
   """The viewer's IP for the per-IP limit.
 

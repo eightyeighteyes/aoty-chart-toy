@@ -106,7 +106,7 @@ syncs and set the cooldown and limits without a deploy; the HTTP API throttles G
 separately; and with `enforce_origin` the api refuses user routes that lack kamp.fm's
 `x-kamp-origin` secret, so the `execute-api` URL can't bypass CloudFront.
 
-## Monitoring (AOTY-27)
+## Monitoring (AOTY-27, AOTY-41)
 
 ```mermaid
 flowchart LR
@@ -118,15 +118,16 @@ flowchart LR
   alarms --> topic["SNS kamp-aoty-alerts<br/>(global, one for all envs)"]
   budget["AWS Budget $40/month<br/>(account-wide)"] --> topic
   topic --> email(["owner's email<br/>(subscribed by hand)"])
-  dash["dashboard per env (AOTY-41)"]:::planned
-  cw -.-> dash
-
-  classDef planned stroke-dasharray: 5 5
+  dash["dashboard per env (AOTY-41)<br/>metrics + Logs Insights tables"]
+  cw --> dash
+  logs[("Lambda log groups<br/>outcome fields")] --> dash
 ```
 
 Each alarm's description links to its runbook entry in `infra/README.md`, "Alarms". The topic
 and the budget are in `infra/global/` (applied by the admin), so no deploy role touches SNS or
-Budgets, and sandbox's role (usable from any branch) can't write alarms at all.
+Budgets, and sandbox's role (usable from any branch) can't write alarms at all. The dashboard
+(`infra/README.md`, "Dashboard") stays within the free tier's 50 metrics. The sync and api
+outcomes are log fields rather than metrics, so they cost nothing until queried.
 
 ## Visitor flow
 

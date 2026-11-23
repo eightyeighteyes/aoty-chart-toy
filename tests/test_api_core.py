@@ -5,6 +5,27 @@ import json
 import api_core as core
 import pytest
 
+
+@pytest.mark.parametrize(
+  "status,body,new,expected",
+  [
+    (202, {"queued": True}, False, "queued"),
+    (202, {"queued": True}, True, "new_user"),
+    (200, {"queued": False, "reason": "cooldown"}, False, "cooldown"),
+    (200, {"queued": False, "reason": "paused"}, False, "paused"),
+    (503, {"error": "busy"}, True, "busy"),
+    (429, {"error": "too_many_new"}, True, "too_many_new"),
+    (403, {"error": "forbidden"}, False, "origin_refused"),
+    (415, {"error": "send content-type: application/json"}, False, "not_json"),
+    (404, {"error": "unknown user"}, False, "unknown_user"),
+    (400, {"error": "invalid username"}, False, "bad_name"),
+    (500, None, False, "500"),
+  ],
+)
+def test_sync_outcome_names_every_answer(status, body, new, expected):
+  assert core.sync_outcome(status, body, new) == expected
+
+
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
 COOL = 600

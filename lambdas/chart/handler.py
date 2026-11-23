@@ -84,6 +84,8 @@ def handler(event, context, deps=None):
     deps = _deps
   event = event or {}
   started = deps.mono()
+  # The client lives as long as the warm container: count this run's calls as a difference.
+  calls_before = _lastfm_calls(deps)
   totals = {"built": 0, "skipped": 0, "failed": 0, "checked": 0}
   if event.get("pending"):
     for row in _pending_users(deps):
@@ -98,8 +100,14 @@ def handler(event, context, deps=None):
       requested_at = int(event.get("requested_at") or 0)
       year = int(event.get("year") or TARGET_YEAR)
       _guarded(deps, username, totals, lambda: _build_requested(deps, username, year, requested_at, totals))
-  _emit(deps, totals, deps.mono() - started)
+  _emit(deps, totals, deps.mono() - started, _lastfm_calls(deps) - calls_before)
   return totals
+
+
+def _lastfm_calls(deps):
+  """lastfm.Client's running count of HTTP attempts (0 without a client)."""
+  n = getattr(deps.lastfm, "calls", 0)
+  return n if isinstance(n, int) else 0
 
 
 def _guarded(deps, username, totals, fn):
@@ -325,13 +333,14 @@ def _pending_users(deps):
 # ---- metrics ----------------------------------------------------------------------------
 
 
-def _emit(deps, totals, elapsed):
+def _emit(deps, totals, elapsed, lastfm_calls=0):
   values = {
     "ChartsBuilt": (totals["built"], "Count"),
     "ChartsSkipped": (totals["skipped"], "Count"),
     "ChartFailures": (totals["failed"], "Count"),
     "ChartSeconds": (round(elapsed, 2), "Seconds"),
     "CoverLookups": (totals.get("covers", 0), "Count"),
+    "LastfmCalls": (lastfm_calls, "Count"),  # one metric shared by every function
   }
   line = {
     "_aws": {

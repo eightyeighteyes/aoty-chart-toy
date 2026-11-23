@@ -38,7 +38,7 @@ import re
 import time
 
 import sync_core as core
-from common import lastfm
+from common import emf, lastfm
 from common.albumkey import join_key, split_key
 from common.config import TARGET_YEAR
 
@@ -95,10 +95,11 @@ def handler(event, context, deps=None):
 
   failures = []
   for rec in event["Records"]:
-    msg = {}
+    msg, info, result = {}, {}, "failed"
+    started, calls_before = deps.clock(), _lastfm_calls(deps)
     try:
       msg = json.loads(rec["body"])
-      result = sync_user(msg, context, deps)
+      result = sync_user(msg, context, deps, info)
     except Exception as e:
       log.exception("sync failed for %s", _tag(msg.get("username")))
       receives = int((rec.get("attributes") or {}).get("ApproximateReceiveCount", 1))
@@ -110,6 +111,8 @@ def handler(event, context, deps=None):
         _set_visibility(deps, rec, retry_delay(receives))
       failures.append({"itemIdentifier": rec["messageId"]})
       continue
+    finally:
+      _emit(deps, result, info, deps.clock() - started, _lastfm_calls(deps) - calls_before)
     if result == "partial":
       # Out of time with weeks left: checkpointed, so make it visible again right away.
       _set_visibility(deps, rec, 0)
@@ -117,8 +120,38 @@ def handler(event, context, deps=None):
   return {"batchItemFailures": failures}
 
 
-def sync_user(msg, context, deps):
-  """One sync. Returns "done", "partial", "not_found", "private" or "invalid"."""
+def _lastfm_calls(deps):
+  """The client's running count of HTTP attempts. The client lives as long as the warm
+  container, so callers take differences, never the total."""
+  return getattr(deps.lastfm, "calls", 0)
+
+
+def _emit(deps, outcome, info, seconds, calls):
+  """One EMF line per record (AOTY-41). Metrics: SyncsDone, SyncFailures, LastfmCalls; the
+  rest are plain fields (free) for the dashboard's Logs Insights table. No username."""
+  emf.emit(
+    deps.env.get("AOTY_ENV", ""),
+    {
+      "SyncsDone": (1 if outcome == "done" else 0, "Count"),
+      "SyncFailures": (1 if outcome == "failed" else 0, "Count"),
+      "LastfmCalls": (calls, "Count"),
+    },
+    clock=deps.clock,
+    source="sync",
+    outcome=outcome,
+    first_sync=bool(info.get("first_sync")),
+    weeks=info.get("weeks", 0),
+    seconds=round(seconds, 1),
+  )
+
+
+def sync_user(msg, context, deps, info=None):
+  """One sync. Returns "done", "partial", "not_found", "private" or "invalid".
+
+  info, if given, gets "weeks" (weeks fetched) and "first_sync" (a clean first sync) for the
+  run's EMF line.
+  """
+  info = {} if info is None else info
   username = str(msg.get("username") or "").strip().lower()
   if not USERNAME_RE.match(username):
     log.warning("invalid username in message; dropped")
@@ -151,6 +184,8 @@ def sync_user(msg, context, deps):
     _guard_add(deps, {"started": 1})
   # A clean first sync (no earlier attempt) measures the job time a queue's wait is estimated from.
   timed_first = not store.get("last_seen_uts") and not user.get("sync_started_at")
+  info["first_sync"] = timed_first
+  calls_before = getattr(deps.lastfm, "calls", 0)
   log.info("sync %s year=%s full=%s weeks=%d", tag, year, full, len(todo))
 
   try:
@@ -161,6 +196,7 @@ def sync_user(msg, context, deps):
         return "partial"
       rows = core.fetch_range(lambda f, t: deps.lastfm.weekly_album_chart(username, f, t), frm, min(to, now))
       core.merge_week(store, (frm, to), *core.chart_plays(rows), now)
+      info["weeks"] = i
       progress.update(weeks_done=i, **_progress_stats(store))
       if i % CHECKPOINT_EVERY == 0:
         _save_progress(deps, username, store, progress)
@@ -196,7 +232,7 @@ def sync_user(msg, context, deps):
     _guard_add(deps, {"first_syncs": 1, "first_sync_seconds": max(1, done["sync_finished_at"] - now)})
   start_chart_build(deps, username, year, now)
   log.info("sync %s done: %d weeks, %d plays, %d queued for mb, %d Last.fm calls",
-           tag, len(todo), progress["plays"], queued, getattr(deps.lastfm, "calls", 0))  # fmt: skip
+           tag, len(todo), progress["plays"], queued, getattr(deps.lastfm, "calls", 0) - calls_before)  # fmt: skip
   return "done"
 
 

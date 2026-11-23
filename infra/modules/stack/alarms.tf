@@ -157,7 +157,7 @@ locals {
         period    = 900
         evals     = 1
         op        = "GreaterThanThreshold"
-        threshold = 1800
+        threshold = 1800000 # AsyncEventAge is in milliseconds: 30 min
         missing   = "notBreaching"
       }
       chart-events-dropped = {

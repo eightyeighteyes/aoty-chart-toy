@@ -13,7 +13,7 @@ What it checks: the queue grows while sync concurrency, Last.fm's request rate a
   3. POSTs sync for loadtest-0001.. at --rate per second (under the POST route's throttle) and
      polls a few users' status, recording their place in line.
   4. Samples the sync queue's depth every 30 s until it drains or --watch minutes pass.
-  5. Reads CloudWatch per minute: sync ConcurrentExecutions (max), LastfmCalls (the fake's EMF
+  5. Reads CloudWatch per minute: sync ConcurrentExecutions (max), FakeLastfmCalls (the fake's EMF
      count, all functions), sync invocations and duration, chart throttles, the oldest message's
      age. Writes data/load_test/run-<ts>/report.md.
   6. Always (in `finally`) removes LASTFM_FAKE and puts the SSM values back as they were.
@@ -187,7 +187,7 @@ def metrics(stack, started, ended):
     q("sync_duration_ms", "AWS/Lambda", "Duration", {"FunctionName": fns["sync"]}, "Sum"),
     q("chart_throttles", "AWS/Lambda", "Throttles", {"FunctionName": fns["chart"]}, "Sum"),
     q("oldest_age_s", "AWS/SQS", "ApproximateAgeOfOldestMessage", {"QueueName": sync_q}, "Maximum"),
-    q("lastfm_calls", "kamp-aoty", "LastfmCalls", {"Environment": stack["environment"]}, "Sum"),
+    q("lastfm_calls", "kamp-aoty", "FakeLastfmCalls", {"Environment": stack["environment"]}, "Sum"),
   ]
   out = sb.run_aws(["cloudwatch", "get-metric-data", "--metric-data-queries", json.dumps(queries),
                     "--start-time", started.isoformat(), "--end-time", (ended + dt.timedelta(minutes=2)).isoformat()])
