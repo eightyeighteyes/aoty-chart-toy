@@ -107,7 +107,8 @@
   // One ranking's poster view and list view.
   function renderRanking(chart, rows, mode) {
     if (!rows.length) {
-      const wait = chart.pending ? ` ${num(chart.pending)} of their albums are still being checked.` : "";
+      const line = grp.checkingLine(chart);
+      const wait = line ? ` ${line}` : "";
       const whose = chart.kind === "group" ? `the ${esc(chart.name)} group` : esc(chart.display_name);
       return `<p class="empty">No ${chart.year} albums in ${whose}'s scrobbles yet.${wait}</p>`;
     }
@@ -142,10 +143,11 @@
     const rows = chart.rankings[mode].map(([i, s], k) => ({...chart.albums[i], score: s, rank: k + 1}));
     const who = chart.display_name;
     $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${who} played, ${MODES[mode]}.`;
-    if (chart.pending) {
+    const checking = grp.checkingLine(chart);
+    if (checking) {
       const p = $("sub").appendChild(document.createElement("span"));
       p.className = "pending";
-      p.textContent = ` ${num(chart.pending)} album${chart.pending === 1 ? " is" : "s are"} still being checked.`;
+      p.textContent = ` ${checking}`;
     }
     $("ranking").innerHTML = renderRanking(chart, rows, mode);
   }
@@ -675,12 +677,11 @@
     groupWho = who < 0 ? "" : chart.members[who];
     const whose = who < 0 ? `${chart.name}'s members` : chart.members[who];
     $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${MODES[mode]}.`;
-    const extra = [grp.loadingLine(chart), chart.pending ? `${num(chart.pending)} albums still being checked` : ""]
-        .filter(Boolean).join(" · ");
+    const extra = [grp.loadingLine(chart), grp.checkingLine(chart)].filter(Boolean).join(" · ");
     if (extra) {
       const p = $("sub").appendChild(document.createElement("span"));
       p.className = "pending";
-      p.textContent = ` ${extra}.`;
+      p.textContent = ` ${extra}`;
     }
     $("ranking").innerHTML = renderRanking(chart, rows, mode);
   }

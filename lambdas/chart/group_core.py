@@ -17,7 +17,8 @@ can say "3 of 8 still loading".
 group chart.json (version 1):
   {"version", "kind": "group", "id", "name", "year", "generated_at", "top", "featured",
    "members": [usernames, ready ones, page order], "waiting": n, "unavailable": n,
-   "pending": albums not yet dated, "weighted_min_listeners",
+   "pending": albums not yet dated, "pending_top": those in some member's top 150,
+   "weighted_min_listeners",
    "albums": [{"artist", "album", "plays", "listeners", "by": {member index: plays}, "tracks",
                "single", "art", "fallbacks": [...]}],
    "rankings": {"track" | "album" | "weighted": [[album index, score]]}}
@@ -126,6 +127,13 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
   for store in stores.values():
     played.update(chart_core.year_plays(store))
   pending = chart_core.pending_keys(played, items)
+  # Undated albums in any ready member's top 150 (what sync dates first): the page says "still
+  # checking" while these remain, then "still counting deep cuts" for the cold tail, which can
+  # still surface a lightly played album many members share (listeners rank first).
+  top = set()
+  for store in stores.values():
+    top.update(chart_core.top_keys(chart_core.year_plays(store)))
+  pending_top = sum(1 for k in top if k not in items)
   chart = {
     "version": GROUP_VERSION,
     "kind": "group",
@@ -139,6 +147,7 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
     "waiting": waiting,
     "unavailable": unavailable,
     "pending": len(pending),
+    "pending_top": pending_top,
     "weighted_min_listeners": WEIGHTED_MIN_LISTENERS,
     "albums": albums,
     "rankings": {mode: [[index[k], round(s, 3)] for k, s in rankings[mode]] for mode in MODES},
