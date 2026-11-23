@@ -132,9 +132,10 @@ locals {
     ]
     chart = [
       {
-        # The sync worker's stores, and the builder's own files beside them.
+        # The sync worker's stores and the builder's own files beside them; the beta's group
+        # definitions (AOTY-50, tools/beta_group.py).
         actions   = ["s3:GetObject"]
-        resources = ["${aws_s3_bucket.store.arn}/users/*"]
+        resources = ["${aws_s3_bucket.store.arn}/users/*", "${aws_s3_bucket.store.arn}/groups/*"]
       },
       {
         # Its own files beside them: pending keys, and the album.getInfo cover cache.
@@ -150,8 +151,11 @@ locals {
         resources = [aws_s3_bucket.store.arn]
       },
       {
-        actions   = ["s3:PutObject"]
-        resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/users/*"]
+        actions = ["s3:PutObject"]
+        resources = [
+          "${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/users/*",
+          "${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/groups/*",
+        ]
       },
       {
         actions   = ["dynamodb:BatchGetItem"]

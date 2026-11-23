@@ -76,6 +76,9 @@ class FakeS3:
   def json(self, loc):
     return json.loads(self.objects[loc])
 
+  def list_objects_v2(self, Bucket, Prefix):
+    return {"Contents": [{"Key": k} for b, k in sorted(self.objects) if b == Bucket and k.startswith(Prefix)]}
+
 
 class FakeDDB:
   def __init__(self, unprocessed_once=False):
@@ -393,3 +396,55 @@ def test_chart_plays_is_the_same_sum_sync_reports(h, world):
   h.handler({"username": "alice"}, None, Deps(s3, ddb))
   store = json.loads(gzip.decompress(s3.objects[("store", "users/alice/2026/weeks.json.gz")]))
   assert ddb.users["alice"]["chart_plays"] == sum(sync_core.year_plays(store).values())
+
+
+# ---- groups (AOTY-50, beta) -------------------------------------------------------------
+
+GROUP = "abcdefghijklmnopqrstuvwxyz"  # 26 base32 characters, as tools/beta_group.py makes
+GROUP_CHART = ("site", f"toys/aoty-test/data/groups/{GROUP}/chart.json")
+
+
+def group_world():
+  s3, ddb = FakeS3(), FakeDDB()
+  s3.objects[("store", f"groups/{GROUP}/group.json")] = json.dumps(
+    {"name": "the server", "members": ["Alice", "bob", "carol", "dave", "eve"]}
+  ).encode()
+  s3.put_store({("A", "Shared"): 5, ("B", "Mine"): 50}, username="alice")
+  s3.put_store({("A", "Shared"): 1}, username="bob")
+  s3.put_store({("A", "Shared"): 2}, username="carol")
+  ddb.add_album("A", "Shared")
+  ddb.add_album("B", "Mine")
+  for u in ("alice", "bob", "carol"):
+    ddb.users[u] = {"username": u, "state": "done", "sync_finished_at": NOW - 60, "chart_built_at": NOW - 30}
+  ddb.users["dave"] = {"username": "dave", "state": "syncing"}  # a first sync: waiting
+  ddb.users["eve"] = {"username": "eve", "state": "private"}
+  return s3, ddb
+
+
+def test_a_group_event_writes_the_group_chart_with_m0s_rules(h):
+  s3, ddb = group_world()
+  out = h.handler({"group": GROUP}, None, Deps(s3, ddb))
+  assert out["built"] == 1 and out["failed"] == 0
+  chart = s3.json(GROUP_CHART)
+  assert s3.meta[GROUP_CHART]["CacheControl"] == "no-cache"
+  assert chart["kind"] == "group" and chart["name"] == "the server"
+  assert chart["members"] == ["alice", "bob", "carol"]
+  assert (chart["waiting"], chart["unavailable"]) == (1, 1)
+  names = [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]]
+  assert names == ["Shared", "Mine"]  # 3 listeners beat 50 plays from one
+  shared = chart["albums"][chart["rankings"]["track"][0][0]]
+  assert shared["listeners"] == 3 and shared["by"] == {"0": 5, "1": 1, "2": 2}
+  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["weighted"]] == ["Shared"]  # 3+ only
+
+
+def test_a_members_sync_rebuilds_their_groups(h):
+  s3, ddb = group_world()
+  h.handler({"username": "bob", "requested_at": NOW}, None, Deps(s3, ddb))
+  assert GROUP_CHART in s3.objects
+
+
+def test_an_unknown_or_malformed_group_is_skipped(h):
+  s3, ddb = group_world()
+  assert h.handler({"group": "zzzzzzzzzzzzzzzzzzzzzzzzzz"}, None, Deps(s3, ddb))["skipped"] == 1
+  assert h.handler({"group": "../users"}, None, Deps(s3, ddb))["skipped"] == 1
+  assert GROUP_CHART not in s3.objects
