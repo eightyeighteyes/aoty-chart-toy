@@ -40,15 +40,21 @@ def as_list(v):
   return [v] if isinstance(v, dict) else list(v)
 
 
+def _default_urlopen():
+  """The network, or the load test's stand-in when it's switched on in sandbox (AOTY-26)."""
+  from common import fakelastfm
+
+  return fakelastfm.urlopen if fakelastfm.enabled() else urllib.request.urlopen
+
+
 class Client:
   def __init__(self, api_key, min_interval=MIN_INTERVAL, max_attempts=MAX_ATTEMPTS, *,
-               urlopen=urllib.request.urlopen, sleep=time.sleep, clock=time.monotonic,
-               timeout=TIMEOUT):  # fmt: skip
+               urlopen=None, sleep=time.sleep, clock=time.monotonic, timeout=TIMEOUT):  # fmt: skip
     self.api_key = api_key
     self.min_interval = min_interval
     self.max_attempts = max_attempts
     self.timeout = timeout  # per attempt; the API uses a short one inside API Gateway's 30 s
-    self._urlopen, self._sleep, self._clock = urlopen, sleep, clock
+    self._urlopen, self._sleep, self._clock = urlopen or _default_urlopen(), sleep, clock
     self._last = None
     self.calls = 0  # HTTP attempts, for logging
 
