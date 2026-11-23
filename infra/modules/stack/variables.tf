@@ -37,6 +37,26 @@ variable "index_schedule_enabled" {
   default     = true
 }
 
+variable "alarms" {
+  description = <<-EOT
+    Which CloudWatch alarms to create (AOTY-27, alarms.tf), all emailing the global kamp-aoty-alerts
+    topic: "full" (prod), "basic" (DLQs and the uptime check; staging) or "none" (sandbox, whose
+    deploy role may not write alarms at all). The first 10 alarms in the account are free.
+  EOT
+  type        = string
+  default     = "none"
+  validation {
+    condition     = contains(["full", "basic", "none"], var.alarms)
+    error_message = "alarms must be full, basic or none."
+  }
+}
+
+variable "uptime_enabled" {
+  description = "Run the hourly uptime check of kamp.fm<base_path> (AOTY-27). Off in sandbox, which isn't on kamp.fm."
+  type        = bool
+  default     = true
+}
+
 variable "log_retention_days" {
   type    = number
   default = 14

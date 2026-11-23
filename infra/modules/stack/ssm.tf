@@ -17,6 +17,8 @@ locals {
     {
       lastfm_api_key = "${local.ssm_prefix}lastfm_api_key"
       mb_contact     = "${local.ssm_prefix}mb_contact"
+      # The uptime check's user with a chart (AOTY-27): a String, kept out of the repo.
+      uptime_user = "${local.ssm_prefix}uptime_user"
     },
     { for n in local.guardrail_names : n => "${local.ssm_prefix}${n}" },
   )

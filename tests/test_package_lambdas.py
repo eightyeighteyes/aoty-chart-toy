@@ -57,7 +57,7 @@ def test_a_job_without_its_entry_script_is_an_error(tree, tmp_path):
 
 
 def test_the_repo_packages_every_function_terraform_creates():
-  assert pkg.FUNCTIONS == ("api", "sync", "mb", "chart")
+  assert pkg.FUNCTIONS == ("api", "sync", "mb", "chart", "uptime")
   for fn in pkg.FUNCTIONS:
     assert (pkg.REPO / "lambdas" / fn / "handler.py").is_file()
   tf = (pkg.REPO / "infra" / "modules" / "stack" / "functions.tf").read_text()

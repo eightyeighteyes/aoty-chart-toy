@@ -385,6 +385,31 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # Alarms (AOTY-27, modules/stack/alarms.tf), by name. The alarm actions point at the global
+  # alerts topic, which needs no sns permission from the caller (CloudWatch publishes). Tags go
+  # out with PutMetricAlarm (default_tags) and are authorized as TagResource on the alarm.
+  # DescribeAlarms is account-wide: the provider's reads don't always name the alarm.
+  # Not sandbox: any branch can deploy as that role, and an alarm could email the owner anything.
+  dynamic "statement" {
+    for_each = each.key == "sandbox" ? [] : [1]
+    content {
+      sid = "OwnAlarms"
+      actions = [
+        "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource",
+        "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource",
+      ]
+      resources = ["arn:aws:cloudwatch:${local.region}:${local.account}:alarm:kamp-aoty-${each.key}-*"]
+    }
+  }
+  dynamic "statement" {
+    for_each = each.key == "sandbox" ? [] : [1]
+    content {
+      sid       = "DescribeAlarms"
+      actions   = ["cloudwatch:DescribeAlarms"]
+      resources = ["*"]
+    }
+  }
+
   # CD invalidates its env's base path after a shell upload (AOTY-17). IAM can't scope an
   # invalidation by path, so either env's role could invalidate the other's (or kamp's) paths;
   # the worst case is a cache refill, and the workflow only ever sends its own <base>*.
@@ -596,7 +621,7 @@ data "aws_iam_policy_document" "plan" {
   }
   statement {
     sid     = "LogGroupMetadata"
-    actions = ["logs:ListTagsForResource", "logs:ListTagsLogGroup", "logs:DescribeLogGroups"]
+    actions = ["logs:ListTagsForResource", "logs:ListTagsLogGroup", "logs:DescribeLogGroups", "logs:DescribeMetricFilters"]
     resources = [
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/lambda/kamp-aoty-*",
       "arn:aws:logs:${local.region}:${local.account}:log-group:/aws/apigateway/kamp-aoty-*",
@@ -630,6 +655,16 @@ data "aws_iam_policy_document" "plan" {
       "arn:aws:apigateway:${local.region}::/apis/*",
       "arn:aws:apigateway:${local.region}::/tags/*",
     ]
+  }
+  statement {
+    sid       = "AlarmMetadata"
+    actions   = ["cloudwatch:ListTagsForResource"]
+    resources = ["arn:aws:cloudwatch:${local.region}:${local.account}:alarm:kamp-aoty-*"]
+  }
+  statement {
+    sid       = "DescribeAlarms"
+    actions   = ["cloudwatch:DescribeAlarms"]
+    resources = ["*"]
   }
   statement {
     sid       = "ScheduleMetadata"

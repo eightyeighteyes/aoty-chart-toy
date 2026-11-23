@@ -32,7 +32,9 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | Release index build (AOTY-20) | `kamp-aoty-<env>-index` ECS cluster (FARGATE_SPOT only) and task definition: 1 vCPU / 4 GB, x86_64 (Spot runs no ARM64), AWS's public `lambda/python:3.13` image pinned by digest, fetching its code from `s3://<store>/code/index.zip`. Runs in the default VPC's public subnets with a public IP and the default security group: no NAT. `…-index-daily` schedule at 06:15 UTC (off in sandbox) runs the exact revision Terraform made, through the `…-index-schedule` role. Logs in `/ecs/kamp-aoty-<env>-index`. See "Release index" below. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
 | Chart builder (AOTY-21) | The chart Lambda has **reserved concurrency 1**, so builds never overlap and an older read can't overwrite a newer chart. Started by async invokes from sync (`{"username", "requested_at"}`) and mb (`{"pending": true}`); same invoke config as mb. Writes `<prefix>data/users/<u>/chart.json` (`Cache-Control: no-cache`) to the site bucket and `users/<u>/<year>/chart_pending.json` to the store. See "Charts" below. |
-| `api`, `sync`, `mb`, `chart` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
+| Uptime check (AOTY-27) | The `uptime` Lambda (60 s, 128 MB), started hourly by the `kamp-aoty-<env>-uptime` schedule (off in sandbox, which isn't on kamp.fm) through the `…-uptime-schedule` role. Fetches `kamp.fm<base>`, `<base>api/health` and the chart of the user in SSM `uptime_user`; EMF `UptimeChecks` / `UptimeFailures`. |
+| Alarms (AOTY-27) | CloudWatch alarms to the global `kamp-aoty-alerts` topic; see "Alarms". In prod, a metric filter on the API access log counts `ApiServerErrors-prod`. |
+| `api`, `sync`, `mb`, `chart`, `uptime` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
 | HTTP API | `GET /{proxy+}`, `POST /{proxy+}` and `$default` routes → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttles per route: POST burst 5 / 2 req/s, GET (status polls) 50 / 25, the rest 20 / 10 (AOTY-26). |
 | Log groups | 14-day retention, including API access logs. |
 
@@ -90,7 +92,10 @@ How CI is kept from escalating:
 Fork PRs get no OIDC token, so the plan role works only for branches in this repo.
 
 The deploy policies list only what this skeleton uses. A story that adds a new resource type
-(SNS, alarms, …) extends `global/ci_roles.tf` and the admin applies `global` first. Event
+extends `global/ci_roles.tf` and the admin applies `global` first. Alarms (AOTY-27) are scoped
+by name (`alarm:kamp-aoty-<env>-*`) for staging and prod; the sandbox role gets none, since any
+branch could otherwise point an alarm at the owner's inbox. The alert topic and the budget live
+in `global/`, so no deploy role touches SNS or Budgets. Event
 source mappings (AOTY-18) are scoped by the `lambda:FunctionArn` condition, because their ARNs
 are random UUIDs. Schedules (AOTY-19) are scoped by name (`schedule/default/kamp-aoty-<env>-*`)
 because they carry no tags. The schedule uses Scheduler rather than an EventBridge rule, because
@@ -123,7 +128,7 @@ release PR merged → the same path, then release-please tags vX.Y.Z
 
 What a deploy (`deploy.yml`) does, as the env's deploy role:
 
-1. `python scripts/package_lambdas.py` builds `dist/{api,sync,mb,chart}.zip` from `lambdas/` (Linux
+1. `python scripts/package_lambdas.py` builds `dist/{api,sync,mb,chart,uptime}.zip` from `lambdas/` (Linux
    arm64 wheels, byte-for-byte reproducible per commit). Each zip carries a `build.json` with the
    commit's SHA (`-dirty` if a packaged file isn't committed), which `/api/health` reports.
 2. `terraform apply` for `infra/envs/<env>` (skipped with `skip_terraform`).
@@ -207,6 +212,31 @@ commits, so every branch commit becomes a changelog line: keep them Conventional
 
 5. Smoke test: `curl https://<api_domain_name>/toys/aoty-staging/api/health` → 200.
 
+### Alerts (AOTY-27, once)
+
+`global` creates the `kamp-aoty-alerts` topic and the `kamp-aoty-monthly` budget. The email
+subscription is made by hand, so the address never enters this public repo:
+
+```sh
+topic=$(terraform -chdir=infra/global output -raw alerts_topic_arn)
+aws sns subscribe --topic-arn "$topic" --protocol email --notification-endpoint '<address>'
+# Don't click the email's link: copy the Token from its URL, so unsubscribing needs AWS credentials
+# (a forwarded email's "unsubscribe" link then can't remove it)
+aws sns confirm-subscription --topic-arn "$topic" --token '<token>' --authenticate-on-unsubscribe true
+aws sns list-subscriptions-by-topic --topic-arn "$topic"   # not PendingConfirmation
+```
+
+The budget is account-wide, $40 a month: emails at $10, $20 and $40 actual, and when the
+forecast passes $40. It isn't scoped to the `Project` tag, because kamp-site shares the account
+and a cost allocation tag only counts spend from the day it was activated.
+
+The uptime check's chart user, per env (a user with a chart; a String, so no username is in
+the repo; without it the chart check is skipped):
+
+```sh
+aws ssm put-parameter --type String --name /kamp-aoty/prod/uptime_user --value '<username>' --overwrite
+```
+
 ## Testing a branch in sandbox (AOTY-33)
 
 `envs/sandbox/` is a third copy of the stack (`kamp-aoty-sandbox-*`) for trying a branch on
@@ -244,7 +274,7 @@ code and checks `<api_endpoint>/toys/aoty-sandbox/api/health`. GitHub only lists
 .venv/bin/python scripts/package_lambdas.py
 terraform -chdir=infra/envs/sandbox init
 terraform -chdir=infra/envs/sandbox apply
-for fn in api sync mb chart; do aws lambda update-function-code --function-name kamp-aoty-sandbox-$fn \
+for fn in api sync mb chart uptime; do aws lambda update-function-code --function-name kamp-aoty-sandbox-$fn \
   --zip-file fileb://dist/$fn.zip --publish; done
 ```
 
@@ -452,6 +482,116 @@ any other env), raises the per-IP and queue limits, POSTs synthetic `loadtest-*`
 writes `data/load_test/run-<ts>/report.md` (queue depth, sync concurrency, Last.fm calls per
 minute, GB-s). It puts the settings back when it ends, even on an error. Then
 `scripts/sandbox_reset.py --yes --keep-albums`.
+
+## Alarms (AOTY-27)
+
+Every alarm emails the `kamp-aoty-alerts` topic (`global/alerts.tf`) on ALARM and again on OK.
+The alarm names say which env it is (`kamp-aoty-<env>-<alarm>`). `modules/stack/alarms.tf` has
+the set, and its description links here. `alarms` per env: prod `full`, staging `basic` (the DLQs
+and the uptime check), sandbox `none` (its deploy role can't write alarms: any branch can use it).
+About 18 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
+$0.10 each a month.
+
+```sh
+aws cloudwatch describe-alarms --alarm-name-prefix kamp-aoty-prod- --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
+```
+
+What to do, per alarm:
+
+### `dlq-messages`
+
+`dlq-sync`, `dlq-mb-hot`, `dlq-mb-cold`: a message failed 5 receives. For sync, the users row is
+`error` and the logs (`/aws/lambda/kamp-aoty-<env>-sync`, "sync failed for") say why. Read the
+message, fix the cause, then redrive or purge:
+
+```sh
+aws sqs receive-message --queue-url "$(aws sqs get-queue-url --queue-name kamp-aoty-prod-sync-dlq.fifo --query QueueUrl --output text)" --attribute-names All
+aws sqs start-message-move-task --source-arn arn:aws:sqs:us-east-1:<acct>:kamp-aoty-prod-sync-dlq.fifo   # back to its source
+aws sqs purge-queue --queue-url <dlq url>                                                                # or drop them
+```
+
+The alarm keeps its state while SQS publishes nothing (an untouched queue goes quiet after about
+6 h, messages or not), so the OK email comes once the queue is empty and read again. A sync that
+needs more than 5 runs also ends up here: AOTY-46.
+
+### `uptime-failing`
+
+The hourly check (`lambdas/uptime`) failed two runs in a row. Its log
+(`/aws/lambda/kamp-aoty-<env>-uptime`) names the check: `shell` (kamp.fm's CloudFront or the
+site bucket), `health` (the HTTP API or the api Lambda; "not the deployed api" means the
+placeholder code), `chart` (the chart data path, or the uptime user's chart was deleted). Re-run
+it by hand:
+
+```sh
+aws lambda invoke --function-name kamp-aoty-prod-uptime /dev/stdout
+```
+
+### `uptime-silent`
+
+No uptime run for 3 hours: the `kamp-aoty-<env>-uptime` schedule is off or failing, or the
+function errors before it can report. Check the schedule (`aws scheduler get-schedule --name
+kamp-aoty-prod-uptime`) and the function's log.
+
+### `lambda-errors`
+
+`sync-errors`, `mb-errors`, `chart-errors` (2+ in an hour), `api-errors` (over 5% and 5+ in 15
+min). Read the function's log for the stack trace. A failed sync usually shows as `retrying` in
+its users row and comes back by itself; a bad deploy shows on every invocation: roll back
+("Deploys and releases").
+
+### `sync-queue-age`
+
+The oldest queued sync has waited over 4 h: a crowd, more than `max_queue_for_new` was meant to
+allow. Stop new users joining the line with `pause_new_users` (see "Guardrails"); existing users
+keep their charts. If something is broken rather than busy (sync concurrency stuck at 0), use the
+hard stop on the mapping and fix it first.
+
+### `mb-hot-age`
+
+An album users are waiting on has sat in mb-hot over 30 min, so the mb lane isn't draining.
+Check `/aws/lambda/kamp-aoty-<env>-mb` for errors and that the hourly `mb-backstop` schedule runs.
+Start it by hand with the invoke in "Syncs: the API, or by hand".
+
+### `mb-throttled`
+
+MusicBrainz refused over 85% of requests for two hours (normal is 45–61%). It's MusicBrainz's
+load, not ours (AOTY-10/12), so the lane only slows down. Check `/kamp-aoty/<env>/mb_contact` is still
+set (a placeholder User-Agent can be blocked), then wait. If it lasts days, raise it on the MusicBrainz
+forums.
+
+### `mb-slow`
+
+Under 0.75 albums/s for two hours with at least 50 albums handled (baseline 1.5–2.3). Usually
+the same cause as `mb-throttled`. Otherwise look for `MbDeadlineStops` or `IndexErrors` in the mb
+EMF line: a broken index sends every album to live searches (see "Release index").
+
+### `lastfm-errors`
+
+20 or more Last.fm calls failed after their retries in 15 min (`LastfmErrors`, emitted by
+`common/lastfm.py`; the log line has `method`, `code` and `function`). Code 29 means we're rate
+limited: lower `sync_concurrency` or pause syncs (`pause_syncs`). 10 or 26 means the API key was
+revoked or suspended: rotate `/kamp-aoty/<env>/lastfm_api_key`. Codes 8, 11, 16 or `net` mean
+Last.fm is having trouble: wait, and pause syncs if it lasts.
+
+### `api-5xx`
+
+The api answered 5+ server errors in each of two 5-minute windows, not counting its deliberate
+503s (busy, paused). The access log (`/aws/apigateway/kamp-aoty-<env>-api`) has `status` and
+`error`; a timeout or crash in the api Lambda shows there with an integration error. Then see
+`lambda-errors`.
+
+### `guardrail-bad-value`
+
+A guardrail parameter under `/kamp-aoty/<env>/` doesn't parse. The api ignores it and keeps the
+last good value, so a typo can't silently un-pause anything. Its error log names the parameter;
+fix it with `put-parameter --overwrite` or delete it (back to the default). See "Guardrails".
+
+### `chart-backlog`
+
+`chart-event-age` (a build waited over 30 min) or `chart-events-dropped` (one waited an hour and
+was dropped). The chart builder runs one at a time, so a crowd of syncs piles up builds. A
+dropped build is redone at the user's next sync, or by hand ("Charts"). If it keeps happening,
+slow the syncs down (`pause_new_users`) until the line clears.
 
 ## Release index (AOTY-20)
 

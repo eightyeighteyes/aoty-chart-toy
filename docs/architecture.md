@@ -106,6 +106,28 @@ syncs and set the cooldown and limits without a deploy; the HTTP API throttles G
 separately; and with `enforce_origin` the api refuses user routes that lack kamp.fm's
 `x-kamp-origin` secret, so the `execute-api` URL can't bypass CloudFront.
 
+## Monitoring (AOTY-27)
+
+```mermaid
+flowchart LR
+  usched["Scheduler: hourly"] --> uptime["uptime Lambda"]
+  uptime -- "shell, api/health,<br/>a known chart.json" --> kamp(["kamp.fm (CloudFront)"])
+  lambdas["api, sync, mb, chart,<br/>uptime Lambdas"] -- "EMF log lines<br/>(namespace kamp-aoty)" --> cw["CloudWatch metrics"]
+  aws["SQS, Lambda metrics;<br/>API access-log filter"] --> cw
+  cw --> alarms["alarms per env<br/>(prod full, staging basic)"]
+  alarms --> topic["SNS kamp-aoty-alerts<br/>(global, one for all envs)"]
+  budget["AWS Budget $40/month<br/>(account-wide)"] --> topic
+  topic --> email(["owner's email<br/>(subscribed by hand)"])
+  dash["dashboard per env (AOTY-41)"]:::planned
+  cw -.-> dash
+
+  classDef planned stroke-dasharray: 5 5
+```
+
+Each alarm's description links to its runbook entry in `infra/README.md`, "Alarms". The topic
+and the budget are in `infra/global/` (applied by the admin), so no deploy role touches SNS or
+Budgets, and sandbox's role (usable from any branch) can't write alarms at all.
+
 ## Visitor flow
 
 A visit, as built (AOTY-21, 22, 24). `GET /api/health` reports the env and the deployed commit's
@@ -245,6 +267,8 @@ sequenceDiagram
   else work waiting
     MB->>MB: drain as in the flow above
   end
+
+  Note over SC,MB: Hourly uptime check (AOTY-27): a separate schedule, see "Monitoring"
 
   Note over SC,AT: Daily at 06:15 UTC (a new dump comes out twice a week)
   SC-)IX: ecs:RunTask, FARGATE_SPOT
