@@ -405,6 +405,16 @@ aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.j
 Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
 `CoverLookups`, `LastfmCalls`.
 
+**Beta group charts (AOTY-50):** a group is defined by hand, as `groups/<id>/group.json`
+`{"name", "members"}` in the store bucket. `tools/beta_group.py create --env <env> --name ...`
+makes one from `.env`'s `LASTFM_USERS` (so no username is in the repo) with a random id. Then
+`sync` queues every member's sync, `build` rebuilds the chart, and `show` prints its counts. The
+chart Lambda takes `{"group": "<id>"}` and writes `<prefix>data/groups/<id>/chart.json` with M0's
+rules (`lambdas/chart/group_core.py`). After each member's own chart build it rebuilds their
+groups, so the group chart fills in as syncs finish. Members still on their first sync count as
+`waiting`; not_found and private ones as `unavailable`. The page is AOTY-51; sign-in and
+editable groups are AOTY-47/48.
+
 **Acceptance:** `tools/chart_check.py --env staging --user <name>` compares a deployed chart
 with M0's rules on the same store and albums items, and exits 1 on a difference.
 

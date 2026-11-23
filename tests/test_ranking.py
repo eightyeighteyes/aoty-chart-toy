@@ -152,3 +152,29 @@ def test_kept_rows_are_flagged_single_or_album():
     "Long": False,
     "Tie": False,
   }
+
+
+# --- the group chart (AOTY-50) matches M0 ---------------------------------------------------
+
+
+def test_group_core_ranks_exactly_as_m0s_score_rankings():
+  import group_core
+
+  rows, releases = chart()
+  _, m0, _ = build_page.score_rankings([dict(r) for r in rows], releases, [], 100)
+  stats, items = {}, {}
+  for r in rows:
+    k = aoty.cache_key(r["Artist"], r["Album"])
+    by = json.loads(r["Listener Plays"])
+    stats[k] = {"plays": sum(by.values()), "by": by}
+    items[k] = {"year": YEAR, "tracks": releases[k]["tracks"], "tracks_type": releases[k]["type"]}
+  ours = group_core.rank(stats, items)
+  # M0's By Track is the CSV order, which aoty.rank_albums makes (this fixture's rows aren't in it).
+  m0_track = aoty.rank_albums(
+    {k: {"key": k, "listeners": s["by"], "plays": s["plays"]} for k, s in stats.items()}
+  )
+  assert [k for k, _ in ours["track"]] == [s["key"] for s in m0_track]
+  for mode in ("album", "weighted"):
+    m0_keys = [aoty.cache_key(r["Artist"], r["Album"]) for r, _ in m0[mode]]
+    assert [k for k, _ in ours[mode]] == m0_keys, mode
+    assert [round(s, 6) for _, s in ours[mode]] == [round(s, 6) for _, s in m0[mode]], mode

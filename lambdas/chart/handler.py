@@ -36,6 +36,7 @@ import re
 import time
 
 import chart_core as core
+import group_core
 
 from common import dynamo, lastfm
 from common.albumkey import join_key, split_key
@@ -48,6 +49,7 @@ NAMESPACE = "kamp-aoty"
 BATCH_GET = 100  # DynamoDB BatchGetItem limit
 RETRIES = 4
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
+GROUP_ID_RE = re.compile(r"^[a-z2-7]{26}$")  # tools/beta_group.py: 128 random bits, base32
 # album.getInfo cover lookups per build: at Last.fm's 0.5 s pacing, ~60 s at most. A heavy
 # user's first chart needed ~50; the next build continues where this one stopped.
 COVER_LOOKUPS = 120
@@ -87,7 +89,10 @@ def handler(event, context, deps=None):
   # The client lives as long as the warm container: count this run's calls as a difference.
   calls_before = _lastfm_calls(deps)
   totals = {"built": 0, "skipped": 0, "failed": 0, "checked": 0}
-  if event.get("pending"):
+  if event.get("group"):
+    group_id = str(event["group"])
+    _guarded(deps, group_id, totals, lambda: _count(totals, build_group(deps, group_id)))
+  elif event.get("pending"):
     for row in _pending_users(deps):
       totals["checked"] += 1
       _guarded(deps, row["username"], totals, lambda r=row: _rebuild_if_resolved(deps, r, totals))
@@ -125,6 +130,9 @@ def _build_requested(deps, username, year, requested_at, totals):
     totals["skipped"] += 1
     return
   _count(totals, build(deps, username, row, year, totals))
+  # A sync's build: the groups this user is in get their new plays too (AOTY-50 beta).
+  for group_id in _groups_with(deps, username):
+    _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
 
 
 def _rebuild_if_resolved(deps, row, totals):
@@ -198,11 +206,82 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   return True
 
 
+def build_group(deps, group_id, year=TARGET_YEAR):
+  """One group's chart from its ready members' stores (group_core). False for no such group.
+
+  Beta (AOTY-50): groups are defined by hand with tools/beta_group.py, as
+  s3://$STORE_BUCKET/groups/<id>/group.json {"name", "members": [usernames]}. Members whose
+  sync hasn't finished are counted as waiting; not_found or private ones as unavailable.
+  """
+  if not GROUP_ID_RE.match(group_id):
+    log.warning("invalid group id in event; dropped")
+    return False
+  body = _get_object(deps, deps.env["STORE_BUCKET"], group_key(group_id))
+  if body is None:
+    return False
+  group = json.loads(body)
+  stores, waiting, unavailable, images = {}, 0, 0, {}
+  for member in dict.fromkeys(str(m).strip().lower() for m in group.get("members", [])):
+    if not USERNAME_RE.match(member):
+      continue
+    row = _get_user(deps, member)
+    store = _load_store(deps, member, year) if row.get("sync_finished_at") else None
+    if row.get("state") in ("not_found", "private"):
+      unavailable += 1
+    elif store is None or (
+      row.get("state") in ("queued", "syncing", "retrying") and not row.get("chart_built_at")
+    ):
+      waiting += 1  # a first sync still running; a re-sync of a ready member keeps them ranked
+    else:
+      stores[member] = store
+      images.update({k: v["url"] for k, v in _load_covers(deps, member, year).items() if v.get("url")})
+  keys = sorted({k for s in stores.values() for k in core.year_plays(s)})
+  items = _get_items(deps, keys)
+  chart, _ = group_core.build_group_chart(
+    stores, items, group_id=group_id, name=str(group.get("name") or ""), year=year,
+    waiting=waiting, unavailable=unavailable, now=int(deps.clock()), images=images,
+  )  # fmt: skip
+  _put_json(
+    deps, deps.env["SITE_BUCKET"], group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id), chart,
+    CacheControl="no-cache",
+  )  # fmt: skip
+  log.info(
+    "group %s: %d ready, %d waiting, %d albums shown", group_id, len(stores), waiting, len(chart["albums"])
+  )
+  return True
+
+
+def _groups_with(deps, username):
+  """Ids of the groups that list this user. Beta: a few groups, so list and read them all."""
+  out = []
+  try:
+    pages = deps.s3.list_objects_v2(Bucket=deps.env["STORE_BUCKET"], Prefix="groups/")
+  except Exception:
+    log.exception("could not list groups")
+    return out
+  for obj in pages.get("Contents") or []:
+    if not obj["Key"].endswith("/group.json"):
+      continue
+    body = _get_object(deps, deps.env["STORE_BUCKET"], obj["Key"])
+    members = {str(m).strip().lower() for m in (json.loads(body).get("members") or [])} if body else set()
+    if username in members:
+      out.append(obj["Key"].split("/")[1])
+  return out
+
+
 # ---- storage --------------------------------------------------------------------------
 
 
 def chart_key(site_prefix, username):
   return f"{site_prefix}data/users/{username}/chart.json"
+
+
+def group_key(group_id):
+  return f"groups/{group_id}/group.json"
+
+
+def group_chart_key(site_prefix, group_id):
+  return f"{site_prefix}data/groups/{group_id}/chart.json"
 
 
 def store_key(username, year):
