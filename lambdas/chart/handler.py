@@ -94,9 +94,13 @@ def handler(event, context, deps=None):
     group_id = str(event["group"])
     _guarded(deps, group_id, totals, lambda: _count(totals, build_group(deps, group_id)))
   elif event.get("pending"):
+    rebuilt = []
     for row in _pending_users(deps):
       totals["checked"] += 1
-      _guarded(deps, row["username"], totals, lambda r=row: _rebuild_if_resolved(deps, r, totals))
+      _guarded(deps, row["username"], totals, lambda r=row: _rebuild_if_resolved(deps, r, totals, rebuilt))
+    # Albums the mb lane just dated reach the groups too, each group once per run (AOTY-50 beta).
+    for group_id in _groups_with(deps, *rebuilt):
+      _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
   else:
     username = str(event.get("username") or "").strip().lower()
     if not USERNAME_RE.match(username):
@@ -136,13 +140,16 @@ def _build_requested(deps, username, year, requested_at, totals):
     _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
 
 
-def _rebuild_if_resolved(deps, row, totals):
+def _rebuild_if_resolved(deps, row, totals, rebuilt=None):
   username, year = row["username"], TARGET_YEAR
   keys = _load_pending(deps, username, year)
   if keys and not _get_items(deps, keys, keys_only=True):
     totals["skipped"] += 1  # nothing new since the last build
     return
-  _count(totals, build(deps, username, _get_user(deps, username), year, totals))
+  built = build(deps, username, _get_user(deps, username), year, totals)
+  _count(totals, built)
+  if built and rebuilt is not None:
+    rebuilt.append(username)
 
 
 def _count(totals, built):
@@ -252,9 +259,11 @@ def build_group(deps, group_id, year=TARGET_YEAR):
   return True
 
 
-def _groups_with(deps, username):
-  """Ids of the groups that list this user. Beta: a few groups, so list and read them all."""
-  out = []
+def _groups_with(deps, *usernames):
+  """Ids of the groups that list any of these users. Beta: a few groups, so list and read them all."""
+  out, wanted = [], set(usernames)
+  if not wanted:
+    return out
   try:
     pages = deps.s3.list_objects_v2(Bucket=deps.env["STORE_BUCKET"], Prefix="groups/")
   except Exception:
@@ -265,7 +274,7 @@ def _groups_with(deps, username):
       continue
     body = _get_object(deps, deps.env["STORE_BUCKET"], obj["Key"])
     members = {str(m).strip().lower() for m in (json.loads(body).get("members") or [])} if body else set()
-    if username in members:
+    if wanted & members:
       out.append(obj["Key"].split("/")[1])
   return out
 

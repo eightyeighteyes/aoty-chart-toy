@@ -448,3 +448,21 @@ def test_an_unknown_or_malformed_group_is_skipped(h):
   assert h.handler({"group": "zzzzzzzzzzzzzzzzzzzzzzzzzz"}, None, Deps(s3, ddb))["skipped"] == 1
   assert h.handler({"group": "../users"}, None, Deps(s3, ddb))["skipped"] == 1
   assert GROUP_CHART not in s3.objects
+
+
+def test_the_pending_pass_rebuilds_each_group_of_a_rebuilt_member_once(h):
+  s3, ddb = group_world()
+  s3.put_store({("A", "Shared"): 5, ("C", "Later"): 9}, username="alice")
+  s3.put_store({("A", "Shared"): 1, ("C", "Later"): 2}, username="bob")
+  for u in ("alice", "bob"):
+    h.handler({"username": u}, None, Deps(s3, ddb))  # pending: "Later" isn't dated yet
+  del s3.objects[GROUP_CHART]
+  puts = []
+  real_put = s3.put_object
+  s3.put_object = lambda **kw: (puts.append(kw["Key"]), real_put(**kw))[1]
+
+  ddb.add_album("C", "Later")  # the mb lane dates it
+  h.handler({"pending": True}, None, Deps(s3, ddb))
+  assert puts.count(GROUP_CHART[1]) == 1  # both members rebuilt, the group once
+  chart = s3.json(GROUP_CHART)
+  assert "Later" in [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]]
