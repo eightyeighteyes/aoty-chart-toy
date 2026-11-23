@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.2.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.1.0...v1.2.0) (2026-11-23)
+
+
+### Features
+
+* **api:** POST sync and GET status routes ([89120f3](https://github.com/eightyeighteyes/aoty-chart-toy/commit/89120f3590ca99d3185e01f61d63e04b6a125674))
+* **api:** pure core for sync requests and status ([ad0d52b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ad0d52b75efeaa984484236c3c689b862cee8951))
+* **api:** status carries the first-visit cover wall and running stats ([fdd0506](https://github.com/eightyeighteyes/aoty-chart-toy/commit/fdd05064a64cd645ee69c473c36a7d4e03b8ec6b))
+* **chart:** chart_plays, chart_albums and chart_hits on the users row ([d2b128f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d2b128fe95d0572ed810ea90006455d7afef28ba))
+* first-visit cover wall and progress (AOTY-24) ([840ba56](https://github.com/eightyeighteyes/aoty-chart-toy/commit/840ba56f3a5cda4fdcc97966506ae2ad9811c1a1))
+* **infra:** sync cooldown, queue depth for the api, TTL on users ([aaf06b1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/aaf06b1f4675c22ef065c89bd6833929ec5195ff))
+* intro page and kamp endorsement chrome (AOTY-23) ([4ac0510](https://github.com/eightyeighteyes/aoty-chart-toy/commit/4ac05101073a59d2b025831b758201b7362fbdf8))
+* sync on visit with a status API and updating banner (AOTY-22) ([2677b1f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2677b1f769887ef3db2303be298bf1c3f60d621f))
+* **sync:** first-visit cover wall and per-week progress with running stats ([f2abfd5](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f2abfd5256ffb53ce286e257a80e8279da8642f9))
+* **sync:** record the finish and live play counts for the status API ([534642f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/534642ff870789cd3fe5b5be8ec02cfe91ab8ac7))
+* **tools:** preview every intro message in serve_shell ([d6cf401](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d6cf40104febfb230803bf2282a8f6b3259f92b6))
+* **tools:** preview first visits in serve_shell through the real status code ([77547a3](https://github.com/eightyeighteyes/aoty-chart-toy/commit/77547a3599d7aa7fa7a91cb3699745c1e038f709))
+* **tools:** serve_shell --proxy sandbox ([46ff42c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/46ff42ca4f299625813f8ffdf45c172c684de68c))
+* **web:** first-visit cover wall and progress while a first chart is pressed ([563d755](https://github.com/eightyeighteyes/aoty-chart-toy/commit/563d755da3a23e17dee43aa17fdece943cf04106))
+* **web:** intro page and the kamp endorsement bar ([a924959](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a924959fa22920732bd3c6791409f857997f2f06))
+* **web:** intro page rules, tested with node --test ([2adfe8f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2adfe8f0f050678d4c29b36dcace8e2d07e56f49))
+* **web:** sync on visit with a non-blocking banner and in-place repaint ([da72538](https://github.com/eightyeighteyes/aoty-chart-toy/commit/da725383649cc50ee8c7ef3d82e1c05282b0bdac))
+
+
+### Bug Fixes
+
+* **web:** keep body from painting as one flat colour (Chrome tile seam) ([c48fbfc](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c48fbfca79315f06cd33d22e0a13466e5ea85d44))
+* **web:** no overscroll bounce, which showed as a colour seam in Chrome ([0dd1f81](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0dd1f811b06d4780115ec2a530b44459c4e89e9d))
+* **web:** paint the intro and its form so a focused field shows no seam ([6aa0290](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6aa0290e846bb56ac8461b454ca9386839ed7676))
+* **web:** stop waiting when a sync ends without a chart ([3764a73](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3764a73097e46f0ca571db21ea81a2541fe63d99))
+
 ## [1.1.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.0.0...v1.1.0) (2026-11-23)
 
 
