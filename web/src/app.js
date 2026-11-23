@@ -15,12 +15,15 @@
   const YEAR = document.querySelector('meta[name="aoty-year"]').content;
   const intro = globalThis.aotyIntro;  // web/src/intro.js, loaded first
   const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
+  const grp = globalThis.aotyGroup;  // web/src/group.js, loaded first (AOTY-51)
+  const GROUP_REFRESH_MS = 60000;  // a group page re-reads its chart while members load
   const USERNAME_RE = intro.USERNAME_RE;
   const LOOKUP_TIMEOUT_MS = 10000;
   const CHART_VERSION = 1;
   const MODES = {
     track: "ranked by plays",
     album: "ranked by album plays: track plays divided by the album's track count (singles left out)",
+    weighted: "ranked by album plays per listener (albums with 3 or more listeners, singles left out)",
   };
 
   const poster = document.querySelector(".poster");
@@ -70,7 +73,34 @@
   // The number this ranking sorts by, plus the plays behind it.
   function score(a, mode) {
     if (mode === "track") return `<b>${num(a.score)}</b> plays`;
+    if (mode === "weighted") return `<b>${num(a.score, 2)}</b> album plays per listener · ${num(a.plays)} plays`;
     return `<b>${num(a.score, 1)}</b> album plays · ${num(a.plays)} plays`;
+  }
+
+  // Group pages (AOTY-51), as M0's page: one dot per member, the first `listeners` filled (a
+  // count, not who), above the stats; not on the small #11+ tiles. groupTotal is every member,
+  // still-loading and unavailable ones included, as M0 counted the whole server.
+  let groupTotal = 0, groupWho = "";
+  function dots(a) {
+    if (!groupTotal) return "";
+    let s = "";
+    for (let i = 0; i < groupTotal; i++) s += `<span class="dot${i < a.listeners ? " on" : ""}"></span>`;
+    return `<div class="dots" title="${a.listeners} of ${groupTotal} listeners">${s}</div>`;
+  }
+  // M0's score words: for one member it's their own plays, not the group's.
+  function groupScore(a, mode) {
+    const by = groupWho ? ` by ${esc(groupWho)}` : "";
+    if (mode === "track") return `<b>${num(a.score)}</b> plays${by}`;
+    if (mode === "album" || groupWho) return `<b>${num(a.score, 1)}</b> album plays${by}`;
+    return `<b>${num(a.score, 1)}</b> plays per listener`;
+  }
+  // The stats line: user pages as before; group pages lead with listeners, worded per place.
+  function stats(a, mode, place) {
+    if (!groupTotal) return score(a, mode);
+    const t = groupTotal, n = `<b>${a.listeners}</b>`;
+    const lead = place === "hero" ? `${n} of ${t} listeners` : place === "card" ? `${n} listeners`
+        : place === "tile" ? `${n}/${t}` : `${n}/${t} listeners`;
+    return `${lead} · ${groupScore(a, mode)}`;
   }
   const names = a => `<div class="album">${esc(a.album)}</div><div class="artist">${esc(a.artist)}</div>`;
 
@@ -78,34 +108,36 @@
   function renderRanking(chart, rows, mode) {
     if (!rows.length) {
       const wait = chart.pending ? ` ${num(chart.pending)} of their albums are still being checked.` : "";
-      return `<p class="empty">No ${chart.year} albums in ${esc(chart.display_name)}'s scrobbles yet.${wait}</p>`;
+      const whose = chart.kind === "group" ? `the ${esc(chart.name)} group` : esc(chart.display_name);
+      return `<p class="empty">No ${chart.year} albums in ${whose}'s scrobbles yet.${wait}</p>`;
     }
     const [top, rest, more] = [rows[0], rows.slice(1, chart.featured), rows.slice(chart.featured)];
     const bg = top.art ? `style="--hero-art:url(&quot;${esc(top.art)}&quot;)"` : "";
     const hero = `<section class="hero" ${bg}>${cover(top, "art")}<div>
-        <div class="crown">#1</div>${names(top)}
-        <div class="stats">${score(top, mode)}</div>
+        <div class="crown">#1</div>${names(top)}${dots(top)}
+        <div class="stats">${stats(top, mode, "hero")}</div>
       </div></section>`;
     const cards = rest.map((a, i) => `<li class="card" style="--i:${i + 1}">
         <div class="art-wrap">${cover(a, "art")}<span class="rank">${a.rank}</span></div>
-        <div class="meta">${names(a)}<div class="stats">${score(a, mode)}</div></div>
+        <div class="meta">${names(a)}${dots(a)}<div class="stats">${stats(a, mode, "card")}</div></div>
       </li>`).join("");
     const tiles = more.map(a => `<li class="tile">
         <div class="art-wrap">${cover(a, "art")}<span class="tile-rank">${a.rank}</span></div>
-        ${names(a)}<div class="stats">${score(a, mode)}</div>
+        ${names(a)}<div class="stats">${stats(a, mode, "tile")}</div>
       </li>`).join("");
     const moreSection = more.length ? `<section class="more"><h2>${chart.featured + 1}–${rows.length}</h2>
         <ol class="more-grid">${tiles}</ol></section>` : "";
     const list = rows.map((a, i) => `<li class="row${i ? "" : " first"}" style="--i:${i}">
         <span class="row-rank">${a.rank}</span>${cover(a, "row-art")}
         <div class="row-meta">${names(a)}</div>
-        <div class="row-numbers"><div class="stats">${score(a, mode)}</div></div>
+        <div class="row-numbers">${dots(a)}<div class="stats">${stats(a, mode, "row")}</div></div>
       </li>`).join("");
     return `<div class="view-poster">${hero}<ol>${cards}</ol>${moreSection}</div>
       <ol class="list view-list">${list}</ol>`;
   }
 
   function renderChart(chart) {
+    if (chart.kind === "group") return renderGroup(chart);
     const mode = chart.rankings[poster.dataset.rank] ? poster.dataset.rank : "track";
     const rows = chart.rankings[mode].map(([i, s], k) => ({...chart.albums[i], score: s, rank: k + 1}));
     const who = chart.display_name;
@@ -285,6 +317,15 @@
   // last chart.json fetched, shown or not (a first visit's charts rank nothing for a while).
   let current = null, loadedAt = null, switchesReady = false;
 
+  // Once per page, for user and group pages alike: a second setup would add every click
+  // listener twice.
+  function setupSwitchesOnce() {
+    if (switchesReady) return;
+    switchesReady = true;
+    setupSwitch("view", "aoty-view");
+    setupSwitch("rank", "aoty-rank", () => renderChart(current));
+  }
+
   function paint(chart, raw, lower) {
     // Last.fm's casing in the address bar, but only a name that is this user's.
     const display = typeof chart.display_name === "string" && chart.display_name.toLowerCase() === lower
@@ -300,11 +341,7 @@
     const updated = new Date(chart.generated_at);
     profileLine(display, isNaN(updated) ? ""
         : updated.toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"}));
-    if (!switchesReady) {  // once: a second setup would add every click listener twice
-      switchesReady = true;
-      setupSwitch("view", "aoty-view");
-      setupSwitch("rank", "aoty-rank", () => renderChart(current));
-    }
+    setupSwitchesOnce();
     if (repaint) {
       // In place: keep the scroll position, and don't replay the entrance animations.
       const y = window.scrollY;
@@ -618,8 +655,115 @@
     })();
   }
 
-  const name = routeName();
-  if (name === null) {
+  // ---- group pages (AOTY-51) ---------------------------------------------------------------
+  //   <base>group/<id>   fetch <base>data/groups/<id>/chart.json (lambdas/chart/group_core.py)
+  // Everyone's rankings come from the chart; picking a member re-ranks in group.js and is kept
+  // in ?user= (replaceState, matched in any casing, unknown = everyone), as in M0.
+
+  function routeGroup() {
+    const path = location.pathname;
+    if (!path.startsWith(BASE)) return null;
+    const m = path.slice(BASE.length).match(/^group\/([^/]+)\/?$/);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  function renderGroup(chart) {
+    const mode = grp.MODES.includes(poster.dataset.rank) ? poster.dataset.rank : "track";
+    const who = grp.memberIndex(chart, $("who").value);
+    const rows = grp.rows(chart, mode, who);
+    groupTotal = chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0);
+    groupWho = who < 0 ? "" : chart.members[who];
+    const whose = who < 0 ? `${chart.name}'s members` : chart.members[who];
+    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${MODES[mode]}.`;
+    const extra = [grp.loadingLine(chart), chart.pending ? `${num(chart.pending)} albums still being checked` : ""]
+        .filter(Boolean).join(" · ");
+    if (extra) {
+      const p = $("sub").appendChild(document.createElement("span"));
+      p.className = "pending";
+      p.textContent = ` ${extra}.`;
+    }
+    $("ranking").innerHTML = renderRanking(chart, rows, mode);
+  }
+
+  function groupPicklist(chart) {
+    const select = $("who");
+    const want = new URLSearchParams(location.search).get("user") || select.value;
+    const options = [new Option("everyone", ""), ...chart.members.map(m => new Option(m, m))];
+    select.replaceChildren(...options);
+    const i = grp.memberIndex(chart, want);
+    select.value = i < 0 ? "" : chart.members[i];
+    $("who-wrap").hidden = false;
+  }
+
+  async function loadGroup(id) {
+    const res = await fetch(`${BASE}data/groups/${id}/chart.json`, {cache: "no-cache"});
+    if (res.status === 404 || res.status === 403) return null;  // S3 behind CloudFront answers 403 for a missing key
+    const chart = res.ok ? await res.json() : null;
+    if (!grp.valid(chart, id)) throw new Error("bad chart");
+    return chart;
+  }
+
+  async function showGroup(id) {
+    heading(NAME, "");
+    if (!grp.ID_RE.test(id)) {
+      state("there's no group here", "check the link you were given.", false);
+      return;
+    }
+    let chart;
+    try {
+      chart = await loadGroup(id);
+    } catch (_) {
+      state("we couldn't load this chart", "try again in a minute.", false);
+      return;
+    }
+    if (!chart) {
+      state("there's no group here", "check the link you were given.", false);
+      return;
+    }
+    const first = current === null;
+    current = chart;
+    heading(chart.name, chart.year);
+    document.title = `${chart.name} · ${NAME} ${chart.year} · a kamp toy`;
+    $("controls").hidden = false;
+    $("rank-weighted").hidden = false;
+    groupPicklist(chart);
+    // Each member's Last.fm profile, as Last.fm's API terms (2.7) ask; built node by node.
+    const line = $("footer-user");
+    const parts = [];
+    chart.members.forEach((m, i) => {
+      const a = document.createElement("a");
+      a.href = intro.lastfmUserUrl(m);
+      a.textContent = m;
+      parts.push(...(i ? [", ", a] : [a]));
+    });
+    line.replaceChildren(...parts, " on last.fm");
+    line.hidden = false;
+    if (first) {
+      setupSwitchesOnce();
+      $("who").addEventListener("change", () => {
+        const url = new URL(location.href);
+        if ($("who").value) url.searchParams.set("user", $("who").value); else url.searchParams.delete("user");
+        try { history.replaceState(null, "", url); } catch (_) {}
+        renderChart(current);
+      });
+      renderChart(chart);
+    } else {
+      const y = window.scrollY;  // in place: no entrance animations, same scroll position
+      $("ranking").classList.add("no-anim");
+      renderChart(chart);
+      window.scrollTo(0, y);
+    }
+    // While members load or albums are being dated, the chart keeps changing: re-read it.
+    if ((chart.waiting || chart.pending) && !document.hidden) {
+      setTimeout(() => showGroup(id), GROUP_REFRESH_MS);
+    }
+  }
+
+  const groupId = routeGroup();
+  const name = groupId === null ? routeName() : null;
+  if (groupId !== null) {
+    showGroup(groupId);
+  } else if (name === null) {
     showIntro();
   } else {
     showUser(name);

@@ -1,29 +1,31 @@
 """The beta's hand-made group (AOTY-50): create it, queue its members' syncs, build its chart.
 
-  .venv/bin/python tools/beta_group.py create --env staging --name "the server"   # members from .env
-  .venv/bin/python tools/beta_group.py sync   --env staging --id <id>             # queue every member
-  .venv/bin/python tools/beta_group.py build  --env staging --id <id>             # rebuild the chart
-  .venv/bin/python tools/beta_group.py show   --env staging --id <id>             # the chart's counts
+  .venv/bin/python tools/beta_group.py create --env staging --name "The Server"   # slug the-server
+  .venv/bin/python tools/beta_group.py sync   --env staging --id the-server       # queue every member
+  .venv/bin/python tools/beta_group.py build  --env staging --id the-server       # rebuild the chart
+  .venv/bin/python tools/beta_group.py show   --env staging --id the-server       # the chart's counts
+  .venv/bin/python tools/beta_group.py delete --env staging --id the-server       # group and chart
 
-A group is s3://kamp-aoty-<env>-store/groups/<id>/group.json {"name", "members"}: private,
-like the stores. Its chart is public at kamp.fm<base>data/groups/<id>/chart.json, and the id
-(128 random bits, base32) is the only thing that finds it, so share the link, not the id
-pattern. Members come from .env's LASTFM_USERS unless --members is given, so no username is
-ever in the repo. Admin credentials (aws CLI). Output names members by count only.
+A group is s3://kamp-aoty-<env>-store/groups/<slug>/group.json {"name", "members"}: private,
+like the stores. Its page is kamp.fm<base>group/<slug> (user decision 2026-11-23: a readable
+name, not a random id, so anyone who guesses the slug can see it; it's public Last.fm data).
+create refuses a slug that's taken. Members come from .env's LASTFM_USERS unless --members is
+given, so no username is ever in the repo. Admin credentials (aws CLI). Output names members
+by count only.
 
 Members' syncs go through the sync queue directly (the message the README's "Running a sync by
 hand" sends), so they skip the api's cooldown and new-user limits: a beta of a few dozen.
 """
 
 import argparse
-import base64
 import json
 import os
-import secrets
+import re
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -38,9 +40,13 @@ def aws(args):
   return json.loads(out) if out.strip() else None
 
 
-def new_id():
-  """26 lowercase base32 characters: what the chart builder's GROUP_ID_RE accepts."""
-  return base64.b32encode(secrets.token_bytes(16)).decode().rstrip("=").lower()
+SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$")  # the chart builder's GROUP_ID_RE
+
+
+def slugify(name):
+  """"New Bands for Old Heads!" -> "new-bands-for-old-heads"."""
+  text = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+  return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:50].strip("-")
 
 
 def dotenv_members(path):
@@ -61,21 +67,36 @@ def _put_group(env, group_id, group):
     os.unlink(f.name)
 
 
-def _get_group(env, group_id):
+def _get_group(env, group_id, missing_ok=False):
   out = subprocess.run(
     ["aws", "s3", "cp", f"s3://kamp-aoty-{env}-store/groups/{group_id}/group.json", "-", "--region", REGION],
-    check=True, capture_output=True, text=True,
-  ).stdout  # fmt: skip
-  return json.loads(out)
+    capture_output=True, text=True,
+  )  # fmt: skip
+  if out.returncode:
+    if missing_ok:
+      return None
+    raise SystemExit(f"no group {group_id!r} in {env}")
+  return json.loads(out.stdout)
 
 
 def create(args):
   members = [m.strip().lower() for m in args.members.split(",")] if args.members else dotenv_members(args.dotenv)
-  group_id = new_id()
-  _put_group(args.env, group_id, {"name": args.name, "members": sorted(set(members))})
-  print(f"group {group_id}: {len(set(members))} members")
-  print(f"chart: https://kamp.fm{BASES[args.env]}data/groups/{group_id}/chart.json")
-  print("next: tools/beta_group.py sync --env", args.env, "--id", group_id)
+  slug = args.slug or slugify(args.name)
+  if not SLUG_RE.match(slug):
+    raise SystemExit(f"{slug!r} isn't a usable slug: lowercase letters, digits and inner dashes, 1-50")
+  if _get_group(args.env, slug, missing_ok=True) is not None:
+    raise SystemExit(f"group {slug!r} already exists in {args.env}: pick another --slug, or delete it first")
+  _put_group(args.env, slug, {"name": args.name, "members": sorted(set(members))})
+  print(f"group {slug}: {len(set(members))} members")
+  print(f"page: https://kamp.fm{BASES[args.env]}group/{slug}")
+  print("next: tools/beta_group.py sync --env", args.env, "--id", slug)
+
+
+def delete(args):
+  aws(["s3", "rm", f"s3://kamp-aoty-{args.env}-store/groups/{args.id}/group.json", "--only-show-errors"])
+  key = f"{BASES[args.env].lstrip('/')}data/groups/{args.id}/chart.json"
+  aws(["s3", "rm", f"s3://kamp-aoty-{args.env}-site/{key}", "--only-show-errors"])
+  print(f"deleted group {args.id} and its chart")
 
 
 def sync(args):
@@ -110,12 +131,13 @@ def show(args):
 def main(argv=None):
   ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   sub = ap.add_subparsers(dest="cmd", required=True)
-  for name, fn in (("create", create), ("sync", sync), ("build", build), ("show", show)):
+  for name, fn in (("create", create), ("sync", sync), ("build", build), ("show", show), ("delete", delete)):
     p = sub.add_parser(name)
     p.set_defaults(fn=fn)
     p.add_argument("--env", choices=sorted(BASES), required=True)
     if name == "create":
-      p.add_argument("--name", required=True)
+      p.add_argument("--name", required=True, help="shown on the page")
+      p.add_argument("--slug", help="the URL: <base>group/<slug> (default: the name, slugified)")
       p.add_argument("--members", help="comma-separated usernames (default: .env's LASTFM_USERS)")
       p.add_argument("--dotenv", type=Path, default=REPO / ".env")
     else:

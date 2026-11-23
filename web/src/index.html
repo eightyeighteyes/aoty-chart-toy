@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="{{CSS}}">
 <script src="{{INTRO}}" defer></script>
 <script src="{{FIRSTVISIT}}" defer></script>
+<script src="{{GROUP}}" defer></script>
 <script src="{{JS}}" defer></script>
 </head>
 <body>
@@ -71,7 +72,12 @@
       <div class="switch" role="group" aria-label="Ranking">
         <button type="button" data-rank="track" aria-pressed="true">By Track</button>
         <button type="button" data-rank="album" aria-pressed="false">By Album</button>
+        <!-- Groups only (AOTY-51): for one listener it equals By Album. -->
+        <button type="button" data-rank="weighted" aria-pressed="false" id="rank-weighted" hidden>Weighted</button>
       </div>
+      <label class="who" id="who-wrap" hidden><span class="who-label">listened by</span>
+        <select id="who"><option value="">everyone</option></select>
+      </label>
     </div>
   </header>
   <div id="ranking"></div>

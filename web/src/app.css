@@ -178,6 +178,21 @@ ol {
   color: #1a1014; background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .switch button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+/* Group pages (AOTY-51): the member picker, right-aligned after the switches as in M0, and the
+   listener dots (one per member, filled for those who played it). */
+.who { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+.who-label { color: var(--muted); font-size: 13px; }
+.who select {
+  font: 600 13px Inter, system-ui, sans-serif; color: var(--ink); background: var(--panel);
+  border: 0; border-radius: 999px; padding: 10px 16px; cursor: pointer;
+}
+.who select:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #2c2937; }
+.dot.on { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
+.hero .dots { margin-top: 22px; }
+.hero .dot { width: 12px; height: 12px; }
+.row-numbers .dots { margin-top: 0; }
 .empty { color: var(--muted); font-size: 15px; padding: 48px 0; text-align: center; }
 
 /* No chart yet / errors / the bare base path (AOTY-23 and AOTY-24 replace these). */

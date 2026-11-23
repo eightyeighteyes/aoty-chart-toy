@@ -28,6 +28,7 @@ from collections import Counter
 
 import chart_core
 
+from common.albumkey import base_title
 from common.covers import cover
 from common.mbmatch import is_single
 
@@ -112,7 +113,7 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
     art, fallbacks = cover(m.get("image") or images.get(k), item.get("rg_mbid"))
     albums.append({
       "artist": m.get("artist") or "",
-      "album": m.get("album") or "",
+      "album": base_title(m.get("album") or ""),  # the root album: editions share its key
       "plays": stats[k]["plays"],
       "listeners": len(stats[k]["by"]),
       "by": {str(member_index[w]): p for w, p in sorted(stats[k]["by"].items(), key=lambda wp: member_index[wp[0]])},

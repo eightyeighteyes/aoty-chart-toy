@@ -407,7 +407,10 @@ Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `Ch
 
 **Beta group charts (AOTY-50):** a group is defined by hand, as `groups/<id>/group.json`
 `{"name", "members"}` in the store bucket. `tools/beta_group.py create --env <env> --name ...`
-makes one from `.env`'s `LASTFM_USERS` (so no username is in the repo) with a random id. Then
+makes one from `.env`'s `LASTFM_USERS` (so no username is in the repo). Its id is a readable
+slug (`--slug`, default the name slugified) and the page is `kamp.fm<base>group/<slug>`. A slug
+can be guessed, so anyone can find a group; that was the user's call (2026-11-23), and it's public
+Last.fm data. `create` refuses a taken slug, and `delete` removes a group and its chart. Then
 `sync` queues every member's sync, `build` rebuilds the chart, and `show` prints its counts. The
 chart Lambda takes `{"group": "<id>"}` and writes `<prefix>data/groups/<id>/chart.json` with M0's
 rules (`lambdas/chart/group_core.py`). After each member's own chart build it rebuilds their

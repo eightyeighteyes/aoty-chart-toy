@@ -188,6 +188,13 @@ def test_chart_shape():
   }  # fmt: skip
 
 
+def test_edition_suffixes_show_as_the_root_album():
+  # "(Deluxe)" and friends share the root album's key, so they show as it (user, 2026-11-23).
+  store = make_store({("Ratboys", "Singin' to an Empty Chair (Deluxe)"): 4})
+  chart, _ = build(store, {key("Ratboys", "Singin' to an Empty Chair"): item(tracks=4)})
+  assert chart["albums"][0]["album"] == "Singin' to an Empty Chair"
+
+
 def test_display_name_falls_back_to_the_username():
   chart, _ = core.build_chart(sync_core.new_store(2026), {}, username="alice", display_name=None, now=NOW)
   assert chart["display_name"] == "alice"
