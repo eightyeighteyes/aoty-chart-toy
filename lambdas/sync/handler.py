@@ -3,9 +3,10 @@
 Triggered by the sync FIFO queue (message group = username, so one sync per user at a time),
 batch size 1, with ReportBatchItemFailures. A message body is
 
-  {"username": "alice", "year": 2026?, "full": false?}
+  {"username": "alice", "year": 2026?, "full": false?, "continuation": n?}
 
-and a direct invoke with that same object (no "Records") runs one sync, for manual testing.
+(continuation: set by the worker itself when a run out of time hands on to a fresh message,
+_continue) and a direct invoke with that same object (no "Records") runs one sync, for manual testing.
 
 One sync:
   0. On a first sync, fetch one page of recent tracks and write the users row's `preview`
@@ -46,6 +47,9 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 MAX_RECEIVES = 5  # the sync queue's redrive maxReceiveCount (infra/modules/stack/queues.tf)
+# A full year is ~48 weeks; even at a week a minute a sync needs ~4 runs. Past this, something
+# is wrong: fall back to re-receiving, which the DLQ bounds.
+MAX_CONTINUATIONS = 20
 CHECKPOINT_EVERY = 8
 TIME_MARGIN_MS = 60_000
 FIRST_COVER_PAGES = 20
@@ -113,11 +117,41 @@ def handler(event, context, deps=None):
       continue
     finally:
       _emit(deps, result, info, deps.clock() - started, _lastfm_calls(deps) - calls_before)
-    if result == "partial":
-      # Out of time with weeks left: checkpointed, so make it visible again right away.
+    if result == "partial" and not _continue(deps, msg, info):
+      # Out of time with weeks left, and no fresh message sent: checkpointed, so make this one
+      # visible again right away. This receive counts toward the DLQ's maxReceiveCount.
       _set_visibility(deps, rec, 0)
       failures.append({"itemIdentifier": rec["messageId"]})
   return {"batchItemFailures": failures}
+
+
+def _continue(deps, msg, info):
+  """Carry on a checkpointed sync in a fresh message, so its receive count starts again (AOTY-46).
+
+  Re-receiving the same message would count every continuation toward maxReceiveCount, and a
+  long first sync would reach the DLQ without failing. The new message goes to the same FIFO
+  group, behind this one, which is deleted when the handler reports success. Not when the run
+  made no progress (re-receiving then bounds a stuck sync by the DLQ), past MAX_CONTINUATIONS,
+  or when the send fails: then the caller re-receives this message as before.
+  """
+  if not info.get("weeks"):
+    return False
+  n = int(msg.get("continuation") or 0) + 1
+  if n > MAX_CONTINUATIONS:
+    log.warning("sync %s: %d continuations, re-receiving instead", _tag(msg.get("username")), n - 1)
+    return False
+  username = str(msg.get("username") or "").strip().lower()
+  try:
+    deps.sqs.send_message(
+      QueueUrl=deps.env["SYNC_QUEUE_URL"],
+      MessageBody=json.dumps({**msg, "continuation": n}),
+      MessageGroupId=username,
+      MessageDeduplicationId=f"{username}-cont-{n}-{int(deps.clock())}",
+    )
+  except Exception:
+    log.exception("could not send the continuation for %s", _tag(username))
+    return False
+  return True
 
 
 def _lastfm_calls(deps):
