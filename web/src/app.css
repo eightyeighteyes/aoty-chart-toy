@@ -218,6 +218,12 @@ ol {
 
 /* The intro (AOTY-23). */
 .intro { max-width: 720px; margin: 0 auto; padding: 64px 40px 72px; }
+/* Seam fix, as for the chart (see html above): a focused field gets the form promoted to its
+   own GPU layer, and an unpainted layer shows the browser's default dark backdrop (#121212-ish,
+   sampled as #100f12) instead of --bg. Painting a background on them keeps the layer the page
+   colour. The form inherits its parent's: --bg on the intro, --panel inside a chart page's .state. */
+.intro { background: var(--bg); }
+.lookup { background: inherit; }
 .intro-title {
   font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
   font-size: clamp(40px, 7.5vw, 84px); line-height: .95; letter-spacing: -.03em;
