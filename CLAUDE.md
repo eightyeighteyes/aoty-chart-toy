@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync` and `GET .../status` behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`: no member filter, dots or Weighted) and `intro.js` (the intro page's pure rules, AOTY-23, tested by `node --test web/test/*.test.mjs` in CI). Routes client-side: `<base>user/<name>` is a chart, anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base>` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`: no member filter, dots or Weighted) `intro.js` (the intro page's pure rules, AOTY-23) and `firstvisit.js` (the banner's and first visit's rules, AOTY-24), both tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base>` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`). |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
@@ -388,6 +388,27 @@ not daily totals from paging scrobbles (the story text was revised to match).
   chart page says so when its sync hits Last.fm error 17.
 - Preview every intro message with `serve_shell.py`'s special names: `nobody*`, `lastfm-down`,
   `busy-busy`, `broken`, `private-*`.
+
+## First visit (AOTY-24, 2026-11-22)
+
+- User decisions: the progress visual is the **crate-dig cover wall**, not a tonearm or VU
+  meters. **Cut:** phase labels (corny), liner-notes lines, and a "record of the year" reveal:
+  the #1 can still change while albums are dated, so a reveal would be a false moment.
+- **A first visit = nothing ranked yet**: no chart.json, *or* a chart whose By Track ranking is
+  empty. The first build runs before the mb lane dates anything, so that empty chart is the usual
+  first chart, not an edge case. The first chart that ranks anything paints with its animation.
+- Data: a first sync fetches **one** getRecentTracks page before the weeks and writes the users
+  row's `preview` (a JSON string, because `dynamo.from_item` drops lists). The cover harvest reuses
+  that page. A retry skips it if `preview` exists. The chart builder REMOVEs `preview` once a chart
+  ranks anything. `progress` gains `albums` and `top_*` (all plays, any release year) and is written
+  **every week**, not only at the 8-week checkpoints.
+- Progress shown only moves forward (`makeProgress`): a retried sync recounts `weeks_total` as the
+  weeks left. The banner stays the one live region; it changes only on a stage or a quarter.
+- Counts say "plays", not "scrobbles": charts leave out album-less scrobbles.
+- Ends: every album checked and none from the year ("none"); the chart stopped rebuilding with
+  albums unchecked, or 10 minutes passed ("stalled").
+- Preview with `serve_shell.py`: `newbie*` (the whole flow, about 40 s) and `nothing*`. The fake
+  status goes through `api_core.status()` from fake rows.
 
 ## Sync on visit (AOTY-22, 2026-11-23)
 

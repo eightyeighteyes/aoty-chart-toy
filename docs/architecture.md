@@ -99,9 +99,17 @@ gateway. CD uploads its code to `code/index.zip`, as it updates the Lambdas' cod
 
 ## Visitor flow
 
-A visit, as built (AOTY-21, 22). `GET /api/health` reports the env and the deployed commit's
-SHA, read from the zip's `build.json` (AOTY-35). A missing chart shows a minimal "No chart
-yet" panel while the same sync runs; AOTY-24 replaces it with the real first-visit flow.
+A visit, as built (AOTY-21, 22, 24). `GET /api/health` reports the env and the deployed commit's
+SHA, read from the zip's `build.json` (AOTY-35).
+
+A first visit is a chart page with nothing ranked yet: no chart.json, or one whose By Track
+ranking is empty. The first build runs before the mb lane has dated anything, so that empty
+chart is the usual case. The page shows a dim wall of the user's recent covers (the status's
+`wall`, from sync's `preview`) and the running stats (`so_far`). The banner carries a progress
+line that only moves forward. The first chart that ranks something paints with its entrance
+animation. It ends with a message when every album is checked and none is from the year, or
+when the chart stops rebuilding or 10 minutes pass. `wall` is the user's public recent listening,
+the same as their Last.fm profile shows, and goes once a chart ranks anything.
 
 ```mermaid
 sequenceDiagram
@@ -121,7 +129,7 @@ sequenceDiagram
   alt chart exists (return visit)
     S3-->>V: 200: paint the chart, URL rewritten to Last.fm's casing
   else first visit
-    S3-->>V: 404: "No chart yet" (AOTY-24 replaces it)
+    S3-->>V: 404, or a chart that ranks nothing: the first-visit view (AOTY-24)
   end
   V->>API: POST api/users/alice/sync (JSON only)
   API->>U: a sync running, or one requested under SYNC_COOLDOWN (10 min) ago?
@@ -136,8 +144,8 @@ sequenceDiagram
   end
   loop every 2 s backing off to 5 s, paused while hidden, until idle
     V->>API: GET api/users/alice/status
-    API->>U: state, progress, sync_finished_at, chart_*
-    API-->>V: stage (queued, reading, building, dating, idle, error), weeks, new plays
+    API->>U: state, progress, preview, sync_finished_at, chart_*
+    API-->>V: stage (queued, reading, building, dating, idle, error), weeks, new plays, wall, so_far
   end
   V->>CF: GET chart.json, once the chart builder has written a newer one
   CF-->>V: repaint in place (scroll, view and ranking kept)
@@ -163,11 +171,15 @@ sequenceDiagram
 
   Q->>SW: {"username": "alice"}
   SW->>ST: load weeks.json.gz
+  opt a first sync (AOTY-24)
+    SW->>LF: getRecentTracks page 1, written to the users row as preview (the cover wall)
+  end
   loop each unsettled chart week
     SW->>LF: user.getWeeklyAlbumChart
+    Note over SW: progress (weeks, plays, running stats) to the users row after every week
     SW->>ST: checkpoint every 8 weeks
   end
-  SW->>LF: getRecentTracks (covers)
+  SW->>LF: getRecentTracks (covers; a first sync reuses page 1)
   SW->>AT: BatchGetItem: which albums are dated already?
   SW->>HQ: undated albums: top 150 to hot, the rest to cold
   SW-)MB: async invoke {}
@@ -247,7 +259,7 @@ and the next day's run starts over.
 | store bucket `index/current.json`, `index/DUMP/*.json.gz` | index build | mb lane |
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
-| `users` table | api (`queued`, `sync_requested_at`, `not_found` rows with `expires_at`), sync (state, progress, `sync_finished_at`, `display_name`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`) | api (status, cooldown), chart builder |
+| `users` table | api (`queued`, `sync_requested_at`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything) | api (status, cooldown), chart builder |
 | site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
