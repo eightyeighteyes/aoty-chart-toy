@@ -4,7 +4,7 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {cleanName, outcome, MESSAGES} = require("../src/intro.js");
+const {cleanName, outcome, MESSAGES, lastfmUserUrl} = require("../src/intro.js");
 
 test("names are trimmed and lowercased", () => {
   assert.deepEqual(cleanName("  AliCe "), {name: "alice"});
@@ -68,4 +68,10 @@ test("copy stays lowercase", () => {
   for (const [key, text] of Object.entries(MESSAGES)) {
     assert.equal(text, text.toLowerCase(), key);
   }
+});
+
+test("the last.fm profile link keeps the name's casing and escapes it", () => {
+  assert.equal(lastfmUserUrl("AliCe"), "https://www.last.fm/user/AliCe");
+  assert.equal(lastfmUserUrl("a.b_c-d"), "https://www.last.fm/user/a.b_c-d");
+  assert.equal(lastfmUserUrl("x/../y?z"), "https://www.last.fm/user/x%2F..%2Fy%3Fz");
 });
