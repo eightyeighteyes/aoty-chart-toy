@@ -77,8 +77,11 @@ locals {
       },
       { actions = local.queue_consume, resources = [aws_sqs_queue.main["sync"].arn] },
       {
-        actions   = ["sqs:SendMessage"]
-        resources = [aws_sqs_queue.main["mb-hot"].arn, aws_sqs_queue.main["mb-cold"].arn]
+        # The sync queue too: a sync out of time continues in a fresh message (AOTY-46).
+        actions = ["sqs:SendMessage"]
+        resources = [
+          aws_sqs_queue.main["mb-hot"].arn, aws_sqs_queue.main["mb-cold"].arn, aws_sqs_queue.main["sync"].arn,
+        ]
       },
       {
         actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]

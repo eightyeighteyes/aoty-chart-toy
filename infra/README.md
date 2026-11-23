@@ -521,8 +521,9 @@ aws sqs purge-queue --queue-url <dlq url>                                       
 ```
 
 The alarm keeps its state while SQS publishes nothing (an untouched queue goes quiet after about
-6 h, messages or not), so the OK email comes once the queue is empty and read again. A sync that
-needs more than 5 runs also ends up here: AOTY-46.
+6 h, messages or not), so the OK email comes once the queue is empty and read again. A long sync
+continues in fresh messages (AOTY-46), so it doesn't land here; one that made no progress in 5
+runs, or ran past 20 continuations, still does.
 
 ### `uptime-failing`
 

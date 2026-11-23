@@ -541,8 +541,11 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - `IndexDumpAgeHours` is left out, not 0, when the dump's age is unknown (0 read as "fresh").
 - **The budget is account-wide**, because kamp-site shares the account and a cost allocation tag
   only counts from the day it was activated.
-- Sync continuations (`partial`) count toward `maxReceiveCount` 5, so a sync that needs more than
-  5 runs reaches the DLQ: AOTY-46.
+- **A sync that runs out of time continues in a fresh message** (AOTY-46, `sync/handler._continue`):
+  same FIFO group, a unique dedup id, `continuation` counted in the body. Re-receiving the same
+  message counted every continuation toward `maxReceiveCount` 5, so a long first sync reached the
+  DLQ without failing. It still re-receives (and the DLQ bounds it) when a run made no progress,
+  after 20 continuations, or when the send fails.
 
 ## Page — design decisions
 

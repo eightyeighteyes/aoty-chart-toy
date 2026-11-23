@@ -214,6 +214,12 @@ class FakeSQS:
   def change_message_visibility(self, **kw):
     self.visibility.append(kw)
 
+  def send_message(self, **kw):
+    if self.fail_sends:
+      self.fail_sends -= 1
+      raise Killed()
+    self.singles = getattr(self, "singles", []) + [kw]
+
   def all_sent(self):
     return [join_key((m["artist_key"], m["title_key"])) for msgs in self.sent.values() for m in msgs]
 
@@ -372,12 +378,50 @@ def test_low_time_checkpoints_and_redelivers_at_once(h):
   assert env.ddb.users["alice"]["progress"]["weeks_done"] == 10
 
 
-def test_handler_reports_partial_as_a_batch_failure_with_zero_visibility(h, monkeypatch):
+def _partial(weeks):
+  def run(msg, ctx, deps, info=None):
+    if info is not None:
+      info["weeks"] = weeks
+    return "partial"
+
+  return run
+
+
+def test_partial_with_progress_continues_in_a_fresh_message(h, monkeypatch):
+  # AOTY-46: re-receiving the same message counted every continuation toward the DLQ.
   env = Env(h, make_world(20))
-  monkeypatch.setattr(h, "sync_user", lambda msg, ctx, deps, info=None: "partial")
+  monkeypatch.setattr(h, "sync_user", _partial(weeks=12))
+  out, _ = env.record(msg={"username": "alice", "full": True})
+  assert out == {"batchItemFailures": []}  # this message is deleted
+  assert env.sqs.visibility == []
+  (sent,) = env.sqs.singles
+  assert sent["QueueUrl"] == "q/sync" and sent["MessageGroupId"] == "alice"
+  assert json.loads(sent["MessageBody"]) == {"username": "alice", "full": True, "continuation": 1}
+  assert sent["MessageDeduplicationId"].startswith("alice-cont-1-")
+
+
+def test_continuations_count_up_and_stop_at_the_cap(h, monkeypatch):
+  env = Env(h, make_world(20))
+  monkeypatch.setattr(h, "sync_user", _partial(weeks=1))
+  env.record(msg={"username": "alice", "continuation": 4})
+  assert json.loads(env.sqs.singles[-1]["MessageBody"])["continuation"] == 5
+  out, _ = env.record(msg={"username": "alice", "continuation": h.MAX_CONTINUATIONS})
+  assert out == {"batchItemFailures": [{"itemIdentifier": "m1"}]}  # re-received, DLQ-bounded
+  assert len(env.sqs.singles) == 1
+
+
+def test_partial_without_progress_or_a_failed_send_re_receives(h, monkeypatch):
+  env = Env(h, make_world(20))
+  monkeypatch.setattr(h, "sync_user", _partial(weeks=0))
   out, _ = env.record()
   assert out == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
   assert env.sqs.visibility == [{"QueueUrl": "q/sync", "ReceiptHandle": "r1", "VisibilityTimeout": 0}]
+
+  env.sqs.fail_sends = 1
+  monkeypatch.setattr(h, "sync_user", _partial(weeks=3))
+  out, _ = env.record()
+  assert out == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
+  assert not getattr(env.sqs, "singles", [])
 
 
 def _emf_lines(capsys):
