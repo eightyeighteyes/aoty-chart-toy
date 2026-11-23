@@ -12,7 +12,9 @@
   // The placeholder product name (scripts/build_shell.py NAME) and the page's own title.
   const NAME = document.querySelector('meta[name="aoty-name"]').content;
   const TITLE = document.title;
+  const YEAR = document.querySelector('meta[name="aoty-year"]').content;
   const intro = globalThis.aotyIntro;  // web/src/intro.js, loaded first
+  const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
   const USERNAME_RE = intro.USERNAME_RE;
   const LOOKUP_TIMEOUT_MS = 10000;
   const CHART_VERSION = 1;
@@ -277,7 +279,9 @@
   }
 
   // The page's one chart, painted on load and again in place when a sync brings a newer one.
-  let current = null, switchesReady = false;
+  // current is the chart on screen (it ranks something); loadedAt is the generated_at of the
+  // last chart.json fetched, shown or not (a first visit's charts rank nothing for a while).
+  let current = null, loadedAt = null, switchesReady = false;
 
   function paint(chart, raw, lower) {
     // Last.fm's casing in the address bar, but only a name that is this user's.
@@ -326,16 +330,59 @@
       state("couldn't load this chart", "check your connection, or try again in a minute.", false);
       return;
     }
-    if (chart) {
-      paint(chart, raw, lower);
+    loadedAt = chart ? chart.generated_at : null;
+    if (fv.isFirstVisit(chart)) {
+      showFirstVisit(raw);
     } else {
-      // AOTY-24 replaces this with the real first-visit flow; until then the sync below fills it.
-      state("no chart yet", `reading ${raw}'s scrobbles. a first chart takes a few minutes: we check every album's release year with musicbrainz. it appears here when it's ready.`, false);
+      paint(chart, raw, lower);
     }
     watchSync(lower, async () => {
       const fresh = await loadChart(lower);
-      if (fresh && (!current || fresh.generated_at !== current.generated_at)) paint(fresh, raw, lower);
+      if (!fresh || fresh.generated_at === loadedAt) return;
+      loadedAt = fresh.generated_at;
+      // A chart that ranks nothing yet leaves the first-visit view up. The first one that ranks
+      // something paints like any first paint, entrance animation included.
+      if (!fv.isFirstVisit(fresh)) paint(fresh, raw, lower);
     });
+  }
+
+  // ---- first visit (AOTY-24) ----------------------------------------------------------------
+  //
+  // While a new user's first chart is pressed: a dim wall of the covers they played most
+  // recently (sync's preview, from status), and what's been found so far. The progress line is
+  // the banner, so the page keeps its one live region.
+  let firstView = null;
+
+  function showFirstVisit(name) {
+    $("controls").hidden = true;
+    $("sub").textContent = `pressing ${name}'s first chart. it takes a few minutes: we read the year's `
+        + "scrobbles, then check every album's release year with musicbrainz.";
+    const box = document.createElement("section");
+    box.className = "firstvisit";
+    const sofar = box.appendChild(document.createElement("p"));
+    sofar.className = "fv-sofar";
+    const note = box.appendChild(document.createElement("p"));
+    note.className = "fv-note";
+    note.textContent = "counting every play this year, whatever year the album came out.";
+    note.hidden = true;
+    const wall = box.appendChild(document.createElement("ul"));
+    wall.className = "wall";
+    wall.setAttribute("aria-hidden", "true");  // decoration: the numbers above carry the meaning
+    $("ranking").replaceChildren(box);
+    firstView = {box, sofar, note, wall, walled: false};
+  }
+
+  function updateFirstVisit(s) {
+    if (!firstView || !firstView.box.isConnected) return;
+    const text = fv.soFar(s);
+    firstView.sofar.textContent = text;
+    firstView.note.hidden = !text;
+    if (!firstView.walled && Array.isArray(s.wall) && s.wall.length) {
+      firstView.walled = true;
+      firstView.wall.innerHTML = s.wall
+          .map((a, i) => `<li style="--i:${i}">${cover({...a, fallbacks: a.fallbacks || []}, "wall-art")}</li>`)
+          .join("");
+    }
   }
 
   // ---- sync on visit (AOTY-22) ------------------------------------------------------------
@@ -357,23 +404,12 @@
     box.classList.toggle("show", !!msg);
   }
 
-  function describe(s) {
-    if (s.stage === "queued" || s.stage === "reading") {
-      const w = s.weeks || {};
-      return ["Checking for new scrobbles…", w.total ? `${num(w.done)} of ${num(w.total)} weeks` : ""];
-    }
-    if (s.stage === "building") {
-      return [s.new_plays ? `+${num(s.new_plays)} new plays · updating chart` : "Updating chart…", ""];
-    }
-    if (s.stage === "dating") {
-      const a = s.albums || {};
-      return ["Checking release years…", a.total ? `${num(a.checked)} of ${num(a.total)} albums` : ""];
-    }
-    return ["", ""];
-  }
-
   function watchSync(lower, onNewChart) {
     const started = Date.now();
+    // A first visit keeps watching through the release-year checks, even once its chart shows,
+    // because that's when most of it fills in.
+    const firstSession = current === null;
+    const progress = fv.makeProgress();
     let delay = POLL_FIRST_MS, timer = null, stopped = false, datingSince = null;
     const stop = msg => { stopped = true; clearTimeout(timer); timer = null; say(msg || ""); };
     const quiet = () => stop("Couldn't update right now.");
@@ -381,10 +417,30 @@
 
     async function maybeRefresh(s) {
       const built = s.chart_built_at || 0;
-      const have = current ? Date.parse(current.generated_at) / 1000 : 0;
+      const have = loadedAt ? Date.parse(loadedAt) / 1000 : 0;
       if (built > have) {
         try { await onNewChart(); } catch (_) {}
       }
+    }
+
+    // Still nothing ranked: the wall, the progress line, and a clear end when there's no more
+    // to wait for. True when it handled the status.
+    function handleFirstVisit(s) {
+      if (current) return false;
+      updateFirstVisit(s);
+      const end = fv.firstVisitEnd(s, Date.now() - started > WATCH_FOR_MS);
+      if (end) {
+        const [title, text] = fv.endMessage(end, YEAR, s);
+        state(title, text, false);
+        stop("");
+        return true;
+      }
+      if (s.stage === "idle") { gaveUp(); stop(""); return true; }
+      const {live, detail} = progress(s);
+      say(live, detail);
+      delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
+      schedule(delay);
+      return true;
     }
 
     // The sync is over but there's still no chart to show (first visit): say so, don't wait on.
@@ -399,13 +455,15 @@
 
     async function handle(s) {
       await maybeRefresh(s);
-      if (s.stage === "idle") { gaveUp(); return stop(""); }
       if (s.stage === "error") { gaveUp(s.reason); return current ? quiet() : stop(""); }
-      const [msg, detail] = describe(s);
+      if (handleFirstVisit(s)) return;
+      if (s.stage === "idle") return stop("");
+      // A first session keeps its progress line (and its quarters) once the chart shows.
+      const [msg, detail] = firstSession ? Object.values(progress(s)) : fv.describe(s);
       say(msg, detail);
       if (s.stage === "dating") {
         datingSince = datingSince || Date.now();
-        if (Date.now() - datingSince > DATING_FOR_MS) return stop("");
+        if (!firstSession && Date.now() - datingSince > DATING_FOR_MS) return stop("");
         delay = POLL_DATING_MS;
       } else {
         delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
@@ -433,7 +491,7 @@
       if (!document.hidden && !stopped && timer === null) schedule(0);
     });
 
-    say("Checking for new scrobbles…");
+    say(current ? "Checking for new scrobbles…" : progress({stage: "queued"}).live);
     (async () => {
       let res, body = null;
       try {

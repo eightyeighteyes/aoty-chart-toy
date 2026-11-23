@@ -29,6 +29,7 @@ ASSETS = {
   "app.css": "CSS",
   "app.js": "JS",
   "intro.js": "INTRO",
+  "firstvisit.js": "FIRSTVISIT",
   "favicon.svg": "ICON",
   "apple-touch-icon.png": "TOUCH",
 }
