@@ -3,6 +3,7 @@
   .venv/bin/python tools/serve_shell.py                       # http://127.0.0.1:8000/toys/aoty/
   .venv/bin/python tools/serve_shell.py --sample alice        # also writes a synthetic chart
   .venv/bin/python tools/serve_shell.py --proxy staging       # real users: api/ and data/ from kamp.fm
+  .venv/bin/python tools/serve_shell.py --proxy sandbox       # a branch's API in sandbox (aws creds)
   aws s3 cp s3://kamp-aoty-sandbox-site/toys/aoty-sandbox/data/users/<u>/chart.json \
     data/shell_preview/users/<u>/chart.json                   # or preview a real chart
 
@@ -14,7 +15,9 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
                                         chart's generated_at so the page repaints in place);
                                         a second POST within 10 min answers "cooldown". Only
                                         names with a chart under --data ever get one. With
-                                        --proxy, api/ and data/ go to that kamp.fm env instead.
+                                        --proxy, api/ and data/ go to that env instead: kamp.fm
+                                        for staging and prod; for sandbox, its execute-api URL
+                                        and its site bucket (it has no CloudFront path).
   any other path under <base>           index.html, as kamp.fm's shell function does
 with kamp.fm's Content-Security-Policy, so CSP violations show in the browser console.
 data/ is git-ignored, so real charts copied there stay local.
@@ -22,6 +25,7 @@ data/ is git-ignored, so real charts copied there stay local.
 
 import argparse
 import calendar
+import subprocess
 import http.server
 import json
 import sys
@@ -103,10 +107,58 @@ def fake_status(started, now, chart_file):
   return {**base, "stage": "idle", "weeks": {"done": 4, "total": 4}, "chart_built_at": built}
 
 
-PROXIES = {
-  "prod": "https://kamp.fm/toys/aoty/",
-  "staging": "https://kamp.fm/toys/aoty-staging/",
-}
+KAMP = {"prod": "https://kamp.fm/toys/aoty/", "staging": "https://kamp.fm/toys/aoty-staging/"}
+PROXIES = ("prod", "sandbox", "staging")
+
+
+class KampProxy:
+  """staging / prod: api/ and data/ both come from kamp.fm."""
+
+  def __init__(self, base_url):
+    self.base_url, self.label = base_url, base_url
+
+  def api(self, method, rest, body, ctype):
+    return forward(self.base_url, method, rest, body, ctype)
+
+  def data(self, rest):
+    return forward(self.base_url, "GET", rest)
+
+
+class SandboxProxy:
+  """sandbox isn't on kamp.fm: api/ goes to its execute-api URL, data/ is read from its site
+  bucket with the aws CLI (your credentials), as CloudFront would serve it."""
+
+  def __init__(self, stack):
+    self.api_base = f"{stack['api_endpoint']}{stack['base_path']}"
+    self.bucket, self.prefix = stack["site_bucket_name"], stack["s3_key_prefix"]
+    self.label = f"{self.api_base} and s3://{self.bucket}/{self.prefix}"
+
+  @classmethod
+  def from_terraform(cls):
+    out = subprocess.run(["terraform", f"-chdir={REPO / 'infra' / 'envs' / 'sandbox'}", "output", "-json", "stack"],
+                         capture_output=True, text=True)  # fmt: skip
+    if out.returncode != 0:
+      raise SystemExit(f"can't read sandbox's stack outputs (terraform init there first?):\n{out.stderr}")
+    return cls(json.loads(out.stdout))
+
+  def api(self, method, rest, body, ctype):
+    return forward(self.api_base, method, rest, body, ctype)
+
+  def data(self, rest):
+    out = subprocess.run(["aws", "s3", "cp", f"s3://{self.bucket}/{self.prefix}{rest}", "-", "--only-show-errors"],
+                         capture_output=True)  # fmt: skip
+    if out.returncode == 0:
+      return 200, out.stdout, "application/json"
+    err = out.stderr.decode(errors="replace")
+    if "404" in err or "NoSuchKey" in err or "Not Found" in err:
+      return 404, b"{}", "application/json"
+    return 502, json.dumps({"error": err.strip()[:300]}).encode(), "application/json"
+
+
+def make_proxy(name):
+  if name is None:
+    return None
+  return SandboxProxy.from_terraform() if name == "sandbox" else KampProxy(KAMP[name])
 
 
 def forward(target, method, rest, body=b"", ctype=None):
@@ -125,8 +177,11 @@ def handler_for(base, out, data, proxy=None):
 
   class Handler(http.server.BaseHTTPRequestHandler):
     def proxied(self, method, rest, body=b""):
-      status, payload, ctype = forward(proxy, method, rest, body, self.headers.get("Content-Type"))
-      return self.send(status, payload, ctype, "no-cache" if rest.startswith("data/") else "no-store")
+      if rest.startswith("data/"):
+        status, payload, ctype = proxy.data(rest)
+        return self.send(status, payload, ctype, "no-cache")
+      status, payload, ctype = proxy.api(method, rest, body, self.headers.get("Content-Type"))
+      return self.send(status, payload, ctype, "no-store")
 
     def api(self, method, rest):
       """A stand-in for the API (AOTY-22): POST sync starts a pretend sync, status follows it."""
@@ -196,7 +251,8 @@ def main():
   p.add_argument("--data", type=Path, default=DATA, help="holds users/<u>/chart.json")
   p.add_argument("--sample", metavar="NAME", help="write a synthetic chart for NAME first")
   p.add_argument("--proxy", choices=sorted(PROXIES),
-                 help="send api/ and data/ to that environment on kamp.fm (real users, real syncs)")  # fmt: skip
+                 help="send api/ and data/ to that environment (real users, real syncs); sandbox "
+                      "reads data/ from its bucket with your AWS credentials")  # fmt: skip
   args = p.parse_args()
   build_shell.build(args.base, out=OUT)
   if args.sample:
@@ -204,9 +260,9 @@ def main():
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(sample_chart(args.sample)), encoding="utf-8")
     print(f"sample chart: {f}")
-  proxy = PROXIES.get(args.proxy)
+  proxy = make_proxy(args.proxy)
   if proxy:
-    print(f"api/ and data/ go to {proxy}: syncs are real (the API's cooldown still applies)")
+    print(f"api/ and data/ go to {proxy.label}: syncs are real (the API's cooldown still applies)")
   server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data, proxy))
   who = args.sample or "<name>"
   print(f"serving http://127.0.0.1:{args.port}{args.base}user/{who}  (ctrl-c to stop)")
