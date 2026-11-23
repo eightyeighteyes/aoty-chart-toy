@@ -361,3 +361,21 @@ def test_lookups_stop_at_the_time_budget_and_continue_next_build(h):
   assert fm.calls[0] == "Album 000"  # chart order: the top first
   h.handler({"username": "alice"}, None, Deps(s3, ddb, lastfm_client=fm, mono=mono))
   assert len(fm.calls) > first and fm.calls[first] == f"Album {first:03d}"
+
+
+# ---- status fields (AOTY-22) ------------------------------------------------------------
+
+
+def test_the_users_row_gets_the_status_fields(h, world):
+  s3, ddb = world
+  h.handler({"username": "alice"}, None, Deps(s3, ddb))
+  row = ddb.users["alice"]
+  # The store has Known (9, 2026), Waiting (4, no item yet) and Old (20, 1999).
+  assert (row["chart_plays"], row["chart_albums"], row["chart_hits"], row["chart_pending"]) == (33, 3, 1, 1)
+
+
+def test_chart_plays_is_the_same_sum_sync_reports(h, world):
+  s3, ddb = world
+  h.handler({"username": "alice"}, None, Deps(s3, ddb))
+  store = json.loads(gzip.decompress(s3.objects[("store", "users/alice/2026/weeks.json.gz")]))
+  assert ddb.users["alice"]["chart_plays"] == sum(sync_core.year_plays(store).values())
