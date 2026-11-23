@@ -42,10 +42,12 @@ def as_list(v):
 
 class Client:
   def __init__(self, api_key, min_interval=MIN_INTERVAL, max_attempts=MAX_ATTEMPTS, *,
-               urlopen=urllib.request.urlopen, sleep=time.sleep, clock=time.monotonic):  # fmt: skip
+               urlopen=urllib.request.urlopen, sleep=time.sleep, clock=time.monotonic,
+               timeout=TIMEOUT):  # fmt: skip
     self.api_key = api_key
     self.min_interval = min_interval
     self.max_attempts = max_attempts
+    self.timeout = timeout  # per attempt; the API uses a short one inside API Gateway's 30 s
     self._urlopen, self._sleep, self._clock = urlopen, sleep, clock
     self._last = None
     self.calls = 0  # HTTP attempts, for logging
@@ -63,7 +65,7 @@ class Client:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     self.calls += 1
     try:
-      with self._urlopen(req, timeout=TIMEOUT) as r:
+      with self._urlopen(req, timeout=self.timeout) as r:
         status, body = r.status, r.read()
     except urllib.error.HTTPError as e:
       # Last.fm sends API errors (bad user, private) with a 4xx and a JSON body.
