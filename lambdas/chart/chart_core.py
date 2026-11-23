@@ -20,7 +20,7 @@ Rules (M0's, CLAUDE.md; user decisions 2026-11-22):
     Archive. CAA has no art for many small (e.g. Bandcamp-only) releases, which Last.fm has.
 
 chart.json (CHART_VERSION 1):
-  {"version", "username", "display_name", "year", "generated_at", "pending", "top", "featured",
+  {"version", "username", "display_name", "year", "generated_at", "pending", "pending_top", "top", "featured",
    "albums": [{"artist", "album", "plays", "tracks", "single", "art", "fallbacks": [...]}],
    "rankings": {"track": [[album index, plays]], "album": [[album index, album plays]]}}
 albums holds each album once, only if a ranking shows it, in By Track order.
@@ -38,6 +38,8 @@ TOP_N = 100
 FEATURED_N = 10
 MODES = ("track", "album")
 COVER_RETRY_AFTER = 30 * 86400  # re-ask Last.fm about an album it had no cover for
+# sync_core.HOT_N (tests check they match): the user's top albums by plays, dated first.
+HOT_N = 150
 
 
 def year_plays(store):
@@ -51,6 +53,17 @@ def year_plays(store):
 def pending_keys(plays, items):
   """Keys the user played that have no albums item yet: the mb lane hasn't answered."""
   return sorted(k for k in plays if k not in items)
+
+
+def top_keys(plays, n=HOT_N):
+  """The user's top n albums by plays: what sync sends to mb-hot (sync_core.split_hot_cold)."""
+  return [k for k, _ in sorted(plays.items(), key=lambda kv: (-kv[1], kv[0]))[:n]]
+
+
+def pending_top(plays, items, n=HOT_N):
+  """Undated albums among the top n. Only these can move a chart much; the cold tail behind them
+  fills the shared albums table quietly, so pages show "still checking" only while this is > 0."""
+  return sum(1 for k in top_keys(plays, n) if k not in items)
 
 
 def year_hits(plays, items, year):
@@ -133,6 +146,7 @@ def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=No
     "year": year,
     "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
     "pending": len(pending),
+    "pending_top": pending_top(plays, items),
     "top": n,
     "featured": FEATURED_N,
     "albums": albums,

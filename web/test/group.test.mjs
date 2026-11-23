@@ -58,3 +58,13 @@ test("only this group's chart is accepted", () => {
   assert.ok(ID_RE.test(ID) && ID_RE.test("the-server") && !ID_RE.test("../users"));
   assert.ok(!ID_RE.test("-edge") && !ID_RE.test("edge-") && !ID_RE.test("Caps"));
 });
+
+test("checking lines: top albums first, then deep cuts on groups only, never a number", () => {
+  const {checkingLine} = require("../src/group.js");
+  assert.equal(checkingLine({kind: "group", pending: 900, pending_top: 3}), "still checking…");
+  assert.equal(checkingLine({kind: "group", pending: 900, pending_top: 0}), "still counting deep cuts…");
+  assert.equal(checkingLine({kind: "group", pending: 0, pending_top: 0}), "");
+  assert.equal(checkingLine({pending: 900, pending_top: 2}), "still checking your top albums…");
+  assert.equal(checkingLine({pending: 900, pending_top: 0}), "");  // a user's cold tail: quiet
+  assert.equal(checkingLine({pending: 900}), "");  // a chart built before pending_top
+});

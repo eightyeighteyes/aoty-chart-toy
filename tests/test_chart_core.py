@@ -174,8 +174,8 @@ def test_chart_shape():
   store = make_store({("Artist", "Title"): 4})
   chart, _ = build(store, {key("Artist", "Title"): item(tracks=4)})
   assert set(chart) == {
-    "version", "username", "display_name", "year", "generated_at", "pending", "top", "featured",
-    "albums", "rankings",
+    "version", "username", "display_name", "year", "generated_at", "pending", "pending_top", "top",
+    "featured", "albums", "rankings",
   }  # fmt: skip
   assert chart["version"] == core.CHART_VERSION == 1
   assert (chart["username"], chart["display_name"], chart["year"]) == ("alice", "Alice", 2026)
@@ -186,6 +186,16 @@ def test_chart_shape():
     "artist": "Artist", "album": "Title", "plays": 4, "tracks": 4, "single": False,
     "art": caa_url("rg-1"), "fallbacks": [],
   }  # fmt: skip
+
+
+def test_pending_top_counts_only_undated_albums_in_the_top_150():
+  assert core.HOT_N == sync_core.HOT_N  # the chart's "top" is what sync dates first
+  plays = {f"k{i:03d}": 1000 - i for i in range(200)}  # k000 most played
+  items = {k: {} for k in list(plays)[:149]}  # all but k149 of the top 150 dated
+  assert core.pending_top(plays, items) == 1
+  assert core.pending_keys(plays, items) == [f"k{i:03d}" for i in range(149, 200)]
+  items[f"k{149:03d}"] = {}
+  assert core.pending_top(plays, items) == 0  # only the cold tail is left
 
 
 def test_edition_suffixes_show_as_the_root_album():

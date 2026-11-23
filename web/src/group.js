@@ -48,13 +48,24 @@
     return chart.waiting ? `${chart.waiting} of ${total} still loading` : "";
   }
 
+  // What the subtitle says about albums still being dated, for user and group charts alike (no
+  // big numbers, user decision 2026-11-23). pending_top counts undated albums in the top 150 by
+  // plays (a group: any member's), which can move the chart; the cold tail behind them only
+  // fills the shared cache, except that on a group a lightly played album many members share
+  // can still surface, hence the deep cuts.
+  function checkingLine(chart) {
+    if (chart.pending_top > 0) return chart.kind === "group" ? "still checking…" : "still checking your top albums…";
+    if (chart.kind === "group" && chart.pending > 0) return "still counting deep cuts…";
+    return "";
+  }
+
   // A chart.json this page can show.
   function valid(chart, id) {
     return !!chart && chart.version === GROUP_VERSION && chart.kind === "group" && chart.id === id
         && Array.isArray(chart.members) && Array.isArray(chart.albums) && !!chart.rankings;
   }
 
-  const api = {MODES, ID_RE, memberIndex, rows, loadingLine, valid};
+  const api = {MODES, ID_RE, memberIndex, rows, loadingLine, checkingLine, valid};
   root.aotyGroup = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
