@@ -197,6 +197,15 @@ jobs:
             echo "::error::/api/health doesn't report $BUILD_SHA in $AOTY_ENV"
             exit 1
           fi
+          # The sync and status routes (AOTY-22), without touching Last.fm or the sync queue:
+          # an invalid name is refused before any lookup, and a valid unused one has no row.
+          status=$(curl -s -o "$RUNNER_TEMP/body" -D "$RUNNER_TEMP/headers" -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' -d '{}' "${site}api/users/__smoke__/sync")
+          echo "$status POST ${site}api/users/__smoke__/sync"
+          [ "$status" = "400" ] || { echo "::error::expected 400 from POST sync, got $status"; cat "$RUNNER_TEMP/body"; exit 1; }
+          grep -qi '^cache-control: no-store' "$RUNNER_TEMP/headers" \
+            || { echo "::error::POST sync errors must be Cache-Control: no-store"; exit 1; }
+          check 404 "${site}api/users/smoke-test-none/status"
           # The site bucket is only reachable through kamp.fm's CloudFront.
           if [ "$AOTY_ENV" != "sandbox" ]; then
             check 404 "${site}data/users/__smoke__/chart.json"
