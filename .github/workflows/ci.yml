@@ -46,6 +46,13 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       # Fixtures are recorded MusicBrainz responses (tests/fixtures/mb); nothing hits the network.
       - run: pytest
+      # The page's pure JS (AOTY-23), with the runner's preinstalled Node: no npm, no deps.
+      - name: node tests
+        run: |
+          node --version
+          node --check web/src/app.js
+          node --check web/src/intro.js
+          node --test web/test/*.test.mjs
 
   terraform:
     name: terraform
