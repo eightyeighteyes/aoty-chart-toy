@@ -192,7 +192,7 @@ ol {
 .dot.on { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
 .hero .dots { margin-top: 22px; }
 .hero .dot { width: 12px; height: 12px; }
-.row-numbers .dots { margin-top: 6px; }
+.row-numbers .dots { margin-top: 0; }
 .empty { color: var(--muted); font-size: 15px; padding: 48px 0; text-align: center; }
 
 /* No chart yet / errors / the bare base path (AOTY-23 and AOTY-24 replace these). */

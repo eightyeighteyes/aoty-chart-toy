@@ -77,14 +77,30 @@
     return `<b>${num(a.score, 1)}</b> album plays · ${num(a.plays)} plays`;
   }
 
-  // Group pages (AOTY-51): one dot per ready member, filled for those who played it. The
-  // at-a-glance "how shared is this" from M0. Not on the small #11+ tiles.
-  let dotCount = 0;
+  // Group pages (AOTY-51), as M0's page: one dot per member, the first `listeners` filled (a
+  // count, not who), above the stats; not on the small #11+ tiles. groupTotal is every member,
+  // still-loading and unavailable ones included, as M0 counted the whole server.
+  let groupTotal = 0, groupWho = "";
   function dots(a) {
-    if (!dotCount) return "";
+    if (!groupTotal) return "";
     let s = "";
-    for (let i = 0; i < dotCount; i++) s += `<span class="dot${(a.by || {})[i] ? " on" : ""}"></span>`;
-    return `<div class="dots" aria-label="${a.listeners} of ${dotCount} listened">${s}</div>`;
+    for (let i = 0; i < groupTotal; i++) s += `<span class="dot${i < a.listeners ? " on" : ""}"></span>`;
+    return `<div class="dots" title="${a.listeners} of ${groupTotal} listeners">${s}</div>`;
+  }
+  // M0's score words: for one member it's their own plays, not the group's.
+  function groupScore(a, mode) {
+    const by = groupWho ? ` by ${esc(groupWho)}` : "";
+    if (mode === "track") return `<b>${num(a.score)}</b> plays${by}`;
+    if (mode === "album" || groupWho) return `<b>${num(a.score, 1)}</b> album plays${by}`;
+    return `<b>${num(a.score, 1)}</b> plays per listener`;
+  }
+  // The stats line: user pages as before; group pages lead with listeners, worded per place.
+  function stats(a, mode, place) {
+    if (!groupTotal) return score(a, mode);
+    const t = groupTotal, n = `<b>${a.listeners}</b>`;
+    const lead = place === "hero" ? `${n} of ${t} listeners` : place === "card" ? `${n} listeners`
+        : place === "tile" ? `${n}/${t}` : `${n}/${t} listeners`;
+    return `${lead} · ${groupScore(a, mode)}`;
   }
   const names = a => `<div class="album">${esc(a.album)}</div><div class="artist">${esc(a.artist)}</div>`;
 
@@ -98,23 +114,23 @@
     const [top, rest, more] = [rows[0], rows.slice(1, chart.featured), rows.slice(chart.featured)];
     const bg = top.art ? `style="--hero-art:url(&quot;${esc(top.art)}&quot;)"` : "";
     const hero = `<section class="hero" ${bg}>${cover(top, "art")}<div>
-        <div class="crown">#1</div>${names(top)}
-        <div class="stats">${score(top, mode)}</div>${dots(top)}
+        <div class="crown">#1</div>${names(top)}${dots(top)}
+        <div class="stats">${stats(top, mode, "hero")}</div>
       </div></section>`;
     const cards = rest.map((a, i) => `<li class="card" style="--i:${i + 1}">
         <div class="art-wrap">${cover(a, "art")}<span class="rank">${a.rank}</span></div>
-        <div class="meta">${names(a)}<div class="stats">${score(a, mode)}</div>${dots(a)}</div>
+        <div class="meta">${names(a)}${dots(a)}<div class="stats">${stats(a, mode, "card")}</div></div>
       </li>`).join("");
     const tiles = more.map(a => `<li class="tile">
         <div class="art-wrap">${cover(a, "art")}<span class="tile-rank">${a.rank}</span></div>
-        ${names(a)}<div class="stats">${score(a, mode)}</div>
+        ${names(a)}<div class="stats">${stats(a, mode, "tile")}</div>
       </li>`).join("");
     const moreSection = more.length ? `<section class="more"><h2>${chart.featured + 1}–${rows.length}</h2>
         <ol class="more-grid">${tiles}</ol></section>` : "";
     const list = rows.map((a, i) => `<li class="row${i ? "" : " first"}" style="--i:${i}">
         <span class="row-rank">${a.rank}</span>${cover(a, "row-art")}
         <div class="row-meta">${names(a)}</div>
-        <div class="row-numbers"><div class="stats">${score(a, mode)}</div>${dots(a)}</div>
+        <div class="row-numbers">${dots(a)}<div class="stats">${stats(a, mode, "row")}</div></div>
       </li>`).join("");
     return `<div class="view-poster">${hero}<ol>${cards}</ol>${moreSection}</div>
       <ol class="list view-list">${list}</ol>`;
@@ -655,7 +671,8 @@
     const mode = grp.MODES.includes(poster.dataset.rank) ? poster.dataset.rank : "track";
     const who = grp.memberIndex(chart, $("who").value);
     const rows = grp.rows(chart, mode, who);
-    dotCount = chart.members.length;
+    groupTotal = chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0);
+    groupWho = who < 0 ? "" : chart.members[who];
     const whose = who < 0 ? `${chart.name}'s members` : chart.members[who];
     $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${MODES[mode]}.`;
     const extra = [grp.loadingLine(chart), chart.pending ? `${num(chart.pending)} albums still being checked` : ""]
