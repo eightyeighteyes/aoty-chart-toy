@@ -1,5 +1,64 @@
 # Changelog
 
+## [1.1.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.0.0...v1.1.0) (2026-11-23)
+
+
+### Features
+
+* **api:** report the deployed SHA from /api/health ([01fad8a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/01fad8a684dc683b87ae70b70e772c2f90977f0c))
+* chart builder and user page (AOTY-21) ([917b92e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/917b92e55f5d2dc031660ffc72bbdee0b3704784))
+* **chart:** album.getInfo covers for shown albums with none ([caa7340](https://github.com/eightyeighteyes/aoty-chart-toy/commit/caa734040356908ea7a867c09302146d9386d5bb))
+* **chart:** chart builder Lambda handler ([b98a1ca](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b98a1ca73fcb317374b7aa492f8592114de0a486))
+* **chart:** rank one user's store into chart.json ([642da94](https://github.com/eightyeighteyes/aoty-chart-toy/commit/642da944dc74c179044836619fa9324a38bef6d6))
+* **ci:** deploy any branch to sandbox ([eeda30d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/eeda30d151f3a7cf12e00067dc3e049937587c81))
+* health endpoint reports the deployed git SHA (AOTY-35) ([f82d406](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f82d4063cd3056ed4bf1cebf5386f4ecefb03f42))
+* **index:** add 2026 release-group search crawler ([bf3619f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bf3619f9ea873d0d9531a194733fefe9fd9f9903))
+* **index:** add index hit-rate evaluation ([6108607](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6108607976b184d988cb787fd11f8ab899bffd6a))
+* **index:** add MusicBrainz JSON dump index builder ([15c827d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/15c827de62ae1cb49969bebcb71942a507f13c8b))
+* **index:** AOTY-13 MusicBrainz 2026 release-group index spike ([ec4a76d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ec4a76d8209c136e9e70efc7c82502b871bbd02a))
+* **index:** dump-to-S3 index builder with re-check queueing ([8a5cbd0](https://github.com/eightyeighteyes/aoty-chart-toy/commit/8a5cbd092202850e5721278e0b29979509fd3c16))
+* **index:** MusicBrainz release index from the JSON dump (AOTY-20) ([9eccbbb](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9eccbbb8b92113489feb9858ec886978e4771ac3))
+* **index:** sharded release index format and lookup ([506a358](https://github.com/eightyeighteyes/aoty-chart-toy/commit/506a358bd34e7a1494814ef24634f6d19855f091))
+* **infra:** add sandbox environment root ([ef2d358](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ef2d358e62674b43fc28f9e84c1767acd6018bf5))
+* **infra:** chart builder function, role and invoke grants ([9f992dd](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9f992dd4f70445e8ce1e0771872771eafcc1a661))
+* **infra:** Fargate Spot index build on a daily schedule ([0c1eb9b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0c1eb9b85f598895e5125e65242bab6a11312eae))
+* **infra:** let deploy roles manage the mb backstop schedule ([aa3fe31](https://github.com/eightyeighteyes/aoty-chart-toy/commit/aa3fe31ad6019231d6de762b1ee54f26844c5809))
+* **infra:** mb reserved concurrency, invoke config and hourly schedule ([aab96d8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/aab96d8456755dd39aa447aed15b31f820b31feb))
+* **infra:** sandbox deploy role and tag-scoped HTTP APIs ([69e9e21](https://github.com/eightyeighteyes/aoty-chart-toy/commit/69e9e212d8b535aeedc0a4487abf01d3b8c56550))
+* **infra:** sync queue event source mapping ([0818a25](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0818a2520a85393f2e834abe398462a708627a51))
+* **lambdas:** Last.fm album track count ([a5e4575](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a5e4575f37bc9a3419961828c61111b785cd3ea3))
+* **lambdas:** standard-library MusicBrainz client with a deadline ([6f9c61c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6f9c61c7b609898fccccc01ce64ca679560f847a))
+* **mb:** MusicBrainz lane, single-client release-year resolver (AOTY-19) ([8e4f821](https://github.com/eightyeighteyes/aoty-chart-toy/commit/8e4f821cbe32d1752839b1f010fa89f2a5cbfcd0))
+* **mb:** poke the chart builder as albums are written ([b5b9013](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b5b90134f4741c81461cef66a656f7e2e1bdf534))
+* **mb:** queue-draining handler ([a3281b5](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a3281b539d8029949e9b8edd42f029ea64a6a844))
+* **mb:** resolve years from the release index first ([04c90dc](https://github.com/eightyeighteyes/aoty-chart-toy/commit/04c90dca0309a46ad88b95fab2446b3d14b49c31))
+* **mb:** resolver core ([f237647](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f2376475daab709d2c5681c41c8aba443f41475f))
+* **packaging:** stamp each zip with its git SHA ([4659d4f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/4659d4ffa2b05365252aa9585441dfa0d59301a7))
+* sandbox environment for testing a branch before merge (AOTY-33) ([2f1f988](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2f1f988844e5b6b5e8195881ba4c896788ec6c7b))
+* **scripts:** sandbox reset script ([df0238f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/df0238f48bb70b38e398660c3c6a8a54529deab8))
+* **sync:** Last.fm client and pure sync core ([876b12b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/876b12b9c602afaade843bf06c367335fa1c9f72))
+* **sync:** Last.fm sync worker (AOTY-18) ([de8e21e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/de8e21efd7d107d10c4b4e6f74d98e28c7a7747d))
+* **sync:** start the chart build and record Last.fm's name casing ([b6e1cf2](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b6e1cf2f7cd85170361f110bd3ae13ef95220b81))
+* **sync:** sync worker handler ([75803e1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/75803e11db36eca0de76ce2b4430a30fa23e836e))
+* **tools:** chart_check, the AOTY-21 acceptance diff ([6f004c4](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6f004c4782110721ab6ee679d336dfbdac7566fb))
+* **tools:** mb lane parity check against M0's caches ([33a7fed](https://github.com/eightyeighteyes/aoty-chart-toy/commit/33a7fedd0a3f3a6cd7c0a5a7bd311f4577d7f4e5))
+* **tools:** score the sharded index against M0 ([bf8876b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bf8876bfc91a477403022a793096fd980de68c66))
+* **tools:** sync_check acceptance tool ([c65371e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c65371e050fc24cd33d57613224429a7065607ab))
+* **web:** user page shell ported from M0's renderer ([20c8174](https://github.com/eightyeighteyes/aoty-chart-toy/commit/20c817464a79a3e2d6d43aee918e4e7654f77904))
+
+
+### Bug Fixes
+
+* **chart:** serve Last.fm covers from the host kamp.fm's CSP allows ([4ea0d7c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/4ea0d7cd67abe03602c6aa74d883ccf361a56571))
+* **index:** size the S3 connection pool to the upload threads ([677b965](https://github.com/eightyeighteyes/aoty-chart-toy/commit/677b965f4cd3f1f2cdeec7ca70fa9094a1bd59f6))
+* **infra:** create the ECS service-linked role in global ([e6b3210](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e6b32102b3cf32bbd15d0d17eee2907362907949))
+* **infra:** let deploy roles tag event source mappings ([94a378e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/94a378e9e81c3c7383c5d93e1d839a5593912bec))
+* **infra:** let deploy roles tag event source mappings ([2b4b094](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2b4b094a84938314dd99a2d5ea9333c333d13878))
+* **mb:** fill each batch despite short SQS receives ([c928a46](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c928a46dfb5c8841f77a55e4c4b44f14902fc3ea))
+* **sync:** key punctuation-only albums and retry failures quickly ([c0dea13](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c0dea1388da7bf2bbcae5954ff3e694a797612de))
+* **sync:** key punctuation-only albums and retry failures quickly ([448f093](https://github.com/eightyeighteyes/aoty-chart-toy/commit/448f093a3492847cb98c6d848b975bb230c48296))
+* **tools:** preview CSP allows archive.org, as kamp.fm will ([a8e549a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a8e549a595ee28c07dc931e42f94d50d588ab37f))
+
 ## 1.0.0 (2026-11-22)
 
 
