@@ -9,6 +9,9 @@ still finds the assets it was built with (CD doesn't delete old ones).
 
 The kamp.fm CSP allows no inline script and no inline event handlers, so the build fails if
 index.html has either (a JSON data block, type="application/json", is fine).
+
+index.html placeholders: {{BASE}}, {{NAME}} (the placeholder product name), {{TITLE}}, {{YEAR}},
+and one per asset in ASSETS. They're filled here, not by JavaScript, so nothing flashes.
 """
 
 import argparse
@@ -20,8 +23,21 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "web" / "src"
 OUT = REPO / "dist" / "web"
-ASSETS = ("app.css", "app.js")
+# Each hashed asset and the index.html placeholder that gets its URL. The PNG touch icon is
+# for Safari, which skips SVG favicons.
+ASSETS = {
+  "app.css": "CSS",
+  "app.js": "JS",
+  "intro.js": "INTRO",
+  "favicon.svg": "ICON",
+  "apple-touch-icon.png": "TOUCH",
+}
 HASH_LEN = 12
+# The product name is undecided (AOTY-23, user 2026-11-21): a plain description, not a brand.
+# Avoid "AOTY" alone (albumoftheyear.org) and "Wrapped".
+NAME = "albums of the year"
+TITLE = f"{NAME} · a kamp toy"
+TARGET_YEAR = 2026  # lambdas/common/config.py TARGET_YEAR; test_build_shell keeps them equal
 
 _SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.IGNORECASE | re.DOTALL)
 _HANDLER = re.compile(r"<[^>]*\son[a-z]+\s*=", re.IGNORECASE)
@@ -57,17 +73,16 @@ def build(base, src=SRC, out=OUT):
   shutil.rmtree(out, ignore_errors=True)
   (out / "assets").mkdir(parents=True)
   published = {}
-  for name in ASSETS:
+  values = {"BASE": base, "NAME": NAME, "TITLE": TITLE, "YEAR": str(TARGET_YEAR)}
+  for name, placeholder in ASSETS.items():
     data = (src / name).read_bytes()
     hashed = hashed_name(name, data)
     (out / "assets" / hashed).write_bytes(data)
     published[name] = f"assets/{hashed}"
+    values[placeholder] = f"{base}{published[name]}"
   html = (src / "index.html").read_text(encoding="utf-8")
-  html = (
-    html.replace("{{BASE}}", base)
-    .replace("{{CSS}}", f"{base}{published['app.css']}")
-    .replace("{{JS}}", f"{base}{published['app.js']}")
-  )
+  for key, value in values.items():
+    html = html.replace(f"{{{{{key}}}}}", value)
   left = _PLACEHOLDER.findall(html)
   if left:
     raise ShellError(f"unfilled placeholders in index.html: {sorted(set(left))}")

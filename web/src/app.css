@@ -7,6 +7,7 @@
   --muted: #9c97a8;
   --accent: #ff6b4a;
   --accent-2: #ffc24b;
+  --kamp: #7c86e1;  /* kamp's periwinkle: the endorsement chrome only */
 }
 * { box-sizing: border-box; }
 /* Seam fix (keep it): paint the page colour on the root as well as body, so no compositor
@@ -24,7 +25,7 @@ body {
 .poster {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 56px 40px 48px;
+  padding: 36px 40px 48px;  /* the kamp bar sits above */
 }
 header { margin-bottom: 36px; }
 .eyebrow {
@@ -179,17 +180,52 @@ ol {
   font-size: 32px; letter-spacing: -.02em; margin: 0 0 10px;
 }
 .state p { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 18px; }
-.lookup { display: flex; flex-wrap: wrap; gap: 10px; }
+/* The username form, on the intro and on chart pages' error states (AOTY-23). */
+.lookup-label {
+  display: block; margin-bottom: 8px;
+  font: 500 14px "DM Sans", system-ui, sans-serif; color: var(--ink);
+}
+.lookup-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .lookup input {
-  flex: 1 1 220px; font: 500 15px Inter, system-ui, sans-serif; color: var(--ink);
+  flex: 1 1 220px; min-width: 0; font: 500 16px Inter, system-ui, sans-serif; color: var(--ink);
   background: var(--bg); border: 1px solid #2c2937; border-radius: 999px; padding: 12px 18px;
 }
 .lookup input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.lookup input[aria-invalid="true"] { border-color: var(--accent); }
 .lookup button {
-  font: 600 14px Inter, system-ui, sans-serif; color: #1a1014; cursor: pointer;
+  font: 600 14px "DM Sans", system-ui, sans-serif; color: #1a1014; cursor: pointer;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   border: 0; border-radius: 999px; padding: 12px 22px;
 }
+.lookup button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.lookup button[aria-busy="true"] { opacity: .7; cursor: progress; }
+/* The line under the field is always reserved, so a message never moves the page. */
+.lookup-msg { min-height: 1.5em; margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: var(--accent-2); }
+
+/* The kamp endorsement bar (AOTY-23): kamp's voice and periwinkle, kept to the chrome so it
+   never meets the chart's coral and gold. #7c86e1 on --bg is about 5.9:1. */
+.kampbar {
+  max-width: 1080px; margin: 0 auto; padding: 18px 40px 0;
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.kampbar-link {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--kamp); text-decoration: none; font-size: 13px; font-weight: 500;
+}
+.kampbar-link:hover span { text-decoration: underline; text-underline-offset: 3px; }
+.kampbar-link:focus-visible { outline: 2px solid var(--kamp); outline-offset: 4px; border-radius: 6px; }
+.kamp-mark { width: 22px; height: 22px; flex: none; }
+
+/* The intro (AOTY-23). */
+.intro { max-width: 720px; margin: 0 auto; padding: 64px 40px 72px; }
+.intro-title {
+  font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
+  font-size: clamp(40px, 7.5vw, 84px); line-height: .95; letter-spacing: -.03em;
+  margin: 12px 0 0; overflow-wrap: anywhere;
+}
+.intro-sub { color: var(--muted); font-size: 17px; line-height: 1.55; max-width: 56ch; margin: 20px 0 0; }
+.intro-form { margin-top: 36px; }
+.privacy { font: 13px "DM Sans", system-ui, sans-serif; color: var(--muted); margin: 24px 0 0; }
 
 .view-list { display: none; }
 .poster[data-view="list"] .view-poster { display: none; }
@@ -230,7 +266,10 @@ footer { color: var(--muted); font-size: 12px; margin-top: 28px; text-align: cen
 @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
 
 @media (max-width: 820px) {
-  .poster { padding: 36px 16px; }
+  .poster { padding: 24px 16px 36px; }
+  .kampbar { padding: 14px 16px 0; }
+  .intro { padding: 36px 16px 48px; }
+  .lookup-row button { flex: 1 1 100%; }
   .hero { grid-template-columns: 1fr; padding: 20px; gap: 20px; }
   .crown { font-size: 88px; }
   ol { grid-template-columns: repeat(2, 1fr); gap: 12px; }
