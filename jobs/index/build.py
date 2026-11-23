@@ -335,8 +335,10 @@ def emit(deps, summary, elapsed):
   values = {
     "IndexBuildSeconds": (round(elapsed, 1), "Seconds"),
     "IndexBuildSkipped": (1 if summary.get("skipped") else 0, "Count"),
-    "IndexDumpAgeHours": (ri.dump_age_hours(summary.get("dump", ""), deps.clock()) or 0, "None"),
   }
+  age = ri.dump_age_hours(summary.get("dump", ""), deps.clock())
+  if age is not None:  # absent, not 0, when the dump's age is unknown: 0 would read as "fresh"
+    values["IndexDumpAgeHours"] = (age, "None")
   if not summary.get("skipped"):
     values |= {
       "IndexRecords": (summary.get("records", 0), "Count"),

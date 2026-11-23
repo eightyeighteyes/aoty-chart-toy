@@ -282,6 +282,19 @@ def test_dump_age_hours():
   assert ri.dump_age_hours("not-a-dump", NOW) is None
 
 
+def test_an_unknown_dump_age_is_left_out_not_zero(capsys):
+  class D:
+    env = {"AOTY_ENV": "test"}
+    clock = staticmethod(lambda: NOW)
+
+  build.emit(D(), {"skipped": True, "dump": "not-a-dump"}, 1.0)
+  build.emit(D(), {"skipped": True, "dump": "20261101-000000"}, 1.0)
+  unknown, known = [json.loads(x) for x in capsys.readouterr().out.splitlines() if '"_aws"' in x]
+  assert "IndexDumpAgeHours" not in unknown
+  assert "IndexDumpAgeHours" not in {m["Name"] for m in unknown["_aws"]["CloudWatchMetrics"][0]["Metrics"]}
+  assert known["IndexDumpAgeHours"] == ri.dump_age_hours("20261101-000000", NOW)
+
+
 def test_a_manifest_read_error_other_than_missing_is_raised():
   class Broken(FakeS3):
     def get_object(self, Bucket, Key):

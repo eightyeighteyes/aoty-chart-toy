@@ -6,8 +6,10 @@ load test sets LASTFM_FAKE on sandbox's functions for the run and removes it aft
 
 Because it replaces only urlopen, the real client's pacing (0.5 s between calls) and retries
 still run. Each call sleeps LATENCY_S, about a real page's time (AOTY-11), so syncs take about
-as long as real ones, and emits one EMF line (LastfmCalls), so the test can chart the
-aggregate request rate across functions.
+as long as real ones, and emits one EMF line per call (FakeLastfmCalls), so the test can chart
+the aggregate request rate across functions minute by minute. It isn't LastfmCalls: the
+Lambdas count their own client's calls into that once per run (AOTY-41), which would count
+these twice.
 
 What it answers, deterministically per user:
   user.getinfo             loadtest-* users exist, in their own casing; anyone else is error 6
@@ -93,10 +95,10 @@ def _emit(method):
     "_aws": {
       "Timestamp": int(time.time() * 1000),
       "CloudWatchMetrics": [{"Namespace": NAMESPACE, "Dimensions": [["Environment"]],
-                             "Metrics": [{"Name": "LastfmCalls", "Unit": "Count"}]}],
+                             "Metrics": [{"Name": "FakeLastfmCalls", "Unit": "Count"}]}],
     },
     "Environment": os.environ.get("AOTY_ENV", ""),
-    "LastfmCalls": 1,
+    "FakeLastfmCalls": 1,
     "method": method,
     "function": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", ""),
   }))  # fmt: skip

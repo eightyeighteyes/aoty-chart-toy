@@ -55,4 +55,4 @@ def test_every_call_is_counted(fake, capsys):
   fake.user_info("loadtest-1")
   fake.weekly_album_chart("loadtest-1", 0, 1)
   out = capsys.readouterr().out
-  assert out.count('"LastfmCalls": 1') == 2 and '"Environment": "sandbox"' in out
+  assert out.count('"FakeLastfmCalls": 1') == 2 and '"Environment": "sandbox"' in out

@@ -162,6 +162,7 @@ def handler(event, context, deps=None):
 
 def run(deps, context):
   started = deps.mono()
+  calls_before = getattr(deps.lastfm, "calls", 0)  # track-count fallback; a difference, as sync's
   remaining = context.get_remaining_time_in_millis() / 1000 if context else 900
   deadline = started + remaining - DEADLINE_MARGIN_S
   totals = {"messages": 0, "already_resolved": 0, "resolved": 0, "missed": 0, "failed": 0,
@@ -195,6 +196,7 @@ def run(deps, context):
     deps.lambda_.invoke(FunctionName=deps.env["MB_FUNCTION"], InvocationType="Event", Payload=b"{}")
     poked = True
   elapsed = deps.mono() - started
+  totals["lastfm_calls"] = getattr(deps.lastfm, "calls", 0) - calls_before
   _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age)
   return {**totals, "out_of_time": out_of_time, "self_invoked": poked}
 
@@ -450,6 +452,7 @@ def _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age=None):
     "HotQueueDepth": (depths.get("hot", 0), "Count"),
     "ColdQueueDepth": (depths.get("cold", 0), "Count"),
     "RunSeconds": (round(elapsed, 1), "Seconds"),
+    "LastfmCalls": (totals.get("lastfm_calls", 0), "Count"),  # one metric shared by every function
   }
   if index_age is not None:  # absent rather than 0 when there's no usable index
     values["IndexAgeHours"] = (index_age, "None")

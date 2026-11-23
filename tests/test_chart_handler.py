@@ -269,7 +269,7 @@ def test_one_emf_line_per_run(h, world, capsys):
   (line,) = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
   assert line["Environment"] == "test"
   assert {m["Name"] for m in line["_aws"]["CloudWatchMetrics"][0]["Metrics"]} == {
-    "ChartsBuilt", "ChartsSkipped", "ChartFailures", "ChartSeconds", "CoverLookups",
+    "ChartsBuilt", "ChartsSkipped", "ChartFailures", "ChartSeconds", "CoverLookups", "LastfmCalls",
   }  # fmt: skip
   assert line["ChartsBuilt"] == 1
 
