@@ -1,6 +1,7 @@
 """The static shell build (scripts/build_shell.py): hashed assets, absolute URLs, CSP checks."""
 
 import re
+from html.parser import HTMLParser
 
 import pytest
 
@@ -126,6 +127,66 @@ def test_dm_sans_and_the_kamp_bar_are_in_the_shell(tmp_path):
   assert "family=DM+Sans" in html
   assert 'class="kampbar"' in html and 'href="https://kamp.fm/"' in html and "a kamp toy" in html
   bs.check_csp(html)  # the inline <svg> mark is fine
+
+
+class _Links(HTMLParser):
+  """Each <a href>, with the open elements (tag, class) around it, and every <footer>'s."""
+
+  VOID = {"meta", "link", "input", "br", "img", "circle", "path"}
+
+  def __init__(self):
+    super().__init__()
+    self.stack, self.links, self.footers = [], [], []
+
+  def handle_starttag(self, tag, attrs):
+    a = dict(attrs)
+    if tag == "a":
+      self.links.append((a.get("href"), [t for t, _ in self.stack], [c for _, c in self.stack]))
+    if tag == "footer":
+      self.footers.append([t for t, _ in self.stack])
+    if tag not in self.VOID:
+      self.stack.append((tag, a.get("class") or ""))
+
+  def handle_startendtag(self, tag, attrs):
+    self.handle_starttag(tag, attrs)
+    if tag not in self.VOID:
+      self.stack.pop()
+
+  def handle_endtag(self, tag):
+    if tag in self.VOID:
+      return
+    while self.stack:
+      if self.stack.pop()[0] == tag:
+        break
+
+
+def _shell_links(tmp_path):
+  bs.build(BASE, out=tmp_path / "web")
+  p = _Links()
+  p.feed((tmp_path / "web" / "index.html").read_text())
+  return p
+
+
+def test_one_footer_on_every_page_with_the_credits(tmp_path):
+  # AOTY-29: outside main (hidden on the intro) and the intro's section, so every page has it.
+  p = _shell_links(tmp_path)
+  assert len(p.footers) == 1 and "main" not in p.footers[0] and "section" not in p.footers[0]
+  in_footer = {href for href, tags, _ in p.links if "footer" in tags}
+  assert {"https://www.last.fm/", "https://musicbrainz.org/", "https://coverartarchive.org/"} <= in_footer
+
+
+def test_new_bands_for_old_heads_is_in_the_top_bar_apart_from_kamp(tmp_path):
+  # A primary endorsement in the header (user, 2026-11-23), never inside kamp's own nav.
+  p = _shell_links(tmp_path)
+  ((tags, classes),) = [(t, c) for href, t, c in p.links if href == "https://www.newbandsforoldheads.com/"]
+  assert "topbar" in classes and "kampbar" not in classes and "footer" not in tags and "main" not in tags
+
+
+def test_nothing_overwrites_the_credits():
+  # The footer has no id, and only #footer-user is filled from script (never innerHTML).
+  html, js = (bs.SRC / "index.html").read_text(), (bs.SRC / "app.js").read_text()
+  assert '<footer class="credits">' in html and '$("footer")' not in js
+  assert 'id="footer-user"' in html and "innerHTML" not in js.split("function profileLine")[1].split("\n  }\n")[0]
 
 
 def test_app_js_sets_up_the_switches_once_and_polls_politely():
