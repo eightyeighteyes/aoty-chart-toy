@@ -17,21 +17,26 @@
 <script src="{{JS}}" defer></script>
 </head>
 <body>
-<!-- The kamp endorsement (AOTY-23): "a kamp toy", not a sub-brand. Kamp's record mark, from
-     kamp-site's favicon. -->
-<nav class="kampbar" aria-label="kamp">
-  <a class="kampbar-link" href="https://kamp.fm/">
-    <svg class="kamp-mark" viewBox="0 0 200 200" aria-hidden="true" focusable="false">
-      <circle cx="100" cy="100" r="86" fill="#1c1a16" stroke="#c4aa78" stroke-width="3"/>
-      <circle cx="100" cy="100" r="70" fill="none" stroke="#2a2620" stroke-width="2"/>
-      <circle cx="100" cy="100" r="54" fill="none" stroke="#2a2620" stroke-width="2"/>
-      <circle cx="100" cy="100" r="40" fill="none" stroke="#2a2620" stroke-width="2"/>
-      <circle cx="100" cy="100" r="26" fill="#bf7a20"/>
-      <circle cx="100" cy="100" r="5" fill="#141414"/>
-    </svg>
-    <span>a kamp toy</span>
-  </a>
-</nav>
+<!-- Two endorsements, kept apart: kamp made it (AOTY-23: "a kamp toy", not a sub-brand; kamp's
+     record mark, from kamp-site's favicon), and the New Bands for Old Heads community inspired
+     it (AOTY-29). Opposite ends of the bar, no shared colour, nothing joining them, so it never
+     reads as a co-brand. -->
+<div class="topbar">
+  <nav class="kampbar" aria-label="kamp">
+    <a class="kampbar-link" href="https://kamp.fm/">
+      <svg class="kamp-mark" viewBox="0 0 200 200" aria-hidden="true" focusable="false">
+        <circle cx="100" cy="100" r="86" fill="#1c1a16" stroke="#c4aa78" stroke-width="3"/>
+        <circle cx="100" cy="100" r="70" fill="none" stroke="#2a2620" stroke-width="2"/>
+        <circle cx="100" cy="100" r="54" fill="none" stroke="#2a2620" stroke-width="2"/>
+        <circle cx="100" cy="100" r="40" fill="none" stroke="#2a2620" stroke-width="2"/>
+        <circle cx="100" cy="100" r="26" fill="#bf7a20"/>
+        <circle cx="100" cy="100" r="5" fill="#141414"/>
+      </svg>
+      <span>a kamp toy</span>
+    </a>
+  </nav>
+  <p class="inspired">inspired by the community of <a href="https://www.newbandsforoldheads.com/">New Bands for Old Heads</a></p>
+</div>
 
 <!-- The front door (AOTY-23): shown only on the bare base path; app.js reveals it. -->
 <section class="intro" id="intro" hidden>
