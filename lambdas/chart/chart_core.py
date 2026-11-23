@@ -29,6 +29,7 @@ albums holds each album once, only if a ranking shows it, in By Track order.
 import time
 from collections import Counter
 
+from common.albumkey import base_title
 from common.covers import cover
 from common.mbmatch import is_single
 
@@ -117,7 +118,7 @@ def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=No
     art, fallbacks = cover(m.get("image") or images.get(k), item.get("rg_mbid"))
     albums.append({
       "artist": m.get("artist") or "",
-      "album": m.get("album") or "",
+      "album": base_title(m.get("album") or ""),  # the root album: editions share its key
       "plays": plays[k],
       "tracks": item.get("tracks"),
       "single": is_single(track_info(item)),
