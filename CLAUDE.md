@@ -58,6 +58,8 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync` and `GET .../status` behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`: no member filter, dots or Weighted) `intro.js` (the intro page's pure rules, AOTY-23) and `firstvisit.js` (the banner's and first visit's rules, AOTY-24), both tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base>` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`). |
+| `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
+| `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
@@ -387,7 +389,8 @@ not daily totals from paging scrobbles (the story text was revised to match).
   profile is only known there if a sync already found it within the cooldown; otherwise the
   chart page says so when its sync hits Last.fm error 17.
 - Preview every intro message with `serve_shell.py`'s special names: `nobody*`, `lastfm-down`,
-  `busy-busy`, `broken`, `private-*`.
+  `busy-busy`, `broken`, `private-*`, and AOTY-26's `capacity*`, `too-many`, `throttled`. The
+  queue screen: `caller*` (a minute in line), `crowded*` (throttled polls that recover).
 
 ## First visit (AOTY-24, 2026-11-22)
 
@@ -423,10 +426,33 @@ not daily totals from paging scrobbles (the story text was revised to match).
   so `chart_built_at` is never earlier and the status can't sit in `building`.
 - `last_synced_at` is the sync's *start* time; use `sync_finished_at` for "when it ended".
 - Abuse guards: JSON content-type only (no cross-site form POSTs), per-user cooldown, new users
-  refused while the sync queue holds > 50, `not_found` rows expire after a day (TTL). The
-  execute-api bypass is AOTY-26.
+  refused while the sync queue is over `max_queue_for_new`, `not_found` rows expire after a day
+  (TTL). AOTY-26 added the rest (below).
 - `tools/serve_shell.py` fakes the API (a 12 s pretend sync) so the banner and the in-place
   repaint can be previewed locally.
+
+## Guardrails (AOTY-26, 2026-11-23)
+
+Runbook and knobs: `infra/README.md`, "Guardrails". User decisions: the load test runs in
+**sandbox**, not staging (a fake Last.fm must never be switchable where real users are); syncs
+stop through `pause_syncs` at the api, plus disabling the sync mapping as the hard stop.
+
+- **A long queue used to read as a dead sync.** `STUCK_AFTER` (30 min) made a `queued` row
+  `idle`, so the page said "couldn't build a chart" and the next POST queued the user again. A
+  queued row now stays live while the sync queue holds messages (`api_core._running`).
+- **Fail closed for new users:** an api container that has never read SSM treats new users as
+  paused; a malformed value keeps the last good one. `enforce_origin` is Terraform, not SSM, so an
+  SSM outage can't open the lock.
+- **The origin secret is kamp-site's** (SSM SecureString it creates; AOTY's state stays secret
+  free). Only a request carrying it has its forwarded IP headers believed; otherwise `sourceIp`.
+  Confirm on staging which IP header arrives (the api logs the header shape, no addresses)
+  before relying on it.
+- **Queue position** = tickets handed out minus tickets used up or burnt, clamped to the queue
+  depth; the page shows only the minimum it has seen (FIFO doesn't order across users).
+- **Sync reserves `sync_concurrency` + 1**, one more than the mapping's `maximum_concurrency`:
+  equal values let a stray direct invoke throttle the mapping into the DLQ.
+- Last.fm is also called by the chart builder (covers) and the mb lane (track counts), so
+  `sync_concurrency` caps the sync worker's rate only. The fake is wired into all four functions.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

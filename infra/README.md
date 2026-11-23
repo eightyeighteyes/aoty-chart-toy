@@ -24,15 +24,16 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | `kamp-aoty-<env>-site` bucket | Shell + `data/`. kamp.fm's CloudFront reads it through Origin Access Control (`s3:GetObject` on the key prefix only). Keys mirror the public path: prod stores `toys/aoty/...`, staging `toys/aoty-staging/...`. |
 | `kamp-aoty-<env>-store` bucket | Private Lambda state: `users/<username>/<year>/weeks.json.gz` (weekly album totals, AOTY-18) and the release index. Never readable by CloudFront. Versioned; old versions expire after 7 days. |
 | `users` table | `username` (lowercased). Deletion protection in prod. TTL on `expires_at`, which only the api's `not_found` rows set (AOTY-22). |
+| `guard` table | `id`. Guardrail counters (AOTY-26): `ip#<hash>#<hour>` (the per-IP new-name limit, TTL on `expires_at`) and `queue` (queue tickets and first-sync timing). Nothing precious: emptying it only restarts the counts. |
 | `albums` table | `artist_key` + `title_key` (`norm(album artist)`, `norm(base_title(album))`). Deletion protection in staging and prod, `prevent_destroy` everywhere; PITR in prod. |
-| `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` 2. |
+| `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` = `sync_concurrency` (2). The sync Lambda reserves one more. Terraform ignores the mapping's `enabled`, which is the syncs' hard stop (see "Guardrails"). |
 | `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. Visibility 900 s (the mb timeout). |
 | mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an hourly EventBridge Scheduler schedule that invokes it through the `…-mb-schedule` role; with both queues empty a run makes no MusicBrainz request. |
 | Release index build (AOTY-20) | `kamp-aoty-<env>-index` ECS cluster (FARGATE_SPOT only) and task definition: 1 vCPU / 4 GB, x86_64 (Spot runs no ARM64), AWS's public `lambda/python:3.13` image pinned by digest, fetching its code from `s3://<store>/code/index.zip`. Runs in the default VPC's public subnets with a public IP and the default security group: no NAT. `…-index-daily` schedule at 06:15 UTC (off in sandbox) runs the exact revision Terraform made, through the `…-index-schedule` role. Logs in `/ecs/kamp-aoty-<env>-index`. See "Release index" below. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
 | Chart builder (AOTY-21) | The chart Lambda has **reserved concurrency 1**, so builds never overlap and an older read can't overwrite a newer chart. Started by async invokes from sync (`{"username", "requested_at"}`) and mb (`{"pending": true}`); same invoke config as mb. Writes `<prefix>data/users/<u>/chart.json` (`Cache-Control: no-cache`) to the site bucket and `users/<u>/<year>/chart_pending.json` to the store. See "Charts" below. |
 | `api`, `sync`, `mb`, `chart` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
-| HTTP API | `$default` route → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttled to burst 20 / 10 req/s. |
+| HTTP API | `GET /{proxy+}`, `POST /{proxy+}` and `$default` routes → api Lambda, which sees the full path (`/toys/aoty/api/...`) and strips `BASE_PATH`. Throttles per route: POST burst 5 / 2 req/s, GET (status polls) 50 / 25, the rest 20 / 10 (AOTY-26). |
 | Log groups | 14-day retention, including API access logs. |
 
 An idle stack costs about $0/mo: on-demand tables, SQS, Lambda, HTTP API, standard SSM
@@ -49,7 +50,7 @@ real builds a week; the other days exit in seconds), plus a few cents of S3 for 
   (`jobs/index/`, `dist/index.zip`) is uploaded by CD to `code/index.zip` in the store bucket.
 - **SSM parameter values are never in Terraform.** Refreshing a SecureString would put it in
   state, and the PR plan role would need decrypt rights. Terraform only grants the Lambdas read on
-  `/kamp-aoty/<env>/*`.
+  the names it knows (`ssm.tf`). The origin secret is kamp-site's, in kamp-site's state.
 - **AOTY owns its bucket policies** (the OAC grant uses kamp.fm's distribution ARN). kamp-site
   (AOTY-15) owns the CloudFront origins and behaviours and reads these outputs with
   `terraform_remote_state`.
@@ -218,8 +219,8 @@ How it differs from staging:
 
 - **Not on kamp.fm.** No CloudFront path and no OAC grant on the site bucket. The API is reached
   at its `execute-api` URL (`terraform output -json stack | jq -r .api_endpoint`), so the shell
-  and the `data/` paths can't be tested here. If AOTY-15 disables the `execute-api` endpoint,
-  sandbox needs an exemption.
+  and the `data/` paths can't be tested here. For the same reason sandbox never sets
+  `enforce_origin` (AOTY-26).
 - **Its own data.** Separate tables, buckets, queues and SSM prefix (`/kamp-aoty/sandbox/`), so a bad
   branch can't pollute staging's release-year cache. Its albums table starts cold.
 - **Its own Last.fm API key.** A branch's Lambda could log the key and read it back with the
@@ -303,12 +304,16 @@ curl -X POST -H 'content-type: application/json' -d '{}' https://kamp.fm/toys/ao
 curl https://kamp.fm/toys/aoty-staging/api/users/alice/status
 ```
 
-POST answers 202 when it queues, or 200 with `reason` `cooldown` (a sync was requested under
-`SYNC_COOLDOWN`, 10 min, ago) or `in_progress`. A new name is checked with `user.getInfo`: an
-unknown one gets 404 and a `not_found` row that expires after a day (TTL on `expires_at`).
-New users get 503 `busy` while the sync queue holds more than 50 messages. Non-JSON POSTs
-get 415. Status stages: `queued`, `reading`, `building`, `dating`, `idle`, `error`. A sync
-that hasn't moved for 30 min counts as dead, so it never blocks a user for good.
+POST answers 202 when it queues, or 200 with `reason` `cooldown` (a sync was requested within
+`sync_cooldown_seconds`, 10 min by default), `in_progress` or `paused`. A new name counts
+against the caller's IP (429 `too_many_new` past `new_users_per_ip_hour`), then is checked with
+`user.getInfo`: an unknown one gets 404 and a `not_found` row that expires after a day (TTL on
+`expires_at`). New users get 503 `busy` while the sync queue holds more than `max_queue_for_new`
+(500) messages, and 503 `paused` while paused. Non-JSON POSTs get 415. Status stages: `queued`,
+`reading`, `building`, `dating`, `idle`, `error`; while queued, `queue.position` (and
+`queue.wait_s` once 20 first syncs are timed). A sync that hasn't moved for 30 min counts as
+dead, so it never blocks a user for good, except that a queued one stays live while the sync
+queue holds messages (a long line isn't a dead sync).
 
 To skip the cooldown (or sync without the API), send the message the API sends. The group id
 must be the lowercased username (one sync per user at a time), and the dedup id must be
@@ -363,10 +368,86 @@ with M0's rules on the same store and albums items, and exits 1 on a difference.
 `tools/serve_shell.py --sample alice` serves the shell at `http://127.0.0.1:8000/toys/aoty/`
 (the intro page) and `.../user/alice`, with kamp.fm's routing and CSP, a synthetic chart, and a
 fake API: a 12 s pretend sync, and special names for the intro's errors (`nobody*`,
-`lastfm-down`, `busy-busy`, `broken`, `private-*`) and for first visits (`newbie*`, the whole
-first-chart flow in about 40 s; `nothing*`, no albums from the year). To preview a real one, copy its
+`lastfm-down`, `busy-busy`, `broken`, `private-*`, and AOTY-26's `capacity*`, `too-many`,
+`throttled`) and for first visits (`newbie*`, the whole first-chart flow in about 40 s;
+`nothing*`, no albums from the year; `caller*`, a minute in line first; `crowded*`, throttled
+status polls that recover). To preview a real one, copy its
 `chart.json` to `data/shell_preview/users/<u>/chart.json` first, or use
 `--proxy sandbox|staging|prod` for that environment's real API and data (real syncs).
+
+## Guardrails (AOTY-26)
+
+For a surprise hit. Last.fm (~5 req/s per IP) and MusicBrainz (1 req/s) are the limits, not AWS,
+so the aim is a real queue with bounded spend.
+
+**Runtime knobs** (SSM `String` parameters under `/kamp-aoty/<env>/`, read by the api within
+about 35 s, no deploy; `lambdas/common/guardrails.py`). None needs to exist: a missing one is its
+default.
+
+| Parameter | Default | |
+|---|---|---|
+| `pause_new_users` | `false` | New users get "we're at capacity" (503 `paused`), before any Last.fm call. Existing users keep syncing; every chart keeps serving from the CDN. |
+| `pause_syncs` | `false` | No syncs are queued at all. Existing users' pages show their chart with a quiet banner; new users get `paused`. Messages already queued still drain. |
+| `sync_cooldown_seconds` | `600` | Per-user time between page-visit syncs. Raise to `3600` at scale. |
+| `new_users_per_ip_hour` | `10` | Distinct new usernames one IP may try per hour (429 `too_many_new`). |
+| `max_queue_for_new` | `500` | New users get 503 `busy` while the sync queue is deeper. |
+
+```sh
+aws ssm put-parameter --name /kamp-aoty/prod/pause_new_users --type String --value true --overwrite
+aws ssm delete-parameter --name /kamp-aoty/prod/pause_new_users      # back to the default
+```
+
+A malformed value is ignored (the last good one stays) with an error log and a
+`GuardrailBadValue` metric. An api container that can't read SSM at all treats new users as
+paused until it can.
+
+**Hard stop for syncs** (immediate, unlike `pause_syncs`): disable the sync mapping. Terraform
+ignores `enabled`, so an apply won't turn it back on. Messages wait in the queue meanwhile.
+
+```sh
+uuid=$(aws lambda list-event-source-mappings --function-name kamp-aoty-prod-sync --query 'EventSourceMappings[0].UUID' --output text)
+aws lambda update-event-source-mapping --uuid "$uuid" --no-enabled     # --enabled to resume
+```
+
+Never use `put-function-concurrency 0` as a kill switch, and never direct-invoke sync in
+staging or prod: both throttle the mapping, and throttled messages come back only after the
+90-min visibility timeout and can reach the DLQ with the users row never marked `error`.
+
+**Caps (Terraform):**
+- `sync_concurrency` (2): the mapping's `maximum_concurrency`. It caps the sync worker's spend
+  and its Last.fm rate (2 workers x 0.5 s/call = 4 req/s). The chart builder (`album.getInfo`
+  covers) and the mb lane (track-count fallback) also call Last.fm, one at a time each.
+- `api_post_throttle`, `api_get_throttle`, `api_throttle_*`: the route throttles above.
+
+**Queue position:** every queued sync takes a ticket (`ADD joined` on the guard table's `queue`
+item, stored as the users row's `queue_ticket`); the sync worker uses it up when it starts
+(`ADD started`), and the api burns tickets no sync will use. The status's `queue.position` is
+the tickets still ahead, clamped to the queue depth; the page only shows it going down.
+
+**The execute-api lock:** the HTTP API's own URL bypasses CloudFront. kamp-site adds an
+`x-kamp-origin` header to the api origins with a secret it keeps in SSM
+(`/kamp-aoty/<env>/origin_secret`, a SecureString kamp-site creates and owns). With
+`enforce_origin = true` (Terraform, per env), the api answers 403 to user routes without it.
+Health stays open, so CD's smoke test can't be locked out. Only requests carrying the secret
+have their `CloudFront-Viewer-Address` / `X-Forwarded-For` believed for the per-IP limit.
+
+1. Deploy AOTY with `enforce_origin` off (the default), then kamp-site's change.
+2. Check the header arrives: a new name's POST logs `ip headers: ... origin_ok=True` in
+   `/aws/lambda/kamp-aoty-staging-api`, along with which IP headers came.
+3. Set `enforce_origin = true` in `envs/staging`, deploy, check, then prod.
+4. `curl -X POST -H 'content-type: application/json' -d '{}' <api_endpoint>/toys/aoty-staging/api/users/alice/sync` → 403.
+
+Rotation: copy the value to `/kamp-aoty/<env>/origin_secret_previous` (SecureString), rotate the
+secret in kamp-site and apply, wait for CloudFront to finish deploying, then delete `_previous`.
+The api accepts either meanwhile (it rereads them every 5 min). Never set `enforce_origin` in
+sandbox: it isn't behind CloudFront.
+
+**Load test** (sandbox, admin credentials): `tools/load_test.py --users 300` turns on a fake
+Last.fm (`common/fakelastfm.py`, `LASTFM_FAKE=1` on sandbox's functions; the code refuses it in
+any other env), raises the per-IP and queue limits, POSTs synthetic `loadtest-*` users, and
+writes `data/load_test/run-<ts>/report.md` (queue depth, sync concurrency, Last.fm calls per
+minute, GB-s). It puts the settings back when it ends, even on an error. Then
+`scripts/sandbox_reset.py --yes --keep-albums`.
 
 ## Release index (AOTY-20)
 
@@ -399,15 +480,14 @@ up to three times within an hour.
 ## Follow-ups outside Terraform
 
 - **Lambda concurrency quota:** raised from 10 to 1,000 (requested 2026-11-21, approved by
-  2026-11-22; Service Quotas, `L-B99A9384`). The mb Lambda reserves 1 (AOTY-19); AOTY-26's
-  caps can use it too. The sync worker still uses its
-  event source mapping's `maximum_concurrency` (2 in every env), which also caps the Last.fm rate.
+  2026-11-22; Service Quotas, `L-B99A9384`). The mb and chart Lambdas reserve 1 each, sync
+  reserves `sync_concurrency` + 1 (AOTY-26); its mapping's `maximum_concurrency` caps the Last.fm rate.
   Check the quota with `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384`.
 - **Cost allocation tags:** activate `Project` and `Environment` in Billing once they appear (about 24 h
   after first use): `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Environment,Status=Active`.
-- **For AOTY-15:** the `execute-api` URL bypasses CloudFront and its throttling, so lock it down
-  once CloudFront fronts it (a shared-secret header, or `disable_execute_api_endpoint`). Don't
-  forward `Host` to API Gateway.
+- **The `execute-api` URL** bypasses CloudFront: the origin-secret lock is in "Guardrails"
+  (AOTY-26). Don't forward `Host` to API Gateway, and don't use `disable_execute_api_endpoint`:
+  CloudFront reaches the API by that hostname.
 
 ## Notes
 
