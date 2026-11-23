@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.3.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.2.0...v1.3.0) (2026-11-23)
+
+
+### Features
+
+* alarms, uptime check and budget (AOTY-27) ([5722c1b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/5722c1b09de90b33bb10f407eadbbc9833faa284))
+* **api:** pause new users and syncs without a deploy ([0127c07](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0127c07aa556e1037479d0cd34cb15d094a729cb))
+* **api:** per-IP limit on new usernames ([461f55d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/461f55d87a1c5d133010bee97f89dedf94d4f314))
+* **api:** queue position and measured wait ([1f72c6f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1f72c6f7fc258f13e7401f47799c662018936e5d))
+* **api:** refuse user routes that bypass CloudFront ([b88c0f9](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b88c0f9571a89c7ceb46452a0edcb5a13e4aa008))
+* **api:** runtime guardrail settings from SSM ([e6e4db6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e6e4db67cb1fe26867ffc8b4416ded37b1683819))
+* **chart:** beta group chart with M0's rules (AOTY-50) ([af4c760](https://github.com/eightyeighteyes/aoty-chart-toy/commit/af4c76016bcf213a6a9cbc9e02c57ed317fddb8d))
+* **chart:** group charts for a hand-made beta group, with M0's rules ([744c6bf](https://github.com/eightyeighteyes/aoty-chart-toy/commit/744c6bf6d486e1afc05ab56ab73458f7becc112b))
+* CloudWatch dashboard per env and sync/api metrics (AOTY-41) ([ef122df](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ef122df75b51bffff7252814b17501142164a070))
+* credits footer and New Bands for Old Heads in the header (AOTY-29) ([a026980](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a02698086710bcda331e89b9b8d7533df5a1a042))
+* **groups:** readable slugs for group URLs instead of random ids ([3bad5f0](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3bad5f0a2c96e77d839fc6979446e6b9a7b7a0be))
+* **infra:** a CloudWatch dashboard per env; chart-event-age in milliseconds ([f8a79db](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f8a79dbb2e2d7c37bfe0280abc32b56e4e5e1b72))
+* **infra:** alarms, alert topic and monthly budget ([31dbc55](https://github.com/eightyeighteyes/aoty-chart-toy/commit/31dbc5588566444465dc3a1f5acd57be32281f1b))
+* **infra:** one setting caps sync workers ([d74d775](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d74d775cf54e37bced68dc55226eb8a52e7bf207))
+* **lastfm:** LastfmErrors metric for failed Last.fm calls ([7c2a35f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7c2a35f30924c652ee00ef006e090caa78ea134c))
+* **metrics:** api EMF for sync requests, counted at the dispatcher ([06055ee](https://github.com/eightyeighteyes/aoty-chart-toy/commit/06055ee044c21c42a7253281e55e407cee490649))
+* **metrics:** Last.fm calls from chart and mb, fake renamed, unknown dump age left out ([b2662f8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b2662f87af8b828af39af7ac2141817226586e89))
+* **metrics:** sync worker EMF and a shared emitter ([bced649](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bced649cb18b59144be69a0085fdd352c05dcb6f))
+* surprise-hit guardrails, kill switch and queue screen (AOTY-26) ([69cb678](https://github.com/eightyeighteyes/aoty-chart-toy/commit/69cb678930fb68dc3997d13beecb0b62dea1900f))
+* **uptime:** hourly uptime check of kamp.fm ([ae6dd0d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ae6dd0d0de17f9077b78a8cfa1a268632c6f5069))
+* **web:** 'still counting deep cuts' instead of big pending numbers ([a751fc1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a751fc14eb79177ed73abb007152cd1916de76ea))
+* **web:** 'still counting deep cuts' instead of big pending numbers ([77984b8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/77984b8e4451b521da4cf6b2b7fe28d5f9805285))
+* **web:** credits footer on every page ([3bed482](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3bed482f49cff6088259b38a65ff923c8b41fee0))
+* **web:** group page for the Discord beta (AOTY-51) ([40c4483](https://github.com/eightyeighteyes/aoty-chart-toy/commit/40c44831c1685f770cf44fc3e5d5056d52698534))
+* **web:** group page with Weighted, listener dots and the member filter ([8716a7f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/8716a7f639b980071e9e23daf966696c0e3be15a))
+* **web:** last.fm profile url helper ([14d9b2f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/14d9b2fa994105fb972a383ee68d4544956c6786))
+* **web:** New Bands for Old Heads endorsement in the header ([4bef27e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/4bef27ed4dbee80232f9f93aadd4998af0d93602))
+* **web:** request-line queue screen ([a8f7f2e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a8f7f2e35730b401e37ea7b632b2a74c06c6ee52))
+
+
+### Bug Fixes
+
+* **api:** a long queue no longer reads as a dead sync ([70cf04a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/70cf04a68298401f6d56e4046e958b27ec565cfd))
+* **chart:** newly dated albums reach group charts (AOTY-50) ([99312a7](https://github.com/eightyeighteyes/aoty-chart-toy/commit/99312a7f426b82058556421171b5255f218d64e4))
+* **chart:** newly dated albums reach group charts in the pending pass ([a2ca0ac](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a2ca0ac6e01bf01af060bfefb495dcaa8b7cb443))
+* **chart:** show the root album title, not edition suffixes ([7e21a7f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7e21a7f2a2153dcc989cf2077dbe2358aeaabf63))
+* **sync:** continue a long sync in a fresh message, not a re-receive ([b7420a9](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b7420a918e90e13cfa44c07399b4435b694e0a2b))
+* **sync:** continue long syncs in fresh messages so they never reach the DLQ (AOTY-46) ([1dc7cae](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1dc7cae48c6637fbe4c3aaaa80af990fd3ead8ee))
+* **web:** group cards lead with listeners and fill dots in order, as M0 ([72b1cdc](https://github.com/eightyeighteyes/aoty-chart-toy/commit/72b1cdccf5291c3d53cd5d883bd96d3bc2e45a96))
+
 ## [1.2.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.1.0...v1.2.0) (2026-11-23)
 
 
