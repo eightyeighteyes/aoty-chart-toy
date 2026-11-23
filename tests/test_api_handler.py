@@ -158,6 +158,32 @@ def test_a_running_sync_is_in_progress(h):
   assert code == 200 and body["reason"] == "in_progress" and body["status"]["stage"] == "reading"
 
 
+def test_an_hour_in_a_long_queue_is_still_queued_not_requeued(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 3600}
+  d = deps(h, ddb, FakeSQS(depth=120))
+  code, body = sync(h, d)
+  assert code == 200 and body["reason"] == "in_progress" and d.sqs.sent == []
+  assert body["status"]["stage"] == "queued"
+  assert status(h, d)[1]["stage"] == "queued"
+
+
+def test_the_queue_depth_is_cached_briefly(h):
+  class Counting(FakeSQS):
+    calls = 0
+
+    def get_queue_attributes(self, **kw):
+      Counting.calls += 1
+      return super().get_queue_attributes(**kw)
+
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5}
+  d = deps(h, ddb, Counting(depth=3))
+  status(h, d)
+  status(h, d)
+  assert Counting.calls == 1
+
+
 def test_losing_the_race_answers_in_progress_and_sends_nothing(h):
   def other_request(rows):
     rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW}

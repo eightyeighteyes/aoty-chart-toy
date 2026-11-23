@@ -53,14 +53,25 @@ def _last_activity(row):
   return max(row.get("sync_requested_at") or 0, row.get("sync_started_at") or 0)
 
 
-def _running(row, now):
-  """A sync is queued or running, and not stuck: a dead one mustn't block the user for good."""
-  return row.get("state") in ACTIVE and now - _last_activity(row) < STUCK_AFTER
+def _running(row, now, queue_depth=None):
+  """A sync is queued or running, and not stuck: a dead one mustn't block the user for good.
+
+  A queued row also counts as live while the sync queue holds messages (queue_depth > 0): in a
+  long queue (AOTY-26) a real wait outlasts STUCK_AFTER, and treating it as dead would show the
+  page an idle stage and let the next POST queue the user a second time. A row left queued by a
+  crash between the update and the send is then freed once the queue drains.
+  """
+  state = row.get("state")
+  if state not in ACTIVE:
+    return False
+  if now - _last_activity(row) < STUCK_AFTER:
+    return True
+  return state == "queued" and (queue_depth or 0) > 0
 
 
-def decide_sync(row, now, cooldown):
+def decide_sync(row, now, cooldown, queue_depth=None):
   """queue, in_progress or cooldown, for a POST sync."""
-  if _running(row, now):
+  if _running(row, now, queue_depth):
     return "in_progress"
   requested = row.get("sync_requested_at") or 0
   if requested and now - requested < cooldown:
@@ -68,10 +79,10 @@ def decide_sync(row, now, cooldown):
   return "queue"
 
 
-def stage(row, now):
+def stage(row, now, queue_depth=None):
   """Where the user's update is: queued, reading, error, building, dating or idle."""
   state = row.get("state")
-  if _running(row, now):
+  if _running(row, now, queue_depth):
     return "queued" if state == "queued" else "reading"
   if state in FAILED:
     return "error"
@@ -118,7 +129,7 @@ def status(row, now, cooldown, queue_depth=None):
   pending = row.get("chart_pending") or 0
   requested = row.get("sync_requested_at") or 0
   out = {
-    "stage": stage(row, now),
+    "stage": stage(row, now, queue_depth),
     "display_name": row.get("display_name") or row.get("username"),
     "weeks": {"done": progress.get("weeks_done", 0), "total": progress.get("weeks_total", 0)},
     "scrobbles": progress.get("plays", 0),

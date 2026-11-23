@@ -75,6 +75,7 @@ class Deps:
     self.ddb, self.sqs, self.env, self.clock = ddb, sqs, env, clock
     self._lastfm, self._lastfm_factory = lastfm_client, lastfm_factory
     self.settings = settings or (lambda: guardrails.DEFAULTS)
+    self.depth_cache = None  # (expires, depth), see _queue_depth
 
   @property
   def lastfm(self):
@@ -172,18 +173,21 @@ def post_sync(deps, name, headers):
   elif row.get("state") == "not_found":
     return _response(404, {"error": "unknown user"})
 
-  decision = core.decide_sync(row, now, cooldown)
+  # A queued row needs the queue's depth to tell a long wait from a dead mark (api_core._running).
+  depth = _queue_depth(deps) if row.get("state") == "queued" else None
+  decision = core.decide_sync(row, now, cooldown, depth)
   if decision != "queue":
-    return _response(200, {"queued": False, "reason": decision, "status": core.status(row, now, cooldown)})
+    body = {"queued": False, "reason": decision, "status": core.status(row, now, cooldown, depth)}
+    return _response(200, body)
   if not row.get("last_synced_at") and _queue_depth(deps) > deps.settings().max_queue_for_new:
     return _response(503, {"error": "busy"})
 
   previous = {k: row.get(k) for k in ("state", "sync_requested_at")}
   if not _mark_queued(deps, name, now, cooldown, display):
     row = _get_user(deps, name)
-    return _response(
-      200, {"queued": False, "reason": "in_progress", "status": core.status(row, now, cooldown)}
-    )
+    depth = _queue_depth(deps)
+    body = {"queued": False, "reason": "in_progress", "status": core.status(row, now, cooldown, depth)}
+    return _response(200, body)
   try:
     deps.sqs.send_message(
       QueueUrl=deps.env["SYNC_QUEUE_URL"],
@@ -197,7 +201,7 @@ def post_sync(deps, name, headers):
     return _response(503, {"error": "queue_unavailable"})
   log.info("sync queued for %s", _tag(name))
   row = _get_user(deps, name)
-  return _response(202, {"queued": True, "status": core.status(row, now, cooldown)})
+  return _response(202, {"queued": True, "status": core.status(row, now, cooldown, _queue_depth(deps))})
 
 
 # ---- users table --------------------------------------------------------------------------
@@ -284,14 +288,22 @@ def _restore(deps, name, previous):
     log.exception("could not undo the queued mark for %s", _tag(name))
 
 
+DEPTH_TTL_S = 10  # status polls from a crowd of queued pages would otherwise each call SQS
+
+
 def _queue_depth(deps):
+  now = deps.clock()
+  if deps.depth_cache and now < deps.depth_cache[0]:
+    return deps.depth_cache[1]
   try:
     out = deps.sqs.get_queue_attributes(QueueUrl=deps.env["SYNC_QUEUE_URL"],
                                         AttributeNames=["ApproximateNumberOfMessages"])  # fmt: skip
-    return int(out["Attributes"]["ApproximateNumberOfMessages"])
+    depth = int(out["Attributes"]["ApproximateNumberOfMessages"])
   except Exception:
     log.exception("could not read the sync queue depth")
     return 0
+  deps.depth_cache = (now + DEPTH_TTL_S, depth)
+  return depth
 
 
 def _error_code(e):

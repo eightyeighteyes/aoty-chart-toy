@@ -63,6 +63,25 @@ def test_a_stuck_sync_no_longer_blocks(state):
   assert core.decide_sync(row, NOW, COOL) == "queue"
 
 
+def test_a_long_queue_keeps_a_queued_row_alive():
+  old = {"state": "queued", "sync_requested_at": NOW - 4 * 3600}
+  assert core.decide_sync(old, NOW, COOL, queue_depth=200) == "in_progress"
+  assert core.stage(old, NOW, queue_depth=200) == "queued"
+  # Once the queue drains, a mark that old is a crash between update and send: free it.
+  assert core.decide_sync(old, NOW, COOL, queue_depth=0) == "queue"
+  assert core.stage(old, NOW, queue_depth=0) == "idle"
+
+
+@pytest.mark.parametrize("state", ["syncing", "retrying"])
+def test_a_long_queue_doesnt_revive_a_dead_sync(state):
+  row = {
+    "state": state,
+    "sync_requested_at": NOW - core.STUCK_AFTER,
+    "sync_started_at": NOW - core.STUCK_AFTER,
+  }
+  assert core.decide_sync(row, NOW, COOL, queue_depth=200) == "queue"
+
+
 def test_a_long_sync_that_started_recently_is_still_running():
   row = {"state": "syncing", "sync_requested_at": NOW - core.STUCK_AFTER - 60, "sync_started_at": NOW - 120}
   assert core.decide_sync(row, NOW, COOL) == "in_progress"
