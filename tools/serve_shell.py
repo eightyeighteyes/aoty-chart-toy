@@ -2,6 +2,7 @@
 
   .venv/bin/python tools/serve_shell.py                       # http://127.0.0.1:8000/toys/aoty/
   .venv/bin/python tools/serve_shell.py --sample alice        # also writes a synthetic chart
+  .venv/bin/python tools/serve_shell.py --proxy staging       # real users: api/ and data/ from kamp.fm
   aws s3 cp s3://kamp-aoty-sandbox-site/toys/aoty-sandbox/data/users/<u>/chart.json \
     data/shell_preview/users/<u>/chart.json                   # or preview a real chart
 
@@ -11,7 +12,9 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
   <base>api/users/<u>/{sync,status}     a stand-in API: POST sync starts a pretend 12 s sync
                                         (queued, reading, building, then idle, which bumps the
                                         chart's generated_at so the page repaints in place);
-                                        a second POST within 10 min answers "cooldown"
+                                        a second POST within 10 min answers "cooldown". Only
+                                        names with a chart under --data ever get one. With
+                                        --proxy, api/ and data/ go to that kamp.fm env instead.
   any other path under <base>           index.html, as kamp.fm's shell function does
 with kamp.fm's Content-Security-Policy, so CSP violations show in the browser console.
 data/ is git-ignored, so real charts copied there stay local.
@@ -23,6 +26,8 @@ import http.server
 import json
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -98,10 +103,31 @@ def fake_status(started, now, chart_file):
   return {**base, "stage": "idle", "weeks": {"done": 4, "total": 4}, "chart_built_at": built}
 
 
-def handler_for(base, out, data):
+PROXIES = {
+  "prod": "https://kamp.fm/toys/aoty/",
+  "staging": "https://kamp.fm/toys/aoty-staging/",
+}
+
+
+def forward(target, method, rest, body=b"", ctype=None):
+  """(status, body, content type) from the real site for <target><rest>: errors pass through."""
+  req = urllib.request.Request(f"{target}{rest}", data=body if method == "POST" else None, method=method,
+                               headers={"User-Agent": "aoty-serve-shell/1", **({"Content-Type": ctype} if ctype else {})})  # fmt: skip
+  try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+      return r.status, r.read(), r.headers.get("Content-Type", "application/json")
+  except urllib.error.HTTPError as e:
+    return e.code, e.read(), e.headers.get("Content-Type", "application/json")
+
+
+def handler_for(base, out, data, proxy=None):
   syncs = {}  # username -> when its pretend sync started
 
   class Handler(http.server.BaseHTTPRequestHandler):
+    def proxied(self, method, rest, body=b""):
+      status, payload, ctype = forward(proxy, method, rest, body, self.headers.get("Content-Type"))
+      return self.send(status, payload, ctype, "no-cache" if rest.startswith("data/") else "no-store")
+
     def api(self, method, rest):
       """A stand-in for the API (AOTY-22): POST sync starts a pretend sync, status follows it."""
       parts = rest.split("/")  # api, users, <name>, sync|status
@@ -125,9 +151,10 @@ def handler_for(base, out, data):
 
     def do_POST(self):
       path = self.path.split("?", 1)[0]
-      self.rfile.read(int(self.headers.get("Content-Length") or 0))
+      body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
       if path.startswith(f"{base}api/"):
-        return self.api("POST", path[len(base) :])
+        rest = path[len(base) :]
+        return self.proxied("POST", rest, body) if proxy else self.api("POST", rest)
       return self.send(405, b"", "text/plain")
 
     def do_GET(self):
@@ -135,6 +162,8 @@ def handler_for(base, out, data):
       if not path.startswith(base):
         return self.send(404, b"not under the base path\n", "text/plain")
       rest = path[len(base) :]
+      if proxy and (rest.startswith("api/") or rest.startswith("data/")):
+        return self.proxied("GET", rest)
       if rest.startswith("api/"):
         return self.api("GET", rest)
       if rest.startswith("data/"):
@@ -166,6 +195,8 @@ def main():
   p.add_argument("--port", type=int, default=8000)
   p.add_argument("--data", type=Path, default=DATA, help="holds users/<u>/chart.json")
   p.add_argument("--sample", metavar="NAME", help="write a synthetic chart for NAME first")
+  p.add_argument("--proxy", choices=sorted(PROXIES),
+                 help="send api/ and data/ to that environment on kamp.fm (real users, real syncs)")  # fmt: skip
   args = p.parse_args()
   build_shell.build(args.base, out=OUT)
   if args.sample:
@@ -173,7 +204,10 @@ def main():
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(sample_chart(args.sample)), encoding="utf-8")
     print(f"sample chart: {f}")
-  server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data))
+  proxy = PROXIES.get(args.proxy)
+  if proxy:
+    print(f"api/ and data/ go to {proxy}: syncs are real (the API's cooldown still applies)")
+  server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data, proxy))
   who = args.sample or "<name>"
   print(f"serving http://127.0.0.1:{args.port}{args.base}user/{who}  (ctrl-c to stop)")
   try:

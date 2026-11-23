@@ -298,10 +298,20 @@
       }
     }
 
+    // The sync is over but there's still no chart to show (first visit): say so, don't wait on.
+    function gaveUp(reason) {
+      if (current) return;
+      if (reason === "private") {
+        state("This Last.fm profile is private", "Its listening isn't public, so there's no chart to build.", false);
+      } else {
+        state("Couldn't build a chart this time", "Something went wrong reading the scrobbles. Try again in a few minutes.", false);
+      }
+    }
+
     async function handle(s) {
       await maybeRefresh(s);
-      if (s.stage === "idle") return stop("");
-      if (s.stage === "error") return quiet();
+      if (s.stage === "idle") { gaveUp(); return stop(""); }
+      if (s.stage === "error") { gaveUp(s.reason); return current ? quiet() : stop(""); }
       const [msg, detail] = describe(s);
       say(msg, detail);
       if (s.stage === "dating") {
@@ -311,7 +321,7 @@
       } else {
         delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
       }
-      if (Date.now() - started > WATCH_FOR_MS) return stop("");
+      if (Date.now() - started > WATCH_FOR_MS) { gaveUp(); return stop(""); }
       schedule(delay);
     }
 
