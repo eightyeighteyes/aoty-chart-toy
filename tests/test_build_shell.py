@@ -131,3 +131,11 @@ def test_app_js_sets_up_the_switches_once_and_polls_politely():
   assert js.count('setupSwitch("rank"') == 1 and "switchesReady" in js  # no doubled listeners
   assert "visibilitychange" in js and "document.hidden" in js
   assert '"content-type": "application/json"' in js  # the API refuses anything else (415)
+
+
+def test_both_seam_fixes_stay():
+  # M0: the root paints --bg too. AOTY-23: body never paints as one flat colour (Chrome renders flat
+  # tiles and content tiles' near-black differently, so short pages showed a darker strip).
+  css = (bs.SRC / "app.css").read_text()
+  assert "html { background: var(--bg)" in css
+  assert "background-image: linear-gradient(var(--bg), #0d0c13)" in css
