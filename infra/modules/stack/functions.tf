@@ -31,6 +31,7 @@ locals {
     MB_FUNCTION    = "${local.prefix}-mb"
     CHART_FUNCTION = "${local.prefix}-chart"
     SITE_PREFIX    = local.s3_key_prefix
+    ENFORCE_ORIGIN = tostring(var.enforce_origin)
   }
 
   queue_consume = [
@@ -54,6 +55,11 @@ locals {
         # The per-IP new-name limit, queue tickets and the measured wait (AOTY-26).
         actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
         resources = [aws_dynamodb_table.guard.arn]
+      },
+      {
+        # kamp.fm's origin secret (AOTY-26); decrypting it is DecryptParams below.
+        actions   = ["ssm:GetParameters"]
+        resources = local.origin_secret_arns
       },
     ]
     sync = [

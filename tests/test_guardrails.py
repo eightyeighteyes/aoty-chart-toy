@@ -99,6 +99,37 @@ def test_ssm_down_on_a_cold_start_pauses_new_users_only():
   assert s.new_users_paused and not s.pause_syncs and s.sync_cooldown_seconds == 600
 
 
+class SecretSSM(FakeSSM):
+  def get_parameters(self, Names, WithDecryption=False):
+    assert WithDecryption
+    return super().get_parameters(Names)
+
+
+def test_origin_secrets_are_read_cached_and_kept_through_a_blip():
+  ssm, clock = SecretSSM({"origin_secret": "a", "origin_secret_previous": "b"}), Clock()
+  r = g.OriginSecrets(ssm, PREFIX, clock=clock)
+  assert r.get() == ("a", "b")
+  clock.t += g.SECRET_TTL_S - 1
+  r.get()
+  assert ssm.calls == 1
+  ssm.fail = True
+  clock.t += 2
+  assert r.get() == ("a", "b")
+
+
+def test_no_origin_secret_means_none():
+  assert g.OriginSecrets(SecretSSM(), PREFIX, clock=Clock()).get() == ()
+  assert g.OriginSecrets(SecretSSM(fail=True), PREFIX, clock=Clock()).get() == ()
+
+
+def test_origin_ok():
+  assert g.origin_ok("a", ("x", "a"))
+  assert not g.origin_ok("a", ())
+  assert not g.origin_ok("", ("",))
+  assert not g.origin_ok(None, ("a",))
+  assert not g.origin_ok("ab", ("a",))
+
+
 def test_ssm_down_later_keeps_the_last_good_settings():
   ssm, clock = FakeSSM({"sync_cooldown_seconds": "3600"}), Clock()
   r = reader(ssm, clock)

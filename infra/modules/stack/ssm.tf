@@ -20,4 +20,11 @@ locals {
     },
     { for n in local.guardrail_names : n => "${local.ssm_prefix}${n}" },
   )
+
+  # kamp.fm's CloudFront origin secret (AOTY-26). kamp-site creates and owns these SecureStrings
+  # (only kamp-site's state holds the value); named here for the api's read grant alone.
+  origin_secret_arns = [
+    for n in ["origin_secret", "origin_secret_previous"] :
+    "arn:aws:ssm:${local.region}:${local.account}:parameter${local.ssm_prefix}${n}"
+  ]
 }

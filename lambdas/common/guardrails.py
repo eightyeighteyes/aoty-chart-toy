@@ -19,6 +19,7 @@ Failure rules:
   active pause.
 """
 
+import hmac
 import json
 import logging
 import random
@@ -113,6 +114,46 @@ class Reader:
       _emit_bad(self.env_name, len(bad))
     self._expires = now + TTL_S + self._jitter(0, JITTER_S)
     return self._settings
+
+
+ORIGIN_SECRETS = ("origin_secret", "origin_secret_previous")
+SECRET_TTL_S = 300
+
+
+class OriginSecrets:
+  """kamp.fm's CloudFront origin secret(s) (AOTY-26), SecureStrings written by kamp-site.
+
+  get() returns the values that exist (none in sandbox, which isn't behind CloudFront).
+  _previous is only there while a rotation is rolling out. On an SSM failure the last good values
+  stay, so a blip neither opens the lock nor locks everyone out. A cold container that can't read
+  them has none, which the api treats as "not from CloudFront": with enforcement on, that's a 403
+  until SSM answers again (fail closed).
+  """
+
+  def __init__(self, ssm, prefix, *, clock=time.monotonic):
+    self.ssm, self.prefix, self._clock = ssm, prefix, clock
+    self._values, self._expires = (), None
+
+  def get(self):
+    now = self._clock()
+    if self._expires is not None and now < self._expires:
+      return self._values
+    try:
+      out = self.ssm.get_parameters(Names=[self.prefix + n for n in ORIGIN_SECRETS], WithDecryption=True)
+      self._values = tuple(p["Value"] for p in out.get("Parameters", []) if p.get("Value"))
+      self._expires = now + SECRET_TTL_S
+    except Exception:
+      log.exception("could not read the origin secret; keeping the last good one")
+      self._expires = now + 5
+    return self._values
+
+
+def origin_ok(header, secrets):
+  """True when the request's x-kamp-origin header matches one of the secrets (constant time)."""
+  if not header or not secrets:
+    return False
+  given = header.encode()
+  return any(hmac.compare_digest(given, s.encode()) for s in secrets)
 
 
 def _emit_bad(env_name, count):

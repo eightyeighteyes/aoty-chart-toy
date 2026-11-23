@@ -112,10 +112,11 @@ class FakeLastfm:
     return self.name
 
 
-def deps(h, ddb=None, sqs=None, fm=None, now=NOW, **settings):
+def deps(h, ddb=None, sqs=None, fm=None, now=NOW, env=None, secrets=(), **settings):
   s = guardrails.Settings(**settings)
-  return h.Deps(ddb=ddb or FakeDDB(), sqs=sqs or FakeSQS(), env=ENV, lastfm_client=fm or FakeLastfm(),
-                clock=lambda: now, settings=lambda: s)  # fmt: skip
+  return h.Deps(ddb=ddb or FakeDDB(), sqs=sqs or FakeSQS(), env={**ENV, **(env or {})},
+                lastfm_client=fm or FakeLastfm(), clock=lambda: now, settings=lambda: s,
+                origin_secrets=lambda: secrets)  # fmt: skip
 
 
 def call(h, d, method, name, action, ctype="application/json", ip="198.51.100.7", headers=None):
@@ -335,6 +336,48 @@ def test_the_guard_table_stores_no_address_or_name(h):
   ((key, item),) = d.ddb.guard.items()
   assert "198.51.100.7" not in key and "alice" not in str(item)
   assert item["expires_at"] == (NOW // 3600 + 2) * 3600
+
+
+# ---- the origin lock ---------------------------------------------------------------------
+
+ENFORCED = {"ENFORCE_ORIGIN": "true"}
+VIA_CF = {"x-kamp-origin": "s3cret"}
+
+
+def test_with_the_lock_on_only_cloudfront_gets_through(h):
+  d = deps(h, env=ENFORCED, secrets=("s3cret",))
+  assert sync(h, d)[0] == 403 and d.sqs.sent == []
+  assert sync(h, d, headers={"x-kamp-origin": "guess"})[0] == 403
+  assert status(h, d)[0] == 403
+  assert sync(h, d, headers={"X-Kamp-Origin": "s3cret"})[0] == 202
+
+
+def test_health_is_never_locked(h):
+  d = deps(h, env=ENFORCED, secrets=("s3cret",))
+  event = {"rawPath": f"{BASE}api/health", "requestContext": {"http": {"method": "GET"}}}
+  assert h.handler(event, None, d)["statusCode"] == 200
+
+
+def test_the_previous_secret_works_during_a_rotation(h):
+  d = deps(h, env=ENFORCED, secrets=("new", "s3cret"))
+  assert sync(h, d, headers=VIA_CF)[0] == 202
+
+
+def test_no_secret_readable_with_the_lock_on_fails_closed(h):
+  assert sync(h, deps(h, env=ENFORCED, secrets=()), headers=VIA_CF)[0] == 403
+
+
+def test_with_the_lock_off_anything_gets_through(h):
+  assert sync(h, deps(h, secrets=("s3cret",)))[0] == 202
+
+
+def test_forwarded_ips_count_only_with_the_secret(h):
+  d = deps(h, secrets=("s3cret",), new_users_per_ip_hour=1)
+  spoof = {"x-forwarded-for": "203.0.113.1"}
+  assert sync(h, d, "alice", ip="130.176.1.1")[0] == 202
+  assert sync(h, d, "bob", ip="130.176.1.1", headers=spoof)[0] == 429  # spoofed: still the edge's
+  real = {**VIA_CF, "x-forwarded-for": "203.0.113.1, 130.176.1.1"}
+  assert sync(h, d, "bob", ip="130.176.1.1", headers=real)[0] == 202  # via CloudFront: the viewer's
 
 
 def test_the_cooldown_is_a_runtime_setting(h):

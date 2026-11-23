@@ -42,6 +42,16 @@ variable "log_retention_days" {
   default = 14
 }
 
+variable "enforce_origin" {
+  description = <<-EOT
+    Refuse user API routes (403) that don't carry kamp.fm's CloudFront origin secret, which kamp-site
+    adds and keeps in SSM (AOTY-26). Turn on only after the header is seen arriving (infra/README.md).
+    Never in sandbox: it isn't behind CloudFront.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "api_throttle_burst" {
   type    = number
   default = 20

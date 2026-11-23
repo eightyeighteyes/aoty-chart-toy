@@ -29,6 +29,11 @@ POST sync, in order:
 The update comes before the send because the sync worker may start before a late update would
 land; its "syncing" would then fail the condition and the cooldown would never be recorded.
 
+The execute-api URL bypasses CloudFront. kamp.fm's CloudFront adds x-kamp-origin with a secret
+that kamp-site keeps in SSM (origin_secret, plus origin_secret_previous during a rotation). With
+ENFORCE_ORIGIN=true (Terraform, per env), user routes without it are 403; health stays open.
+Only a request with the secret has its X-Forwarded-For / CloudFront-Viewer-Address believed.
+
 POST requires content-type application/json (415 otherwise) and no CORS headers are sent, so a
 plain cross-site form can't trigger syncs. Logs name users by a hash, never by username.
 
@@ -54,6 +59,7 @@ from common import dynamo, guardrails, lastfm
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
+ORIGIN_HEADER = "x-kamp-origin"  # added by kamp.fm's CloudFront on the api origins (kamp-site)
 NOT_FOUND_TTL_S = 86400
 LASTFM_TIMEOUT_S = 3
 
@@ -79,10 +85,11 @@ class Deps:
   current guardrails.Settings (cached by guardrails.Reader in the real thing)."""
 
   def __init__(self, *, ddb, sqs, env, lastfm_client=None, lastfm_factory=None, clock=time.time,
-               settings=None):  # fmt: skip
+               settings=None, origin_secrets=None):  # fmt: skip
     self.ddb, self.sqs, self.env, self.clock = ddb, sqs, env, clock
     self._lastfm, self._lastfm_factory = lastfm_client, lastfm_factory
     self.settings = settings or (lambda: guardrails.DEFAULTS)
+    self.origin_secrets = origin_secrets or (lambda: ())
     self.depth_cache = None  # (expires, depth), see _queue_depth
 
   @property
@@ -101,9 +108,11 @@ class Deps:
       key = lastfm.api_key_from_ssm(boto3.client("ssm"), f"{env['SSM_PREFIX']}lastfm_api_key")
       return lastfm.Client(key, max_attempts=1, timeout=LASTFM_TIMEOUT_S)
 
-    reader = guardrails.Reader(boto3.client("ssm"), env["SSM_PREFIX"], env_name=env.get("AOTY_ENV", ""))
+    ssm = boto3.client("ssm")
+    reader = guardrails.Reader(ssm, env["SSM_PREFIX"], env_name=env.get("AOTY_ENV", ""))
+    secrets = guardrails.OriginSecrets(ssm, env["SSM_PREFIX"])
     return cls(ddb=boto3.client("dynamodb"), sqs=boto3.client("sqs"), env=env, lastfm_factory=make_lastfm,
-               settings=reader.get)  # fmt: skip
+               settings=reader.get, origin_secrets=secrets.get)  # fmt: skip
 
 
 _deps = None
@@ -140,10 +149,15 @@ def handler(event, context, deps=None):
     deps = _deps
   headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
   try:
+    # Through kamp.fm's CloudFront, the request carries the origin secret. Health above is exempt,
+    # so a mis-set secret can't fail CD's smoke test.
+    trusted = guardrails.origin_ok(headers.get(ORIGIN_HEADER), deps.origin_secrets())
+    if not trusted and deps.env.get("ENFORCE_ORIGIN") == "true":
+      return _response(403, {"error": "forbidden"})
     if action == "status":
       return get_status(deps, name)
     source_ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
-    return post_sync(deps, name, headers, core.client_ip(headers, source_ip, trusted=False))
+    return post_sync(deps, name, headers, core.client_ip(headers, source_ip, trusted), trusted)
   except Exception:
     log.exception("%s failed for %s", action, _tag(name))
     return _response(503, {"error": "unavailable"})
@@ -162,8 +176,9 @@ def get_status(deps, name):
   return _response(200, core.status(row, now, _cooldown(deps), depth))
 
 
-def post_sync(deps, name, headers, ip):
-  """headers: lowercase names. ip: the viewer, for the per-IP limit on new names."""
+def post_sync(deps, name, headers, ip, trusted=False):
+  """headers: lowercase names. ip: the viewer, for the per-IP limit on new names. trusted: the
+  origin secret matched (logged with the header shape)."""
   ctype = headers.get("content-type", "")
   if not ctype.lower().startswith("application/json"):
     return _response(415, {"error": "send content-type: application/json"})
@@ -173,7 +188,7 @@ def post_sync(deps, name, headers, ip):
   if not row or (row.get("state") == "not_found" and (row.get("expires_at") or 0) <= now):
     if settings.new_users_paused:  # before user.getInfo: a pause spends nothing on Last.fm
       return _response(503, {"error": "paused"})
-    _log_header_shape(headers)
+    _log_header_shape(headers, trusted)
     if not _allow_new_name(deps, name, ip, now, settings.new_users_per_ip_hour):
       log.info("new-name limit reached for %s", _tag(name))
       return _response(429, {"error": "too_many_new"})
@@ -342,12 +357,13 @@ def _allow_new_name(deps, name, ip, now, limit):
   return True
 
 
-def _log_header_shape(headers):
-  """Which client-IP headers arrive, without any address (AOTY-26: confirm before trusting)."""
+def _log_header_shape(headers, trusted):
+  """Which client-IP headers arrive, without any address or secret (AOTY-26: confirm on staging
+  that CloudFront's header arrives before enforcing, and which IP header to rely on)."""
   xff = [p for p in (headers.get("x-forwarded-for") or "").split(",") if p.strip()]
   log.info(
-    "ip headers: viewer_address=%s xff_entries=%d origin_header=%s",
-    "cloudfront-viewer-address" in headers, len(xff), "x-kamp-origin" in headers,
+    "ip headers: viewer_address=%s xff_entries=%d origin_header=%s origin_ok=%s",
+    "cloudfront-viewer-address" in headers, len(xff), ORIGIN_HEADER in headers, trusted,
   )  # fmt: skip
 
 
