@@ -511,3 +511,52 @@ def test_a_failed_or_foreign_display_name_isnt_stored(h):
   env.now += 3600
   env.run(display_name="mallory")
   assert "display_name" not in env.ddb.users["alice"]
+
+
+# ---- status fields (AOTY-22) ------------------------------------------------------------
+
+
+def test_the_finish_is_recorded_before_the_chart_build_starts(h):
+  env = Env(h, make_world(5))
+  seen = []
+  invoke = env.lam.invoke
+
+  def spy(**kw):
+    if kw["FunctionName"] == "chart":
+      seen.append(dict(env.ddb.users["alice"]))
+    invoke(**kw)
+
+  env.lam.invoke = spy
+  env.run()
+  (row,) = seen
+  assert row["state"] == "done" and row["sync_finished_at"] == NOW and row["display_name"] == "AliCe"
+
+
+def test_plays_grow_at_checkpoints_and_start_from_the_store(h):
+  scrobbles = make_world()
+  env = Env(h, scrobbles)
+  checkpoints = []
+  update = env.ddb.update_item
+
+  def spy(**kw):
+    update(**kw)
+    p = env.ddb.users.get("alice", {}).get("progress")
+    if p:
+      checkpoints.append(p["plays"])
+
+  env.ddb.update_item = spy
+  env.run()
+  assert checkpoints[0] == 0  # a new store
+  assert checkpoints == sorted(checkpoints) and len(set(checkpoints)) > 2
+  assert checkpoints[-1] == len(scrobbles)
+  env.now += 3600
+  checkpoints.clear()
+  env.run()
+  assert checkpoints[0] == len(scrobbles)  # a return sync starts from what's stored, not 0
+
+
+def test_a_terminal_stop_records_the_finish(h):
+  env = Env(h, make_world(5))
+  env.run(chart_error=lastfm.PRIVATE)
+  row = env.ddb.users["alice"]
+  assert row["state"] == "private" and row["sync_finished_at"] == NOW
