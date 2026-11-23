@@ -15,10 +15,14 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
                                         chart's generated_at so the page repaints in place);
                                         a second POST within 10 min answers "cooldown". The
                                         intro's errors: nobody* (404), lastfm-down, busy-busy,
-                                        broken (503s), private-* (a known private profile). First
-                                        visits (AOTY-24): newbie* (the cover wall, then charts that
-                                        rank nothing, then fill in) and nothing* (no albums from the
-                                        year). Other names only get a chart if --data has one. With
+                                        broken (503s), private-* (a known private profile),
+                                        capacity* (new users paused), too-many (the per-IP limit),
+                                        throttled (API Gateway's 429). First visits (AOTY-24):
+                                        newbie* (the cover wall, then charts that rank nothing,
+                                        then fill in), nothing* (no albums from the year),
+                                        caller* (a minute in line first, AOTY-26) and crowded*
+                                        (throttled status polls that recover). Other names only
+                                        get a chart if --data has one. With
                                         --proxy, api/ and data/ go to that env instead: kamp.fm
                                         for staging and prod; for sandbox, its execute-api URL
                                         and its site bucket (it has no CloudFront path).
@@ -68,13 +72,20 @@ FAKE_OUTCOMES = {
   "lastfm-down": (503, {"error": "lastfm_unavailable"}),
   "busy-busy": (503, {"error": "busy"}),
   "broken": (503, {"error": "unavailable"}),
+  # The guardrails' refusals (AOTY-26): the api's own, and API Gateway's throttle.
+  "capacity": (503, {"error": "paused"}),
+  "too-many": (429, {"error": "too_many_new"}),
+  "throttled": (429, {"message": "Too Many Requests"}),
 }
 
 
 def fake_outcome(name):
-  """(status, body) for a special preview name, else None. private-* is a known private profile."""
+  """(status, body) for a special preview name, else None. private-* is a known private profile;
+  capacity* is new users paused (on the intro and on a chart page)."""
   if name.startswith("nobody"):
     return FAKE_OUTCOMES["nobody"]
+  if name.startswith("capacity"):
+    return FAKE_OUTCOMES["capacity"]
   if name.startswith("private-"):
     return 200, {"queued": False, "reason": "cooldown", "status": {"stage": "error", "reason": "private"}}
   return FAKE_OUTCOMES.get(name)
@@ -149,7 +160,33 @@ REBUILD_S = 4  # the chart builder's rebuilds while albums are dated
 
 
 def first_visit_kind(name):
-  return next((k for k in ("newbie", "nothing") if name.startswith(k)), None)
+  return next((k for k in ("newbie", "nothing", "caller", "crowded") if name.startswith(k)), None)
+
+
+# caller*   (AOTY-26) a new user who arrives with syncs backed up: CALLER_S seconds in line, the
+#           place counting down from #37 with a measured wait, then the newbie flow.
+# crowded*  the newbie flow, but the first CROWDED_429S status polls are throttled (API Gateway's
+#           429), so the page's back-off can be seen not to give up.
+CALLER_S, CALLER_FROM, CROWDED_429S = 60, 37, 2
+
+
+def _as_newbie(kind, started):
+  """A queue preview continues as newbie*, with its clock shifted past the time in line."""
+  if kind == "caller":
+    return "newbie", started + CALLER_S - FIRST_S["queued"]
+  if kind == "crowded":
+    return "newbie", started
+  return kind, started
+
+
+def fake_caller_status(started, now, name):
+  """In line: a queued row with a ticket, and queue counters that move it up to #1."""
+  e = now - started
+  ticket = 1000
+  row = {"username": name, "state": "queued", "sync_requested_at": int(started), "queue_ticket": ticket}
+  counters = {"started": ticket - CALLER_FROM + int(e * CALLER_FROM / CALLER_S),
+              "first_syncs": 25, "first_sync_seconds": 25 * 90}  # fmt: skip
+  return api_core.status(row, now, COOLDOWN, queue_depth=CALLER_FROM + 3, queue=counters)
 
 
 def fake_wall(n=60):
@@ -189,6 +226,9 @@ def _first_built(e):
 
 def fake_first_status(kind, started, now, name):
   """The status API's answer for a pretend first visit (AOTY-24)."""
+  if kind == "caller" and now - started < CALLER_S:
+    return fake_caller_status(started, now, name)
+  kind, started = _as_newbie(kind, started)
   e, s = now - started, int(started)
   row = {"username": name, "sync_requested_at": s}
   if e < FIRST_S["queued"]:
@@ -218,6 +258,7 @@ def fake_first_status(kind, started, now, name):
 def fake_first_chart(kind, started, now, name):
   """chart.json for a pretend first visit: None (404) before the first build, then a chart
   stamped with its build time that ranks this year's albums found so far."""
+  kind, started = _as_newbie(kind, started)
   built = _first_built(now - started)
   if built is None:
     return None
@@ -294,6 +335,7 @@ def forward(target, method, rest, body=b"", ctype=None):
 
 def handler_for(base, out, data, proxy=None):
   syncs = {}  # username -> when its pretend sync started
+  polls = {}  # username -> status polls so far (crowded*'s throttled ones)
 
   class Handler(http.server.BaseHTTPRequestHandler):
     def proxied(self, method, rest, body=b""):
@@ -333,6 +375,10 @@ def handler_for(base, out, data, proxy=None):
       if action == "status" and method == "GET":
         if name not in syncs:
           return self.send(404, b'{"error":"unknown user"}', "application/json")
+        polls[name] = polls.get(name, 0) + 1
+        if first_visit_kind(name) == "crowded" and polls[name] <= CROWDED_429S:
+          code, body = FAKE_OUTCOMES["throttled"]
+          return self.send(code, json.dumps(body).encode(), "application/json")
         return self.send(200, json.dumps(status_for(name)).encode(), "application/json")
       return self.send(405, b'{"error":"method not allowed"}', "application/json")
 

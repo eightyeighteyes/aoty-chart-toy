@@ -55,6 +55,15 @@ test("API errors map to friendly messages", () => {
   assert.deepEqual(outcome(404, {error: "unknown user"}, "x"), {message: MESSAGES.unknown});
   assert.deepEqual(outcome(503, {error: "lastfm_unavailable"}, "x"), {message: MESSAGES.lastfm});
   assert.deepEqual(outcome(503, {error: "busy"}, "x"), {message: MESSAGES.busy});
+  assert.deepEqual(outcome(503, {error: "paused"}, "x"), {message: MESSAGES.paused});
+  assert.deepEqual(outcome(429, {error: "too_many_new"}, "x"), {message: MESSAGES.tooMany});
+  assert.deepEqual(outcome(429, {message: "Too Many Requests"}, "x"), {message: MESSAGES.throttled});
+  assert.deepEqual(outcome(429, null, "x"), {message: MESSAGES.throttled});
+});
+
+test("a paused sync for a known user still goes to their chart", () => {
+  const st = {stage: "idle", display_name: "AliCe"};
+  assert.deepEqual(outcome(200, {queued: false, reason: "paused", status: st}, "alice"), {go: "AliCe"});
 });
 
 test("anything else is the generic message", () => {

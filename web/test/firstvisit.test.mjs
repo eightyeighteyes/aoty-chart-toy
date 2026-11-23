@@ -4,7 +4,8 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage} = require("../src/firstvisit.js");
+const {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText, queueLines,
+       tabTitle, refusal} = require("../src/firstvisit.js");
 
 const reading = (done, total, scrobbles = 0) => ({stage: "reading", weeks: {done, total}, scrobbles});
 const dating = (checked, total, hits = 0) => ({stage: "dating", albums: {checked, total, hits}});
@@ -87,4 +88,76 @@ test("a first visit still on its way keeps waiting, including a reopen at 0 hits
   assert.equal(firstVisitEnd({stage: "building"}), null);
   assert.equal(firstVisitEnd(dating(0, 640)), null);
   assert.equal(firstVisitEnd({stage: "idle", albums: {checked: null, total: null, hits: null}}), null);
+});
+
+// ---- the queue (AOTY-26) ----------------------------------------------------------------
+
+const queued = (position, wait_s) => ({stage: "queued", queue: wait_s ? {position, wait_s} : {position}});
+
+test("the place in line only goes down", () => {
+  const q = makeQueue();
+  assert.equal(q(queued(37), 0).position, 37);
+  assert.equal(q(queued(40), 1000).position, 37);  // approximate positions can wobble upward
+  assert.equal(q(queued(12), 2000).position, 12);
+  assert.equal(q({stage: "queued"}, 3000).position, 12);  // a poll without a position keeps it
+});
+
+test("no position until the status has one", () => {
+  const q = makeQueue();
+  assert.deepEqual(q({stage: "queued"}, 0), {position: null, live: ""});
+  assert.equal(q(reading(1, 4), 0).position, null);
+});
+
+test("position changes are announced at most once a minute", () => {
+  const q = makeQueue();
+  assert.equal(q(queued(37), 0).live, "you're caller #37 in line");
+  assert.equal(q(queued(30), 30_000).live, "you're caller #37 in line");  // too soon: unchanged
+  assert.equal(q(queued(29), 60_000).live, "you're caller #29 in line");
+  assert.equal(q(queued(29), 200_000).live, "you're caller #29 in line");
+});
+
+test("the request line's words", () => {
+  const lines = queueLines(1234, "https://kamp.fm/toys/aoty/user/AliCe", 0);
+  assert.equal(lines.caller, "you're caller #1,234. the dj is spinning other people's years first.");
+  assert.equal(lines.link, "this page is yours: kamp.fm/toys/aoty/user/AliCe. close the tab and come back. "
+      + "it'll be pressed and waiting.");
+  assert.equal(lines.wait, "");
+  assert.equal(queueLines(3, "x", 700).wait, "about 12 minutes");
+});
+
+test("waits round up and say nothing without an estimate", () => {
+  assert.equal(waitText(undefined), "");
+  assert.equal(waitText(0), "");
+  assert.equal(waitText(30), "about a minute");
+  assert.equal(waitText(61), "about 2 minutes");
+});
+
+test("the tab title shows the place in line, then the reading progress", () => {
+  const base = "alice's albums of the year 2026 · a kamp toy";
+  assert.equal(tabTitle(base, 12, null), `(#12) ${base}`);
+  assert.equal(tabTitle(base, null, 64), `(64%) ${base}`);
+  assert.equal(tabTitle(base, null, 0), `(0%) ${base}`);
+  assert.equal(tabTitle(base, null, null), base);
+});
+
+test("progress reports a forward-only percent while reading", () => {
+  const p = makeProgress();
+  assert.equal(p({stage: "queued"}).percent, null);
+  assert.equal(p(reading(16, 47)).percent, 34);
+  assert.equal(p(reading(2, 40)).percent, 34);  // a retry recounting its weeks doesn't go back
+  assert.equal(p({stage: "building"}).percent, null);
+});
+
+test("capacity refusals have their own words, and anything else is null", () => {
+  assert.equal(refusal(503, {error: "paused"})[0], "we're at capacity right now");
+  assert.equal(refusal(503, {error: "busy"})[0], "lots of charts are pressing right now");
+  assert.equal(refusal(429, {error: "too_many_new"})[0], "that's a lot of new names from here");
+  assert.equal(refusal(429, {message: "Too Many Requests"})[0], "lots of people are pressing charts right now");
+  assert.equal(refusal(503, {error: "unavailable"}), null);
+  assert.equal(refusal(500, null), null);
+  for (const [status, error] of [[503, "paused"], [503, "busy"], [429, "too_many_new"], [429, null]]) {
+    const [title, text] = refusal(status, {error});
+    assert.equal(title, title.toLowerCase());
+    assert.equal(text, text.toLowerCase());
+  }
 });

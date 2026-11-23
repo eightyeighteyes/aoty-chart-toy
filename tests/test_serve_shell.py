@@ -62,3 +62,22 @@ def test_the_returning_preview_still_walks_its_stages(ss, tmp_path):
   seen = [ss.fake_status(T0, T0 + e, chart)["stage"] for e in range(15)]
   assert seen[0] == "queued" and "reading" in seen and "building" in seen and seen[-1] == "idle"
   assert ss.fake_status(T0, T0 + 10, chart)["new_plays"] == 42
+
+
+def test_a_caller_waits_in_line_counting_down_then_goes_on_as_a_newbie(ss):
+  statuses = timeline(ss, "caller", until=ss.CALLER_S + 60)
+  queued = [s for e, s in statuses if e < ss.CALLER_S]
+  assert all(s["stage"] == "queued" for s in queued)
+  places = [s["queue"]["position"] for s in queued]
+  assert places[0] == ss.CALLER_FROM and places[-1] == 1 and places == sorted(places, reverse=True)
+  assert all(s["queue"]["wait_s"] > 0 for s in queued)
+  assert stages(statuses) == ["queued", "reading", "building", "dating", "idle"]
+  assert "queue" not in statuses[-1][1]
+  assert ss.fake_first_chart("caller", T0, T0 + ss.CALLER_S, "caller-1") is None
+
+
+def test_refusal_names_answer_like_the_api(ss):
+  assert ss.fake_outcome("capacity-alice") == (503, {"error": "paused"})
+  assert ss.fake_outcome("too-many") == (429, {"error": "too_many_new"})
+  assert ss.fake_outcome("throttled")[0] == 429
+  assert ss.first_visit_kind("crowded-1") == "crowded"
