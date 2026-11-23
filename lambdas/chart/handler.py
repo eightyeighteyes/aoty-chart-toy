@@ -180,10 +180,12 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   _put_json(deps, deps.env["STORE_BUCKET"], pending_key(username, year), {"keys": pending})
   # The status API (AOTY-22) reads these: new plays = sync's total - chart_plays (the same sum),
   # albums checked = chart_albums - chart_pending, hits = this year's albums found so far.
+  # Once the chart ranks anything, the first-visit cover wall (sync's `preview`, AOTY-24) is
+  # done with, so status polls stop carrying it.
   _update_user(deps, username, {
     "chart_built_at": now, "chart_pending": len(pending), "chart_plays": sum(plays.values()),
     "chart_albums": len(plays), "chart_hits": core.year_hits(plays, items, year),
-  })  # fmt: skip
+  }, remove=("preview",) if chart["rankings"]["track"] else ())  # fmt: skip
   log.info("chart %s: %d albums shown, %d pending", _tag(username), len(chart["albums"]), len(pending))
   return True
 
@@ -287,13 +289,17 @@ def _get_user(deps, username):
   return dynamo.from_item(out.get("Item") or {})
 
 
-def _update_user(deps, username, fields):
+def _update_user(deps, username, fields, remove=()):
   names = {f"#f{i}": k for i, k in enumerate(fields)}
   values = {f":f{i}": v for i, v in enumerate(fields.values())}
+  expr = "SET " + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields)))
+  if remove:
+    names.update({f"#r{i}": k for i, k in enumerate(remove)})
+    expr += " REMOVE " + ", ".join(f"#r{i}" for i in range(len(remove)))
   deps.ddb.update_item(
     TableName=deps.env["USERS_TABLE"],
     Key={"username": {"S": username}},
-    UpdateExpression="SET " + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields))),
+    UpdateExpression=expr,
     ExpressionAttributeNames=names,
     ExpressionAttributeValues=dynamo.to_item(values),
   )

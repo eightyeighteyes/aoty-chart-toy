@@ -8,6 +8,10 @@ batch size 1, with ReportBatchItemFailures. A message body is
 and a direct invoke with that same object (no "Records") runs one sync, for manual testing.
 
 One sync:
+  0. On a first sync, fetch one page of recent tracks and write the users row's `preview`
+     (JSON: {"wall": [...]}, sync_core.wall_from_tracks), the cover wall a first visit shows
+     (AOTY-24). The chart builder removes it once a chart ranks anything. `progress` (weeks,
+     plays and sync_core.running_stats) is written after every week.
   1. Fetch the year's chart weeks that aren't settled yet (all on a first or monthly full
      sync) and overwrite them in s3://$STORE_BUCKET/users/<username>/<year>/weeks.json.gz,
      checkpointing every CHECKPOINT_EVERY weeks. A kill loses at most those weeks; the rerun
@@ -128,9 +132,18 @@ def sync_user(msg, context, deps):
   full = bool(msg.get("full")) or core.wants_full_resync(user.get("last_full_sync_at"), now)
   full_since = core.full_pass_start(store, now) if full else None
   todo = core.weeks_to_fetch(store, core.week_ranges(year, now), full_since)
-  # plays: the store's year total, refreshed at each checkpoint so a status poll sees it grow.
-  progress = {"weeks_done": 0, "weeks_total": len(todo), "plays": sum(core.year_plays(store).values())}
-  _update_user(deps, username, {"state": "syncing", "progress": progress, "sync_started_at": now})
+  # The status a page polls: weeks, plays and the running stats, written after every week (a
+  # small users-row update; the store itself is still checkpointed every CHECKPOINT_EVERY).
+  progress = {"weeks_done": 0, "weeks_total": len(todo), **_progress_stats(store)}
+  started = {"state": "syncing", "progress": progress, "sync_started_at": now}
+  first_page = None
+  if not store.get("last_seen_uts") and not user.get("preview"):
+    # A first sync: one page of recent tracks up front, so the page's cover wall (AOTY-24)
+    # fills while the weeks are read. The cover harvest reuses it as its page 1.
+    first_page = _first_recent_page(deps, username, year)
+    if first_page is not None:
+      started["preview"] = json.dumps({"wall": core.wall_from_tracks(first_page[0])}, separators=(",", ":"))
+  _update_user(deps, username, started)
   log.info("sync %s year=%s full=%s weeks=%d", tag, year, full, len(todo))
 
   try:
@@ -141,10 +154,11 @@ def sync_user(msg, context, deps):
         return "partial"
       rows = core.fetch_range(lambda f, t: deps.lastfm.weekly_album_chart(username, f, t), frm, min(to, now))
       core.merge_week(store, (frm, to), *core.chart_plays(rows), now)
-      progress["weeks_done"] = i
+      progress.update(weeks_done=i, **_progress_stats(store))
       if i % CHECKPOINT_EVERY == 0:
-        progress["plays"] = sum(core.year_plays(store).values())
         _save_progress(deps, username, store, progress)
+      else:
+        _update_user(deps, username, {"progress": progress})
   except lastfm.LastfmError as e:
     terminal = _terminal_state(deps, username, e)
     if terminal is None:
@@ -155,13 +169,13 @@ def sync_user(msg, context, deps):
     return terminal
 
   store.pop("full_started_at", None)  # the full pass is complete
-  _harvest_covers(deps, username, store, year)
+  _harvest_covers(deps, username, store, year, first_page)
   _save_store(deps, username, store)
   queued = _queue_for_mb(deps, store, now)
   if queued:
     _save_store(deps, username, store)  # queued_at / resolved marks
     deps.lambda_.invoke(FunctionName=deps.env["MB_FUNCTION"], InvocationType="Event", Payload=b"{}")
-  progress["plays"] = sum(core.year_plays(store).values())
+  progress.update(_progress_stats(store))
   # Before the chart build starts: it reads display_name, and the status API compares its
   # chart_built_at with sync_finished_at, so the finish must be recorded first.
   done = {"state": "done", "progress": progress, "last_synced_at": now, "sync_finished_at": int(deps.clock()),
@@ -223,14 +237,34 @@ def _terminal_state(deps, username, err):
   return None
 
 
-def _harvest_covers(deps, username, store, year):
-  """Fill covers from getRecentTracks and advance last_seen_uts. Best effort: never fails a sync."""
+def _progress_stats(store):
+  """plays (the store's year total) plus the running stats a first visit shows."""
+  return {"plays": sum(core.year_plays(store).values()), **core.running_stats(store)}
+
+
+def _first_recent_page(deps, username, year):
+  """(tracks, total pages) of a first sync's newest scrobbles, or None. Best effort."""
+  try:
+    return deps.lastfm.recent_tracks(username, core.year_bounds(year)[0], page=1)
+  except lastfm.LastfmError as e:
+    log.warning("cover wall page failed: Last.fm %s", e.code)
+    return None
+
+
+def _harvest_covers(deps, username, store, year, first_page=None):
+  """Fill covers from getRecentTracks and advance last_seen_uts. Best effort: never fails a sync.
+
+  first_page: page 1 already fetched for a first sync's cover wall, so it isn't fetched twice.
+  """
   first = not store.get("last_seen_uts")
   frm = core.year_bounds(year)[0] if first else store["last_seen_uts"] + 1
   max_pages = FIRST_COVER_PAGES if first else DELTA_COVER_PAGES
   try:
     for page in range(1, max_pages + 1):
-      tracks, total = deps.lastfm.recent_tracks(username, frm, page=page)
+      if page == 1 and first and first_page is not None:
+        tracks, total = first_page
+      else:
+        tracks, total = deps.lastfm.recent_tracks(username, frm, page=page)
       newest = core.newest_uts(tracks)
       if newest and newest > (store.get("last_seen_uts") or 0):
         store["last_seen_uts"] = newest

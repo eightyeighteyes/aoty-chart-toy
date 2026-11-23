@@ -16,7 +16,7 @@ import calendar
 from collections import Counter
 
 from common.albumkey import album_key, is_complete, join_key, split_key
-from common.covers import PLACEHOLDER, image_url  # noqa: F401  (shared with the chart builder)
+from common.covers import PLACEHOLDER, cover, image_url  # noqa: F401  (PLACEHOLDER: the chart builder's)
 
 STORE_VERSION = 1
 DAY = 86400
@@ -223,3 +223,45 @@ def apply_covers(store, tracks):
 def missing_top_covers(store, n=HOT_N):
   albums = store["albums"]
   return sum(1 for k in ranked_keys(store)[:n] if not albums.get(k, {}).get("image"))
+
+
+# ---- first-visit preview (AOTY-24) ------------------------------------------------------
+
+WALL_N = 60
+
+
+def wall_from_tracks(tracks, n=WALL_N):
+  """The cover wall a first visit shows while weeks are read: distinct albums, newest first.
+
+  [{"artist", "album", "art", "fallbacks"}], at most n. Keyed by the track artist (all a
+  scrobble carries), so a compilation can appear more than once; that's fine for a wall.
+  Albums with no cover are kept: the page shows the artist-name tile for them.
+  """
+  out, seen = [], set()
+  for t in dated(tracks):
+    artist, album = _text(t.get("artist")), _text(t.get("album"))
+    pair = album_key(artist, album)
+    if not is_complete(pair) or pair in seen:
+      continue
+    seen.add(pair)
+    art, fallbacks = cover(image_url(t.get("image")), "")
+    out.append({"artist": artist, "album": album, "art": art, "fallbacks": fallbacks})
+    if len(out) >= n:
+      break
+  return out
+
+
+def running_stats(store):
+  """{albums, top_artist, top_album, top_plays} over every play read so far, any release year."""
+  plays = year_plays(store)
+  stats = {
+    "albums": sum(1 for n in plays.values() if n > 0),
+    "top_artist": "",
+    "top_album": "",
+    "top_plays": 0,
+  }
+  ranked = ranked_keys(store)
+  if ranked:
+    a = store["albums"].get(ranked[0], {})
+    stats.update(top_artist=a.get("artist", ""), top_album=a.get("album", ""), top_plays=plays[ranked[0]])
+  return stats
