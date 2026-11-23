@@ -379,6 +379,19 @@ not daily totals from paging scrobbles (the story text was revised to match).
   page gets a slim bar: kamp's record mark (inline SVG, from kamp-site's favicon) and "a kamp
   toy" in DM Sans, periwinkle `#7c86e1` (about 5.9:1 on `--bg`), linking to kamp.fm. Periwinkle
   stays in the chrome; the chart keeps its coral/gold poster look.
+- **Two endorsements in the top bar** (user, AOTY-29, 2026-11-23): "a kamp toy" at the start and
+  "inspired by the community of New Bands for Old Heads" (linked to its Substack) at the end.
+  - New Bands for Old Heads is a **primary endorsement**: it belongs in the header, not the footer.
+  - Keep the two visually separate: opposite ends of the bar, no shared colour, nothing joining
+    them (no "×"). New Bands for Old Heads is never periwinkle, and keeps its own casing.
+- **Credits footer** (AOTY-29) on every page, outside `main`: data from last.fm with a "powered by
+  audioscrobbler" text link to Last.fm, release years from musicbrainz, covers from last.fm and
+  the cover art archive, "not affiliated…".
+  - Chart pages add `#footer-user`, the user's Last.fm profile link (ToS 2.7). `state()` hides it.
+  - The footer has no id on purpose: nothing may overwrite it with `textContent`.
+  - Last.fm's API terms (read 2026-11-23): no Last.fm logo or marks without written approval
+    (7.1), and its brand-guidelines page is a 404, so the credit is text. Open questions on
+    artwork, commercial use and publicity are AOTY-44; album links to Last.fm are AOTY-43.
 - Voice: lowercase, short, warm; explain waits plainly; never snarky about taste; no hype.
 - **Product name undecided** (user): the placeholder is `build_shell.NAME` = "albums of the
   year" (header), title "albums of the year · a kamp toy". Avoid "AOTY" alone and "Wrapped".
