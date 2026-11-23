@@ -175,7 +175,9 @@ def post_sync(deps, name, headers):
   previous = {k: row.get(k) for k in ("state", "sync_requested_at")}
   if not _mark_queued(deps, name, now, cooldown, display):
     row = _get_user(deps, name)
-    return _response(200, {"queued": False, "reason": "in_progress", "status": core.status(row, now, cooldown)})
+    return _response(
+      200, {"queued": False, "reason": "in_progress", "status": core.status(row, now, cooldown)}
+    )
   try:
     deps.sqs.send_message(
       QueueUrl=deps.env["SYNC_QUEUE_URL"],
@@ -196,7 +198,9 @@ def post_sync(deps, name, headers):
 
 
 def _get_user(deps, name):
-  out = deps.ddb.get_item(TableName=deps.env["USERS_TABLE"], Key={"username": {"S": name}}, ConsistentRead=True)
+  out = deps.ddb.get_item(
+    TableName=deps.env["USERS_TABLE"], Key={"username": {"S": name}}, ConsistentRead=True
+  )
   return _from_item(out.get("Item") or {})
 
 
@@ -245,7 +249,9 @@ def _mark_queued(deps, name, now, cooldown, display):
     deps.ddb.update_item(
       TableName=deps.env["USERS_TABLE"],
       Key={"username": {"S": name}},
-      UpdateExpression="SET " + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields))) + " REMOVE expires_at",
+      UpdateExpression="SET "
+      + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields)))
+      + " REMOVE expires_at",
       ConditionExpression=condition,
       ExpressionAttributeNames=names,
       ExpressionAttributeValues=values,

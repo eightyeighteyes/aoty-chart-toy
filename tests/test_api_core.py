@@ -1,8 +1,7 @@
 """The API's pure core (lambdas/api/api_core.py): routing, the sync decision, status stages."""
 
-import pytest
-
 import api_core as core
+import pytest
 
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
@@ -54,7 +53,11 @@ def test_a_running_sync_is_in_progress(state):
 
 @pytest.mark.parametrize("state", ["queued", "syncing", "retrying"])
 def test_a_stuck_sync_no_longer_blocks(state):
-  row = {"state": state, "sync_requested_at": NOW - core.STUCK_AFTER, "sync_started_at": NOW - core.STUCK_AFTER}
+  row = {
+    "state": state,
+    "sync_requested_at": NOW - core.STUCK_AFTER,
+    "sync_started_at": NOW - core.STUCK_AFTER,
+  }
   assert core.decide_sync(row, NOW, COOL) == "queue"
 
 
@@ -84,7 +87,10 @@ def done(**kw):
 
 def test_stages_follow_the_pipeline():
   assert core.stage({"state": "queued", "sync_requested_at": NOW - 5}, NOW) == "queued"
-  assert core.stage({"state": "syncing", "sync_requested_at": NOW - 9, "sync_started_at": NOW - 5}, NOW) == "reading"
+  assert (
+    core.stage({"state": "syncing", "sync_requested_at": NOW - 9, "sync_started_at": NOW - 5}, NOW)
+    == "reading"
+  )
   assert core.stage({"state": "retrying", "sync_requested_at": NOW - 90}, NOW) == "reading"
   assert core.stage(done(chart_built_at=NOW - 900), NOW) == "building"  # an older chart than the sync
   assert core.stage(done(chart_built_at=None), NOW) == "building"  # a first chart, still coming
@@ -107,7 +113,11 @@ def test_dating_goes_stale_when_charts_stop_rebuilding():
 
 
 def test_a_stuck_sync_reads_as_idle():
-  row = {"state": "syncing", "sync_requested_at": NOW - core.STUCK_AFTER, "sync_started_at": NOW - core.STUCK_AFTER}
+  row = {
+    "state": "syncing",
+    "sync_requested_at": NOW - core.STUCK_AFTER,
+    "sync_started_at": NOW - core.STUCK_AFTER,
+  }
   assert core.stage(row, NOW) == "idle"
 
 

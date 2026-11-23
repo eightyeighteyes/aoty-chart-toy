@@ -4,9 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 
+import api_core as core
 import pytest
 
-import api_core as core
 from common import dynamo
 
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "api" / "handler.py"
