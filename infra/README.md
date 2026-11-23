@@ -373,7 +373,17 @@ Each run logs one EMF line (namespace `kamp-aoty`, dimension `Environment`): `Mb
 `MbThrottled`, `MbRetryAfterSeconds`, `AlbumsResolved`/`Missed`/`Failed`/`AlreadyResolved`,
 `YearWasted`, `AlbumsPerSecond`, `HotQueueDepth`, `ColdQueueDepth`, `RunSeconds`, and for the
 release index `IndexHits`/`Untrusted`/`Misses`/`Errors`, `IndexAgeHours` (absent with no usable
-index), `Rechecks`, `TracksReused`.
+index), `Rechecks`, `TracksReused`, `LastfmCalls` (its track-count fallback).
+
+The sync worker logs one EMF line per message (AOTY-41): metrics `SyncsDone`, `SyncFailures` and
+`LastfmCalls` (this sync's calls only), and plain fields `outcome` (`done`, `partial`,
+`not_found`, `private`, `invalid`, `failed`), `first_sync`, `weeks` and `seconds`. The api logs
+one per POST sync: metrics `SyncRequests` and `LastfmCalls`, field `outcome` (`queued`,
+`new_user`, or the refusal: `cooldown`, `in_progress`, `paused`, `busy`, `too_many_new`,
+`lastfm_unavailable`, `queue_unavailable`, `unknown_user`, `not_json`, `bad_name`,
+`origin_refused`, `unavailable`). Status polls aren't counted. The outcomes are fields, not
+metrics, because each metric name costs about $0.30/month per env: query them in Logs Insights
+(the dashboard's tables do).
 
 ## Charts (AOTY-21)
 
@@ -393,7 +403,7 @@ aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.j
 ```
 
 Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
-`CoverLookups`.
+`CoverLookups`, `LastfmCalls`.
 
 **Acceptance:** `tools/chart_check.py --env staging --user <name>` compares a deployed chart
 with M0's rules on the same store and albums items, and exits 1 on a difference.
@@ -592,6 +602,26 @@ fix it with `put-parameter --overwrite` or delete it (back to the default). See 
 was dropped). The chart builder runs one at a time, so a crowd of syncs piles up builds. A
 dropped build is redone at the user's next sync, or by hand ("Charts"). If it keeps happening,
 slow the syncs down (`pause_new_users`) until the line clears.
+
+## Dashboard (AOTY-41)
+
+`kamp-aoty-<env>-dashboard` in CloudWatch (`modules/stack/dashboard.tf`), one per env, in six
+rows: the mb lane, the release index, charts, syncs and the queue, the API and guardrails, and
+Last.fm. Throughput is shown against the AOTY-12 baseline (1.5–2.3 albums/s), and the alarm
+thresholds are drawn as lines. Two Logs Insights tables break down sync and sync-request
+outcomes.
+
+- **Free tier:** 3 dashboards of up to 50 metrics each. A precondition fails the plan past 50.
+  Every metric entry counts, hidden ones feeding an expression too. Logs Insights widgets don't
+  count (they bill per GB scanned, only when viewed).
+- **Last.fm calls:** `LastfmCalls` is one metric that every function adds its own run's calls to.
+  It's lumpy: a sync's calls land in the minute it finishes. In sandbox it includes the
+  load-test fake, which also emits `FakeLastfmCalls` per call for `tools/load_test.py`.
+- **API Gateway** is per stage, not per route: per-route metrics need detailed metrics, which
+  are billed, and the routes are only GET, POST and `$default`. Its 5xx include the api's
+  deliberate busy/paused 503s; `ApiServerErrors-prod` (prod only, `api.tf`) leaves them out.
+- The deploy roles may write only their env's one dashboard name, so a branch can't create
+  billed extra dashboards in sandbox.
 
 ## Release index (AOTY-20)
 

@@ -25,6 +25,7 @@ import pytest
 def test_sync_outcome_names_every_answer(status, body, new, expected):
   assert core.sync_outcome(status, body, new) == expected
 
+
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
 COOL = 600

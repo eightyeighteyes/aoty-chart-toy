@@ -61,6 +61,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
 | `lambdas/uptime/` | Hourly uptime check (AOTY-27). `uptime_core.py` is pure (URLs, what counts as up); `handler.py` fetches `kamp.fm<base>`, `api/health` and the SSM `uptime_user`'s chart.json, and emits `UptimeChecks`/`UptimeFailures` even on a crash. |
+| `infra/modules/stack/dashboard.tf`, `lambdas/common/emf.py` | AOTY-41: the per-env CloudWatch dashboard (at most 50 metrics, checked by a precondition) and the shared EMF line builder. |
 | `infra/modules/stack/alarms.tf`, `infra/global/alerts.tf` | AOTY-27: the alarms (one table, `alarms` = full/basic/none per env), and the global `kamp-aoty-alerts` topic and $40 budget. Runbook: `infra/README.md`, "Alarms". |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
@@ -518,7 +519,26 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   compares strings. The env is in the metric name (`ApiServerErrors-prod`), because a filter with a
   default value can't have dimensions.
 - `LastfmErrors` is one EMF line per failed `Client.call`, after retries, leaving out 6 and 17. It is
-  printed only inside a Lambda (`AWS_LAMBDA_FUNCTION_NAME`). AOTY-41 adds `LastfmCalls`.
+  printed only inside a Lambda (`AWS_LAMBDA_FUNCTION_NAME`).
+- **Lambda's `AsyncEventAge` is in milliseconds**, unlike SQS ages (seconds). The `chart-event-age`
+  threshold was first written as 1800, meaning 1.8 s; it's 1,800,000 now (fixed in AOTY-41).
+
+## Dashboard and metrics (AOTY-41, 2026-11-23)
+
+- **One dashboard per env**, `kamp-aoty-<env>-dashboard` (`infra/modules/stack/dashboard.tf`). A
+  precondition keeps it at **50 metrics or fewer**: the free tier is 3 dashboards of 50 metrics
+  each. Hidden metrics that feed an expression count; expressions and Logs Insights widgets don't.
+- **Every metric name costs about $0.30/month per env.** So the sync and api *outcomes* are plain
+  EMF fields, not metrics, and the dashboard's Logs Insights tables break them down. New code
+  emits through `common/emf.py`.
+- **`LastfmCalls` is one metric that every function adds its own run's calls to.** `Client.calls`
+  is a running total for the warm container, so always take a difference (snapshot before, subtract
+  after, in a `finally`). The load-test fake emits `FakeLastfmCalls` per call, so the two never
+  count the same call.
+- The api counts a POST sync's outcome once, in the dispatcher, from the response
+  (`api_core.sync_outcome`), so every return path is covered. Status polls aren't counted.
+- API Gateway graphs are per stage. Per-route metrics would need detailed metrics, which are billed.
+- `IndexDumpAgeHours` is left out, not 0, when the dump's age is unknown (0 read as "fresh").
 - **The budget is account-wide**, because kamp-site shares the account and a cost allocation tag
   only counts from the day it was activated.
 - Sync continuations (`partial`) count toward `maxReceiveCount` 5, so a sync that needs more than
