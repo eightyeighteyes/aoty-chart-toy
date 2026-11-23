@@ -250,7 +250,11 @@ for fn in api sync mb chart; do aws lambda update-function-code --function-name 
 
 The **first apply must be the admin's**. The sandbox role is denied the calls that create
 bucket policies and public access blocks (it could otherwise make them public), so a branch can
-only deploy once those exist. A branch that changes them fails its apply.
+only deploy once those exist. A branch that changes them fails its apply. The same goes for any
+change to the HTTP API **stage** (throttles, route settings): API Gateway re-checks access logging
+on every `UpdateStage`, which needs `logs:UpdateLogDelivery`, and sandbox denies it. Such a branch's
+CI apply fails with "Insufficient permissions to enable logging"; apply it from a laptop as the
+admin, then rerun the deploy (AOTY-26 hit this). Staging and prod roles allow it.
 
 **Testing a sync:** send the message from "Running a sync by hand" below to
 `kamp-aoty-sandbox-sync.fifo`. Then check `users` in `kamp-aoty-sandbox-users`, and
