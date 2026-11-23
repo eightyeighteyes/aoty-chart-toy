@@ -20,6 +20,27 @@ resource "aws_dynamodb_table" "users" {
   deletion_protection_enabled = var.environment == "prod"
 }
 
+# Guardrail counters (AOTY-26), apart from users because the chart builder Scans that table:
+#   ip#<hash>#<hour>  {names: string set of hashed usernames, expires_at}  the per-IP new-name limit
+#   queue             {joined, started}  queue tickets handed out and used up (queue position), and
+#                     {first_syncs, first_sync_seconds}  measured first-sync time (estimated wait)
+# Only the ip# items set expires_at. Nothing here is precious: an empty table just restarts counts.
+resource "aws_dynamodb_table" "guard" {
+  name         = "${local.prefix}-guard"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+}
+
 # The shared release-year cache. Keyed like M0's identity (aoty.py): a match needs title AND
 # artist credit, so "1989" by two artists can't collide, and one Query returns an artist's
 # albums. artist_key = norm(album artist); title_key = norm(base_title(album)), so edition

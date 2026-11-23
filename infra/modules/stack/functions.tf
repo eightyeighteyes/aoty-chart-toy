@@ -7,8 +7,11 @@
 
 locals {
   functions = {
-    api  = { timeout = 30, memory = 256, reserved = null }
-    sync = { timeout = 900, memory = 512, reserved = null }
+    api = { timeout = 30, memory = 256, reserved = null }
+    # One more than the event source mapping's maximum_concurrency (AOTY-26): equal values let a
+    # stray direct invoke throttle the mapping, whose throttled messages come back only after the
+    # 90-min visibility timeout and can reach the DLQ with the users row never marked error.
+    sync = { timeout = 900, memory = 512, reserved = var.sync_concurrency + 1 }
     # 512: the release index's shard cache (AOTY-20) holds up to 128 parsed shards.
     mb = { timeout = 900, memory = 512, reserved = 1 }
     # Chart builder (AOTY-21): reserved 1 runs builds one at a time, so a build that read older
@@ -22,6 +25,7 @@ locals {
     SSM_PREFIX     = local.ssm_prefix
     USERS_TABLE    = aws_dynamodb_table.users.name
     ALBUMS_TABLE   = aws_dynamodb_table.albums.name
+    GUARD_TABLE    = aws_dynamodb_table.guard.name
     SITE_BUCKET    = aws_s3_bucket.site.bucket
     STORE_BUCKET   = aws_s3_bucket.store.bucket
     SYNC_QUEUE_URL = aws_sqs_queue.main["sync"].url
@@ -30,7 +34,9 @@ locals {
     MB_FUNCTION    = "${local.prefix}-mb"
     CHART_FUNCTION = "${local.prefix}-chart"
     SITE_PREFIX    = local.s3_key_prefix
-    SYNC_COOLDOWN  = tostring(var.sync_cooldown_seconds)
+    ENFORCE_ORIGIN = tostring(var.enforce_origin)
+    # For the status API's estimated wait (AOTY-26): syncs that run side by side.
+    SYNC_CONCURRENCY = tostring(var.sync_concurrency)
   }
 
   queue_consume = [
@@ -50,8 +56,23 @@ locals {
         actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         resources = [aws_dynamodb_table.users.arn]
       },
+      {
+        # The per-IP new-name limit, queue tickets and the measured wait (AOTY-26).
+        actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+        resources = [aws_dynamodb_table.guard.arn]
+      },
+      {
+        # kamp.fm's origin secret (AOTY-26); decrypting it is DecryptParams below.
+        actions   = ["ssm:GetParameters"]
+        resources = local.origin_secret_arns
+      },
     ]
     sync = [
+      {
+        # Using up queue tickets and recording first-sync times (AOTY-26).
+        actions   = ["dynamodb:UpdateItem"]
+        resources = [aws_dynamodb_table.guard.arn]
+      },
       { actions = local.queue_consume, resources = [aws_sqs_queue.main["sync"].arn] },
       {
         actions   = ["sqs:SendMessage"]
@@ -257,9 +278,12 @@ resource "aws_lambda_function_event_invoke_config" "chart" {
 }
 
 # The sync queue drives the sync worker (AOTY-18). One message per invocation; the handler
-# reports failures per item. maximum_concurrency (2 is the floor AWS allows) caps how many
-# syncs run at once, and with them the aggregate Last.fm rate (0.5 s/call each).
+# reports failures per item. maximum_concurrency (var.sync_concurrency; 2 is the floor AWS
+# allows) caps how many syncs run at once, and with them the aggregate Last.fm rate from syncs
+# (0.5 s/call each) and the sync worker's spend (AOTY-26).
 # Until CD deploys real code, the placeholder raises on SQS events, so no message is lost.
+# The hard stop for syncs is disabling this mapping by hand (infra/README.md), so Terraform
+# ignores `enabled`: an apply mustn't restart syncs mid-incident.
 resource "aws_lambda_event_source_mapping" "sync" {
   event_source_arn        = aws_sqs_queue.main["sync"].arn
   function_name           = aws_lambda_function.fn["sync"].arn
@@ -267,6 +291,10 @@ resource "aws_lambda_event_source_mapping" "sync" {
   function_response_types = ["ReportBatchItemFailures"]
 
   scaling_config {
-    maximum_concurrency = 2
+    maximum_concurrency = var.sync_concurrency
+  }
+
+  lifecycle {
+    ignore_changes = [enabled]
   }
 }

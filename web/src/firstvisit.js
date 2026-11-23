@@ -86,8 +86,80 @@
       } else if (name === "dating" && best) {
         detail = `${num(best.done)} of ${num(best.total)} albums`;
       }
-      return {live, detail};
+      // Weeks read, as a whole percent, for the tab title (forward-only, like the rest).
+      const percent = name === "reading" && best ? Math.floor((best.done / best.total) * 100) : null;
+      return {live, detail, percent};
     };
+  }
+
+  // ---- the queue (AOTY-26) ------------------------------------------------------------------
+  //
+  // A new user who arrives while syncs are backed up waits in line: the status carries
+  // queue.position (and queue.wait_s once there's a measured average) while the stage is queued.
+
+  const ANNOUNCE_EVERY_MS = 60 * 1000;
+
+  // The place in line as the page shows it: only ever going down (positions are approximate,
+  // since the queue doesn't strictly keep order between users), and announced to screen readers
+  // at most once a minute. update(s, nowMs) returns {position, live}: position is the number to
+  // show (null when the status has none); live is the polite live region's text, which changes
+  // at most once a minute.
+  function makeQueue() {
+    let best = null, live = "", announcedAt = -Infinity, announced = null;
+    return function update(s, nowMs) {
+      const p = s && s.stage === "queued" && s.queue && Number(s.queue.position);
+      if (p > 0) best = best === null ? p : Math.min(best, p);
+      if (best !== null && best !== announced && nowMs - announcedAt >= ANNOUNCE_EVERY_MS) {
+        announced = best;
+        announcedAt = nowMs;
+        live = `you're caller #${num(best)} in line`;
+      }
+      return {position: best, live};
+    };
+  }
+
+  // "about 12 minutes" for a wait in seconds, or "" when there's no estimate.
+  function waitText(seconds) {
+    if (!(seconds > 0)) return "";
+    const m = Math.ceil(seconds / 60);
+    return m <= 1 ? "about a minute" : `about ${num(m)} minutes`;
+  }
+
+  // The request line's words for a place in line. url is the page's own address, shown without
+  // its scheme (kamp.fm/toys/aoty/user/alice).
+  function queueLines(position, url, waitSeconds) {
+    return {
+      caller: `you're caller #${num(position)}. the dj is spinning other people's years first.`,
+      link: `this page is yours: ${String(url).replace(/^https?:\/\//, "")}. close the tab and come back. `
+          + "it'll be pressed and waiting.",
+      wait: waitText(waitSeconds),
+    };
+  }
+
+  // The tab's title: "(#12) …" while in line, "(64%) …" while the year is read, else plain.
+  function tabTitle(base, position, percent) {
+    if (position) return `(#${position}) ${base}`;
+    if (percent !== null && percent !== undefined) return `(${percent}%) ${base}`;
+    return base;
+  }
+
+  // [title, text] for a sync request the API turned away for capacity, or null. status is the
+  // HTTP status; body its JSON (null if none).
+  function refusal(status, body) {
+    const error = body && body.error;
+    if (status === 503 && error === "paused") {
+      return ["we're at capacity right now", "come back soon. charts already pressed still work."];
+    }
+    if (status === 503 && error === "busy") {
+      return ["lots of charts are pressing right now", "try again in a few minutes."];
+    }
+    if (status === 429 && error === "too_many_new") {
+      return ["that's a lot of new names from here", "try again in an hour."];
+    }
+    if (status === 429) {
+      return ["lots of people are pressing charts right now", "try again in a minute."];
+    }
+    return null;
   }
 
   // "albums found so far: 1,204 · most played: LP by Band (61 plays)", or "".
@@ -122,7 +194,8 @@
             "this one's taking longer than usual. come back in a few minutes: your chart keeps pressing while you're away."];
   }
 
-  const api = {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage};
+  const api = {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText,
+               queueLines, tabTitle, refusal};
   root.aotyFirstVisit = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

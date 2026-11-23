@@ -40,6 +40,35 @@ def test_routed_names_still_need_validation():
   assert not core.USERNAME_RE.match(name)
 
 
+# ---- the client IP ------------------------------------------------------------------------
+
+EDGE = "130.176.1.1"
+
+
+def test_an_untrusted_request_uses_the_source_ip():
+  headers = {"x-forwarded-for": "6.6.6.6", "cloudfront-viewer-address": "6.6.6.6:1234"}
+  assert core.client_ip(headers, "198.51.100.7", trusted=False) == "198.51.100.7"
+
+
+def test_a_trusted_request_prefers_the_viewer_address():
+  assert core.client_ip({"cloudfront-viewer-address": "198.51.100.7:46532"}, EDGE, True) == "198.51.100.7"
+  v6 = {"cloudfront-viewer-address": "2001:db8::1:46532"}
+  assert core.client_ip(v6, EDGE, True) == "2001:db8::1"
+
+
+@pytest.mark.parametrize("xff", ["198.51.100.7", f"198.51.100.7, {EDGE}", f"6.6.6.6, 198.51.100.7, {EDGE}"])
+def test_a_trusted_request_takes_the_last_forwarded_entry_before_the_edge(xff):
+  assert core.client_ip({"x-forwarded-for": xff}, EDGE, True) == "198.51.100.7"
+
+
+def test_ipv6_is_limited_per_64_and_keys_hide_the_address():
+  a = core.ip_limit_key("2001:db8:1:2:aaaa::1", 7)
+  assert a == core.ip_limit_key("2001:db8:1:2:bbbb::9", 7) != core.ip_limit_key("2001:db8:1:3::1", 7)
+  assert core.ip_limit_key("198.51.100.7", 7) != core.ip_limit_key("198.51.100.8", 7)
+  assert "2001" not in a and a.endswith("#7")
+  assert core.ip_limit_key("not-an-ip", 7).startswith("ip#")
+
+
 # ---- the sync decision ----------------------------------------------------------------
 
 
@@ -61,6 +90,25 @@ def test_a_stuck_sync_no_longer_blocks(state):
     "sync_started_at": NOW - core.STUCK_AFTER,
   }
   assert core.decide_sync(row, NOW, COOL) == "queue"
+
+
+def test_a_long_queue_keeps_a_queued_row_alive():
+  old = {"state": "queued", "sync_requested_at": NOW - 4 * 3600}
+  assert core.decide_sync(old, NOW, COOL, queue_depth=200) == "in_progress"
+  assert core.stage(old, NOW, queue_depth=200) == "queued"
+  # Once the queue drains, a mark that old is a crash between update and send: free it.
+  assert core.decide_sync(old, NOW, COOL, queue_depth=0) == "queue"
+  assert core.stage(old, NOW, queue_depth=0) == "idle"
+
+
+@pytest.mark.parametrize("state", ["syncing", "retrying"])
+def test_a_long_queue_doesnt_revive_a_dead_sync(state):
+  row = {
+    "state": state,
+    "sync_requested_at": NOW - core.STUCK_AFTER,
+    "sync_started_at": NOW - core.STUCK_AFTER,
+  }
+  assert core.decide_sync(row, NOW, COOL, queue_depth=200) == "queue"
 
 
 def test_a_long_sync_that_started_recently_is_still_running():
@@ -155,10 +203,27 @@ def test_status_body():
 
 
 def test_status_extras_for_queued_and_error():
-  queued = core.status({"state": "queued", "sync_requested_at": NOW - 5}, NOW, COOL, queue_depth=7)
-  assert queued["stage"] == "queued" and queued["queue_ahead_approx"] == 7
-  failed = core.status({"state": "private", "sync_finished_at": NOW}, NOW, COOL, queue_depth=7)
-  assert failed["reason"] == "private" and "queue_ahead_approx" not in failed
+  row = {"state": "queued", "sync_requested_at": NOW - 5, "queue_ticket": 50}
+  queued = core.status(row, NOW, COOL, queue_depth=70, queue={"started": 40})
+  assert queued["stage"] == "queued" and queued["queue"] == {"position": 10}
+  assert "queue" not in core.status(row, NOW, COOL, queue_depth=70)  # counters unreadable
+  assert "queue" not in core.status({**row, "queue_ticket": None}, NOW, COOL, 70, {"started": 40})
+  failed = core.status({"state": "private", "sync_finished_at": NOW, "queue_ticket": 50}, NOW, COOL, 7, {})
+  assert failed["reason"] == "private" and "queue" not in failed
+
+
+def test_the_place_in_line_stays_within_the_queue():
+  assert core.queue_place(50, 3, {"started": 10}, 2) == {"position": 3}  # FIFO groups jumped ahead
+  assert core.queue_place(50, 90, {"started": 60}, 2) == {"position": 1}  # later tickets started first
+  assert core.queue_place(5, None, {}, 2) == {"position": 1}
+
+
+def test_a_wait_is_estimated_only_from_enough_first_syncs():
+  few = {"started": 0, "first_syncs": core.WAIT_MIN_SAMPLES - 1, "first_sync_seconds": 1000}
+  assert "wait_s" not in core.queue_place(10, 99, few, 2)
+  enough = {"started": 0, "first_syncs": 20, "first_sync_seconds": 20 * 60}
+  assert core.queue_place(10, 99, enough, 2)["wait_s"] == 5 * 60  # 10 in line, 2 at a time, 60 s each
+  assert core.queue_place(1, 99, enough, 2)["wait_s"] == 60  # next up: just its own sync
 
 
 def test_status_without_chart_fields():

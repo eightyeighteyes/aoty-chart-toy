@@ -42,19 +42,50 @@ variable "log_retention_days" {
   default = 14
 }
 
+variable "enforce_origin" {
+  description = <<-EOT
+    Refuse user API routes (403) that don't carry kamp.fm's CloudFront origin secret, which kamp-site
+    adds and keeps in SSM (AOTY-26). Turn on only after the header is seen arriving (infra/README.md).
+    Never in sandbox: it isn't behind CloudFront.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "sync_concurrency" {
+  description = <<-EOT
+    Syncs that run at once (AOTY-26): the sync mapping's maximum_concurrency. It caps the sync
+    worker's spend and its aggregate Last.fm rate: each worker paces 0.5 s/call, so 2 workers make
+    about 4 req/s against Last.fm's ~5 per IP (AOTY-11). AWS's floor is 2.
+  EOT
+  type        = number
+  default     = 2
+  validation {
+    condition     = var.sync_concurrency >= 2 && var.sync_concurrency <= 10
+    error_message = "sync_concurrency must be 2-10 (2 is the SQS mapping's minimum; past ~2 Last.fm may rate-limit)."
+  }
+}
+
 variable "api_throttle_burst" {
-  type    = number
-  default = 20
+  description = "Burst across the HTTP API's default route (health, and anything not below)"
+  type        = number
+  default     = 20
 }
 
 variable "api_throttle_rate" {
-  description = "Requests per second across the whole HTTP API"
+  description = "Requests per second across the HTTP API's default route"
   type        = number
   default     = 10
 }
 
-variable "sync_cooldown_seconds" {
-  description = "A page visit queues a user's sync at most this often (AOTY-22)"
-  type        = number
-  default     = 600
+variable "api_post_throttle" {
+  description = "POST routes (sync requests): {burst, rate}. Each new user may cost Last.fm calls."
+  type        = object({ burst = number, rate = number })
+  default     = { burst = 5, rate = 2 }
+}
+
+variable "api_get_throttle" {
+  description = "GET routes (status polling, AOTY-26): {burst, rate}. A queued crowd polls every ~20 s."
+  type        = object({ burst = number, rate = number })
+  default     = { burst = 50, rate = 25 }
 }

@@ -16,6 +16,9 @@
     private: "that profile is private on last.fm, so there's nothing for us to read. make it public and try again.",
     lastfm: "last.fm isn't answering right now. try again in a minute.",
     busy: "lots of charts are pressing right now. try again in a few minutes.",
+    paused: "we're at capacity right now. come back soon: charts already pressed still work.",
+    tooMany: "that's a lot of new names from here. try again in an hour.",
+    throttled: "lots of people are pressing charts right now. try again in a minute.",
     generic: "something went wrong on our side. try again in a minute.",
   };
 
@@ -51,6 +54,10 @@
     if (status === 404) return {message: MESSAGES.unknown};
     if (status === 503 && body && body.error === "lastfm_unavailable") return {message: MESSAGES.lastfm};
     if (status === 503 && body && body.error === "busy") return {message: MESSAGES.busy};
+    if (status === 503 && body && body.error === "paused") return {message: MESSAGES.paused};
+    if (status === 429 && body && body.error === "too_many_new") return {message: MESSAGES.tooMany};
+    // API Gateway's own throttle answers 429 with {"message": "Too Many Requests"}.
+    if (status === 429) return {message: MESSAGES.throttled};
     return {message: MESSAGES.generic};
   }
 

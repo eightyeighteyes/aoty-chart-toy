@@ -34,6 +34,7 @@ flowchart LR
     siteb[("site bucket<br/>shell, data/users/*/chart.json")]
     storeb[("store bucket<br/>users/*/YEAR/weeks.json.gz")]
     users[("users table<br/>sync state, progress")]
+    guard[("guard table<br/>per-IP counts, queue tickets")]
     albums[("albums table<br/>year, type, tracks per album")]
     syncq[["sync queue (FIFO,<br/>group = username)"]]
     sync["sync Lambda"]
@@ -42,7 +43,7 @@ flowchart LR
     mb["mb Lambda<br/>reserved concurrency 1"]
     sched["Scheduler: hourly"]
     isched["Scheduler: daily 06:15 UTC"]
-    ssm[("SSM: Last.fm key,<br/>MB contact")]
+    ssm[("SSM: Last.fm key, MB contact,<br/>guardrail knobs, origin secret")]
     chart["chart Lambda<br/>reserved concurrency 1"]
     index[("store bucket<br/>index/current.json,<br/>index/DUMP/*.json.gz")]
     code[("store bucket<br/>code/index.zip")]
@@ -55,9 +56,11 @@ flowchart LR
 
   visitor --> cf
   cf -- "/toys/aoty/*" --> siteb
-  cf -- "/toys/aoty/api/*" --> apigw --> api
+  cf -- "/toys/aoty/api/*<br/>+ x-kamp-origin" --> apigw --> api
   api -- "queue a sync" --> syncq
   api -- "cooldown mark,<br/>status read" --> users
+  api -- "per-IP limit,<br/>take a ticket" --> guard
+  sync -- "use up the ticket,<br/>first-sync time" --> guard
   api -- "new name?" --> lastfm
   syncq --> sync
   sync --> lastfm
@@ -97,6 +100,12 @@ flowchart LR
 The index build runs in the default VPC's public subnets with a public IP, with no NAT
 gateway. CD uploads its code to `code/index.zip`, as it updates the Lambdas' code.
 
+Guardrails (AOTY-26, `infra/README.md` "Guardrails"): the sync mapping's `maximum_concurrency`
+(`sync_concurrency`, 2) caps sync spend and its Last.fm rate; SSM knobs pause new users or all
+syncs and set the cooldown and limits without a deploy; the HTTP API throttles GET and POST
+separately; and with `enforce_origin` the api refuses user routes that lack kamp.fm's
+`x-kamp-origin` secret, so the `execute-api` URL can't bypass CloudFront.
+
 ## Visitor flow
 
 A visit, as built (AOTY-21, 22, 24). `GET /api/health` reports the env and the deployed commit's
@@ -110,6 +119,11 @@ line that only moves forward. The first chart that ranks something paints with i
 animation. It ends with a message when every album is checked and none is from the year, or
 when the chart stops rebuilding or 10 minutes pass. `wall` is the user's public recent listening,
 the same as their Last.fm profile shows, and goes once a chart ranks anything.
+
+When syncs are backed up (AOTY-26), a new user's first visit shows the request line: "you're
+caller #N" from the status's `queue.position` (only ever going down), the page's address with a
+copy button, and `queue.wait_s` once 20 first syncs are timed. The tab title shows the place,
+then the reading percent. The 10-minute watch starts only once the sync leaves the queue.
 
 ```mermaid
 sequenceDiagram
@@ -132,20 +146,22 @@ sequenceDiagram
     S3-->>V: 404, or a chart that ranks nothing: the first-visit view (AOTY-24)
   end
   V->>API: POST api/users/alice/sync (JSON only)
-  API->>U: a sync running, or one requested under SYNC_COOLDOWN (10 min) ago?
+  API->>U: a sync running, or one requested within sync_cooldown_seconds (10 min)?
   alt yes
     API-->>V: 200, nothing queued, current status
   else a new name
+    API->>API: paused? 503 paused. Past the IP's new names this hour? 429 too_many_new
     API->>API: user.getInfo (3 s); unknown: 404 + a not_found row with a 1-day TTL
   else
-    API->>U: conditional: state=queued, sync_requested_at=now
+    API->>API: pause_syncs: 200 paused. A new user over max_queue_for_new: 503 busy
+    API->>U: conditional: state=queued, sync_requested_at=now, queue_ticket
     API->>Q: {"username": "alice"} (a failed send undoes the mark: 503)
     API-->>V: 202, queued
   end
-  loop every 2 s backing off to 5 s, paused while hidden, until idle
+  loop every 2 s backing off to 5 s (20-25 s in line), paused while hidden, until idle
     V->>API: GET api/users/alice/status
     API->>U: state, progress, preview, sync_finished_at, chart_*
-    API-->>V: stage (queued, reading, building, dating, idle, error), weeks, new plays, wall, so_far
+    API-->>V: stage (queued, reading, building, dating, idle, error), weeks, new plays, wall, so_far, queue
   end
   V->>CF: GET chart.json, once the chart builder has written a newer one
   CF-->>V: repaint in place (scroll, view and ranking kept)
@@ -259,7 +275,8 @@ and the next day's run starts over.
 | store bucket `index/current.json`, `index/DUMP/*.json.gz` | index build | mb lane |
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
-| `users` table | api (`queued`, `sync_requested_at`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything) | api (status, cooldown), chart builder |
+| `guard` table | api (`ip#` new-name sets, the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
+| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything) | api (status, cooldown), chart builder |
 | site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |

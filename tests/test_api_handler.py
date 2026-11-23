@@ -7,12 +7,12 @@ from pathlib import Path
 import api_core as core
 import pytest
 
-from common import dynamo
+from common import dynamo, guardrails
 
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "api" / "handler.py"
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
-ENV = {"USERS_TABLE": "users", "SYNC_QUEUE_URL": "q/sync", "SYNC_COOLDOWN": "600"}
+ENV = {"USERS_TABLE": "users", "GUARD_TABLE": "guard", "SYNC_QUEUE_URL": "q/sync"}
 
 
 @pytest.fixture
@@ -33,8 +33,29 @@ class FakeDDB:
 
   def __init__(self, race=None):
     self.rows, self.race = {}, race  # race(rows) runs just before a conditional update
+    self.guard = {}  # the guard table: id -> item (plain values)
+
+  def _guard_update(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                    ConditionExpression=None, **kw):  # fmt: skip
+    """The api's guard updates: the per-IP name set, and the queue counters."""
+    item = self.guard.setdefault(Key["id"]["S"], {})
+    v = ExpressionAttributeValues
+    if Key["id"]["S"] == "queue":  # ADD #x :one
+      field = ExpressionAttributeNames[UpdateExpression.split()[1]]
+      item[field] = item.get(field, 0) + 1
+      return {"Attributes": {field: {"N": str(item[field])}}}
+    assert UpdateExpression == "ADD #n :h SET #e = if_not_exists(#e, :exp)"
+    names, tag, limit = item.get("names", set()), v[":t"]["S"], int(v[":lim"]["N"])
+    if names and len(names) >= limit and tag not in names:
+      raise ConditionFailed()
+    item["names"] = names | set(v[":h"]["SS"])
+    item.setdefault("expires_at", int(v[":exp"]["N"]))
+    return {}
 
   def get_item(self, TableName, Key, **kw):
+    if TableName == "guard":
+      item = self.guard.get(Key["id"]["S"])
+      return {"Item": {k: {"N": str(v)} for k, v in item.items()}} if item else {}
     row = self.rows.get(Key["username"]["S"])
     if row is None:
       return {}
@@ -44,7 +65,10 @@ class FakeDDB:
     return {"Item": item}
 
   def update_item(self, TableName, Key, UpdateExpression, ExpressionAttributeNames=None,
-                  ExpressionAttributeValues=None, ConditionExpression=None):  # fmt: skip
+                  ExpressionAttributeValues=None, ConditionExpression=None, **kw):  # fmt: skip
+    if TableName == "guard":
+      return self._guard_update(Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                                ConditionExpression)  # fmt: skip
     name = Key["username"]["S"]
     names = ExpressionAttributeNames or {}
     values = dynamo.from_item(ExpressionAttributeValues or {})
@@ -95,14 +119,17 @@ class FakeLastfm:
     return self.name
 
 
-def deps(h, ddb=None, sqs=None, fm=None, now=NOW):
-  return h.Deps(ddb=ddb or FakeDDB(), sqs=sqs or FakeSQS(), env=ENV, lastfm_client=fm or FakeLastfm(),
-                clock=lambda: now)  # fmt: skip
+def deps(h, ddb=None, sqs=None, fm=None, now=NOW, env=None, secrets=(), **settings):
+  s = guardrails.Settings(**settings)
+  return h.Deps(ddb=ddb or FakeDDB(), sqs=sqs or FakeSQS(), env={**ENV, **(env or {})},
+                lastfm_client=fm or FakeLastfm(), clock=lambda: now, settings=lambda: s,
+                origin_secrets=lambda: secrets)  # fmt: skip
 
 
-def call(h, d, method, name, action, ctype="application/json"):
-  event = {"rawPath": f"{BASE}api/users/{name}/{action}", "requestContext": {"http": {"method": method}},
-           "headers": {"content-type": ctype} if ctype else {}}  # fmt: skip
+def call(h, d, method, name, action, ctype="application/json", ip="198.51.100.7", headers=None):
+  event = {"rawPath": f"{BASE}api/users/{name}/{action}",
+           "requestContext": {"http": {"method": method, "sourceIp": ip}},
+           "headers": {**({"content-type": ctype} if ctype else {}), **(headers or {})}}  # fmt: skip
   out = h.handler(event, None, d)
   assert out["headers"]["cache-control"] == "no-store"
   return out["statusCode"], json.loads(out["body"])
@@ -157,6 +184,32 @@ def test_a_running_sync_is_in_progress(h):
   assert code == 200 and body["reason"] == "in_progress" and body["status"]["stage"] == "reading"
 
 
+def test_an_hour_in_a_long_queue_is_still_queued_not_requeued(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 3600}
+  d = deps(h, ddb, FakeSQS(depth=120))
+  code, body = sync(h, d)
+  assert code == 200 and body["reason"] == "in_progress" and d.sqs.sent == []
+  assert body["status"]["stage"] == "queued"
+  assert status(h, d)[1]["stage"] == "queued"
+
+
+def test_the_queue_depth_is_cached_briefly(h):
+  class Counting(FakeSQS):
+    calls = 0
+
+    def get_queue_attributes(self, **kw):
+      Counting.calls += 1
+      return super().get_queue_attributes(**kw)
+
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5}
+  d = deps(h, ddb, Counting(depth=3))
+  status(h, d)
+  status(h, d)
+  assert Counting.calls == 1
+
+
 def test_losing_the_race_answers_in_progress_and_sends_nothing(h):
   def other_request(rows):
     rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW}
@@ -209,9 +262,137 @@ def test_a_foreign_casing_from_lastfm_isnt_stored(h):
 
 
 def test_new_users_wait_when_the_queue_is_busy(h):
-  d = deps(h, sqs=FakeSQS(depth=h.MAX_QUEUE_FOR_NEW + 1))
+  d = deps(h, sqs=FakeSQS(depth=51), max_queue_for_new=50)
   code, body = sync(h, d)
   assert code == 503 and body["error"] == "busy" and d.sqs.sent == []
+  assert sync(h, deps(h, sqs=FakeSQS(depth=51)))[0] == 202  # the default limit is higher
+
+
+def test_pausing_new_users_refuses_them_before_asking_lastfm(h):
+  fm = FakeLastfm()
+  d = deps(h, fm=fm, pause_new_users=True)
+  code, body = sync(h, d)
+  assert code == 503 and body["error"] == "paused"
+  assert fm.calls == 0 and d.ddb.rows == {} and d.sqs.sent == []
+
+
+def test_a_cold_container_that_cant_read_ssm_pauses_new_users(h):
+  d = deps(h, loaded=False)
+  assert sync(h, d)[1]["error"] == "paused"
+
+
+def test_pausing_new_users_leaves_existing_users_syncing(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
+  assert sync(h, deps(h, ddb, pause_new_users=True))[0] == 202
+
+
+def test_a_known_name_that_never_finished_a_sync_counts_as_new(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "error", "sync_requested_at": NOW - 5000}
+  assert sync(h, deps(h, ddb, pause_new_users=True))[1]["error"] == "paused"
+
+
+def test_pausing_syncs_queues_nothing_and_existing_users_hear_paused(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
+  d = deps(h, ddb, pause_syncs=True)
+  code, body = sync(h, d)
+  assert code == 200 and body["queued"] is False and body["reason"] == "paused"
+  assert body["status"]["stage"] == "idle" and d.sqs.sent == []
+  assert ddb.rows["alice"]["state"] == "done"
+  assert sync(h, d, "bob")[1]["error"] == "paused"
+
+
+def test_a_paused_user_already_queued_is_still_in_progress(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5}
+  code, body = sync(h, deps(h, ddb, pause_new_users=True))
+  assert code == 200 and body["reason"] == "in_progress"
+
+
+def test_one_ip_gets_a_few_distinct_new_names_an_hour(h):
+  fm = FakeLastfm()
+  d = deps(h, fm=fm, new_users_per_ip_hour=2)
+  assert sync(h, d, "alice")[0] == 202
+  assert sync(h, d, "bob")[0] == 202
+  code, body = sync(h, d, "carol")
+  assert code == 429 and body["error"] == "too_many_new" and fm.calls == 2
+  assert sync(h, d, "carol", ip="203.0.113.9")[0] == 202  # another IP has its own allowance
+  later = deps(h, d.ddb, d.sqs, fm, now=NOW + 3600, new_users_per_ip_hour=2)
+  assert sync(h, later, "carol")[0] == 202  # a new hour
+
+
+def test_retrying_a_name_doesnt_use_up_the_allowance(h):
+  ddb = FakeDDB()
+  down = deps(h, ddb, fm=FakeLastfm(error=TimeoutError("slow")), new_users_per_ip_hour=1)
+  assert sync(h, down, "alice")[1]["error"] == "lastfm_unavailable"
+  assert sync(h, deps(h, ddb, new_users_per_ip_hour=1), "alice")[0] == 202
+
+
+def test_known_users_dont_count_against_the_ip(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {"username": "alice", "state": "done", "last_synced_at": NOW - 5000}
+  d = deps(h, ddb, new_users_per_ip_hour=1)
+  assert sync(h, d, "alice")[0] == 202 and list(ddb.guard) == ["queue"]
+
+
+def test_the_guard_table_stores_no_address_or_name(h):
+  d = deps(h)
+  sync(h, d, "alice", ip="198.51.100.7")
+  ((key, item),) = [(k, v) for k, v in d.ddb.guard.items() if k.startswith("ip#")]
+  assert "198.51.100.7" not in key and "alice" not in str(item)
+  assert item["expires_at"] == (NOW // 3600 + 2) * 3600
+
+
+# ---- the origin lock ---------------------------------------------------------------------
+
+ENFORCED = {"ENFORCE_ORIGIN": "true"}
+VIA_CF = {"x-kamp-origin": "s3cret"}
+
+
+def test_with_the_lock_on_only_cloudfront_gets_through(h):
+  d = deps(h, env=ENFORCED, secrets=("s3cret",))
+  assert sync(h, d)[0] == 403 and d.sqs.sent == []
+  assert sync(h, d, headers={"x-kamp-origin": "guess"})[0] == 403
+  assert status(h, d)[0] == 403
+  assert sync(h, d, headers={"X-Kamp-Origin": "s3cret"})[0] == 202
+
+
+def test_health_is_never_locked(h):
+  d = deps(h, env=ENFORCED, secrets=("s3cret",))
+  event = {"rawPath": f"{BASE}api/health", "requestContext": {"http": {"method": "GET"}}}
+  assert h.handler(event, None, d)["statusCode"] == 200
+
+
+def test_the_previous_secret_works_during_a_rotation(h):
+  d = deps(h, env=ENFORCED, secrets=("new", "s3cret"))
+  assert sync(h, d, headers=VIA_CF)[0] == 202
+
+
+def test_no_secret_readable_with_the_lock_on_fails_closed(h):
+  assert sync(h, deps(h, env=ENFORCED, secrets=()), headers=VIA_CF)[0] == 403
+
+
+def test_with_the_lock_off_anything_gets_through(h):
+  assert sync(h, deps(h, secrets=("s3cret",)))[0] == 202
+
+
+def test_forwarded_ips_count_only_with_the_secret(h):
+  d = deps(h, secrets=("s3cret",), new_users_per_ip_hour=1)
+  spoof = {"x-forwarded-for": "203.0.113.1"}
+  assert sync(h, d, "alice", ip="130.176.1.1")[0] == 202
+  assert sync(h, d, "bob", ip="130.176.1.1", headers=spoof)[0] == 429  # spoofed: still the edge's
+  real = {**VIA_CF, "x-forwarded-for": "203.0.113.1, 130.176.1.1"}
+  assert sync(h, d, "bob", ip="130.176.1.1", headers=real)[0] == 202  # via CloudFront: the viewer's
+
+
+def test_the_cooldown_is_a_runtime_setting(h):
+  d = deps(h)
+  sync(h, d)
+  d.ddb.rows["alice"].update(state="done", sync_started_at=NOW + 1, sync_finished_at=NOW + 60)
+  code, body = sync(h, deps(h, d.ddb, d.sqs, now=NOW + 700, sync_cooldown_seconds=3600))
+  assert code == 200 and body["reason"] == "cooldown" and body["status"]["cooldown_until"] == NOW + 3600
 
 
 def test_known_users_still_queue_when_busy(h):
@@ -262,13 +443,61 @@ def test_status_of_an_unknown_or_not_found_user_is_404(h):
   assert status(h, deps(h, ddb), "nobody")[0] == 404
 
 
-def test_status_reads_progress_and_queue_depth(h):
+def test_status_reads_progress_and_the_place_in_line(h):
   ddb = FakeDDB()
-  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5,
+  ddb.rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW - 5, "queue_ticket": 40,
                        "progress": {"weeks_done": 0, "weeks_total": 4, "plays": 0}}  # fmt: skip
-  code, body = status(h, deps(h, ddb, FakeSQS(depth=3)))
-  assert code == 200 and body["stage"] == "queued" and body["queue_ahead_approx"] == 3
+  ddb.guard["queue"] = {"joined": 45, "started": 33}
+  code, body = status(h, deps(h, ddb, FakeSQS(depth=12)))
+  assert code == 200 and body["stage"] == "queued" and body["queue"] == {"position": 7}
   assert body["weeks"] == {"done": 0, "total": 4}
+
+
+def test_queueing_hands_out_tickets_in_order(h):
+  d = deps(h)
+  sync(h, d, "alice")
+  sync(h, d, "bob")
+  assert d.ddb.rows["alice"]["queue_ticket"] == 1 and d.ddb.rows["bob"]["queue_ticket"] == 2
+
+
+def test_a_failed_send_burns_its_ticket(h):
+  ddb = FakeDDB()
+  sync(h, deps(h, ddb, FakeSQS(fail=True)))
+  assert ddb.guard["queue"] == {"joined": 1, "started": 1} and "queue_ticket" not in ddb.rows["alice"]
+
+
+def test_losing_the_race_burns_the_ticket(h):
+  def other_request(rows):
+    rows["alice"] = {"username": "alice", "state": "queued", "sync_requested_at": NOW}
+
+  ddb = FakeDDB(race=other_request)
+  sync(h, deps(h, ddb))
+  assert ddb.guard["queue"] == {"joined": 1, "started": 1}
+
+
+def test_replacing_a_stale_mark_burns_its_old_ticket(h):
+  ddb = FakeDDB()
+  ddb.rows["alice"] = {
+    "username": "alice",
+    "state": "queued",
+    "sync_requested_at": NOW - 7200,
+    "queue_ticket": 9,
+  }
+  ddb.guard["queue"] = {"joined": 9, "started": 0}
+  assert sync(h, deps(h, ddb, FakeSQS(depth=0)))[0] == 202
+  assert ddb.rows["alice"]["queue_ticket"] == 10 and ddb.guard["queue"]["started"] == 1
+
+
+def test_no_ticket_still_queues(h):
+  class NoGuard(FakeDDB):
+    def update_item(self, TableName, **kw):
+      if TableName == "guard" and kw["Key"]["id"]["S"] == "queue":
+        raise RuntimeError("DynamoDB down")
+      return super().update_item(TableName, **kw)
+
+  ddb = NoGuard()
+  code, body = sync(h, deps(h, ddb))
+  assert code == 202 and "queue_ticket" not in ddb.rows["alice"] and "queue" not in body["status"]
 
 
 def test_status_matches_the_core(h):
