@@ -46,6 +46,8 @@ module "stack" {
   log_retention_days = 3
   # Run by hand (infra/README.md, "Release index"): a branch shouldn't download the dump daily.
   index_schedule_enabled = false
+  # Not on kamp.fm, so nothing to check; no alarms (the default), which its role may not write.
+  uptime_enabled = false
 }
 
 # Same shape as staging and prod, so deploy.yml and scripts/sandbox_reset.py read one object.

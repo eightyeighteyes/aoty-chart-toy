@@ -17,6 +17,8 @@ locals {
     # Chart builder (AOTY-21): reserved 1 runs builds one at a time, so a build that read older
     # data can't overwrite a newer chart. 512: a heavy user's store is a few MB parsed.
     chart = { timeout = 300, memory = 512, reserved = 1 }
+    # The hourly check of kamp.fm (AOTY-27, uptime.tf): three small fetches.
+    uptime = { timeout = 60, memory = 128, reserved = null }
   }
 
   function_env = {
@@ -157,6 +159,15 @@ locals {
         resources = [aws_dynamodb_table.users.arn]
       },
     ]
+    # Fetches kamp.fm over the internet; it touches nothing of the stack's (its SSM read is below).
+    uptime = []
+  }
+
+  # SSM names each function may read. uptime reads only its own: it has no use for the API key.
+  function_params = {
+    for fn in keys(local.functions) : fn => (
+      fn == "uptime" ? [local.ssm_params.uptime_user] : values(local.ssm_params)
+    )
   }
 }
 
@@ -196,7 +207,7 @@ data "aws_iam_policy_document" "fn" {
   statement {
     sid       = "Params"
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [for name in values(local.ssm_params) : "arn:aws:ssm:${local.region}:${local.account}:parameter${name}"]
+    resources = [for name in local.function_params[each.key] : "arn:aws:ssm:${local.region}:${local.account}:parameter${name}"]
   }
   statement {
     sid       = "DecryptParams"

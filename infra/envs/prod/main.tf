@@ -41,6 +41,7 @@ module "stack" {
   base_path                     = "/toys/aoty/"
   cloudfront_distribution_arn   = "arn:aws:cloudfront::424416271636:distribution/EU1A3HSUCEQS9" # kamp.fm
   albums_point_in_time_recovery = true
+  alarms                        = "full" # AOTY-27
 }
 
 # Same shape as staging; kamp-site reads data.terraform_remote_state.<x>.outputs.stack.<name>.
