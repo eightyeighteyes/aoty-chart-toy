@@ -84,3 +84,18 @@ def test_app_js_has_no_inline_handlers_or_eval():
   assert "onerror=" not in js and "onclick=" not in js
   assert "eval(" not in js and "new Function" not in js
   assert 'addEventListener("error"' in js
+
+
+def test_the_shell_has_one_polite_live_region_for_the_sync_banner(tmp_path):
+  bs.build(BASE, out=tmp_path / "web")
+  html = (tmp_path / "web" / "index.html").read_text()
+  assert html.count("aria-live=") == 1
+  assert re.search(r'id="banner-msg" role="status" aria-live="polite"', html)
+  assert 'id="banner-detail" aria-hidden="true"' in html
+
+
+def test_app_js_sets_up_the_switches_once_and_polls_politely():
+  js = (bs.SRC / "app.js").read_text()
+  assert js.count('setupSwitch("rank"') == 1 and "switchesReady" in js  # no doubled listeners
+  assert "visibilitychange" in js and "document.hidden" in js
+  assert '"content-type": "application/json"' in js  # the API refuses anything else (415)

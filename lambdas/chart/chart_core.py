@@ -52,6 +52,11 @@ def pending_keys(plays, items):
   return sorted(k for k in plays if k not in items)
 
 
+def year_hits(plays, items, year):
+  """How many of the user's played albums are known to be from `year`."""
+  return sum(1 for k in plays if (items.get(k) or {}).get("year") == year)
+
+
 def track_info(item):
   """What is_single reads: the matched release's track count and its group's type."""
   return {"tracks": item.get("tracks"), "type": item.get("tracks_type")}

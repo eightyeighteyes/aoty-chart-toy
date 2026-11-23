@@ -56,8 +56,9 @@ flowchart LR
   visitor --> cf
   cf -- "/toys/aoty/*" --> siteb
   cf -- "/toys/aoty/api/*" --> apigw --> api
-  api -.->|"AOTY-22: queue a sync"| syncq
-  api --> users
+  api -- "queue a sync" --> syncq
+  api -- "cooldown mark,<br/>status read" --> users
+  api -- "new name?" --> lastfm
   syncq --> sync
   sync --> lastfm
   sync --> storeb
@@ -85,6 +86,7 @@ flowchart LR
   indexer -- "Scan: what changed?" --> albums
   indexer -- "re-checks" --> cold
   mb -- "index first" --> index
+  ssm --- api
   ssm --- sync
   ssm --- mb
   ssm --- indexer
@@ -97,9 +99,9 @@ gateway. CD uploads its code to `code/index.zip`, as it updates the Lambdas' cod
 
 ## Visitor flow
 
-What a visit will look like once AOTY-22 and 24 land. Today the shell, `chart.json` and
-`GET /api/health` exist; a missing chart shows a placeholder until AOTY-24. It reports the env and the deployed commit's SHA, read from the zip's `build.json`
-(AOTY-35).
+A visit, as built (AOTY-21, 22). `GET /api/health` reports the env and the deployed commit's
+SHA, read from the zip's `build.json` (AOTY-35). A missing chart shows a minimal "No chart
+yet" panel while the same sync runs; AOTY-24 replaces it with the real first-visit flow.
 
 ```mermaid
 sequenceDiagram
@@ -119,23 +121,26 @@ sequenceDiagram
   alt chart exists (return visit)
     S3-->>V: 200: paint the chart, URL rewritten to Last.fm's casing
   else first visit
-    S3-->>V: 404: first-visit screen (AOTY-24)
+    S3-->>V: 404: "No chart yet" (AOTY-24 replaces it)
   end
-  V->>API: POST api/users/alice/sync (AOTY-22)
-  API->>U: last sync less than 10 min ago?
-  alt within the cooldown
-    API-->>V: current state, nothing queued
+  V->>API: POST api/users/alice/sync (JSON only)
+  API->>U: a sync running, or one requested under SYNC_COOLDOWN (10 min) ago?
+  alt yes
+    API-->>V: 200, nothing queued, current status
+  else a new name
+    API->>API: user.getInfo (3 s); unknown: 404 + a not_found row with a 1-day TTL
   else
-    API->>Q: {"username": "alice"}
-    API-->>V: queued
+    API->>U: conditional: state=queued, sync_requested_at=now
+    API->>Q: {"username": "alice"} (a failed send undoes the mark: 503)
+    API-->>V: 202, queued
   end
-  loop every 2-5 s until idle (AOTY-22)
-    V->>API: GET status
-    API->>U: state, progress
-    API-->>V: stage, weeks done, albums checked
+  loop every 2 s backing off to 5 s, paused while hidden, until idle
+    V->>API: GET api/users/alice/status
+    API->>U: state, progress, sync_finished_at, chart_*
+    API-->>V: stage (queued, reading, building, dating, idle, error), weeks, new plays
   end
-  V->>CF: GET chart.json again
-  CF-->>V: re-render in place
+  V->>CF: GET chart.json, once the chart builder has written a newer one
+  CF-->>V: repaint in place (scroll, view and ranking kept)
 ```
 
 ## Background flow: sync, then the mb lane
@@ -242,7 +247,7 @@ and the next day's run starts over.
 | store bucket `index/current.json`, `index/DUMP/*.json.gz` | index build | mb lane |
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
-| `users` table | api, sync (state, `display_name`), chart builder (`chart_built_at`, `chart_pending`) | api (status, cooldown), chart builder |
+| `users` table | api (`queued`, `sync_requested_at`, `not_found` rows with `expires_at`), sync (state, progress, `sync_finished_at`, `display_name`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`) | api (status, cooldown), chart builder |
 | site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |

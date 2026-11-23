@@ -10,6 +10,13 @@ resource "aws_dynamodb_table" "users" {
     type = "S"
   }
 
+  # Only rows that set expires_at expire: the api's not_found rows for names Last.fm doesn't
+  # know (AOTY-22), so typos and junk names don't pile up. Real users never set it.
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
   deletion_protection_enabled = var.environment == "prod"
 }
 

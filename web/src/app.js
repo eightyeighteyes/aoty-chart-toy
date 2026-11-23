@@ -178,31 +178,19 @@
     try { return decodeURIComponent(m[1]); } catch (_) { return ""; }
   }
 
-  async function showUser(raw) {
-    const lower = raw.toLowerCase();
-    heading(raw, "");
-    if (!USERNAME_RE.test(lower)) {
-      state("That isn't a Last.fm username", "Check the spelling and try again.", true);
-      return;
-    }
-    let res;
-    try {
-      res = await fetch(`${BASE}data/users/${lower}/chart.json`, {cache: "no-cache"});
-    } catch (_) {
-      state("Couldn't load this chart", "Check your connection and reload the page.", false);
-      return;
-    }
-    if (res.status === 404) {
-      // AOTY-24 replaces this with the first-visit flow (queue a sync, show progress).
-      state("No chart yet", `There's no ${raw} chart here yet.`, true);
-      return;
-    }
-    let chart = null;
-    try { chart = res.ok ? await res.json() : null; } catch (_) {}
-    if (!chart || chart.version !== CHART_VERSION || chart.username !== lower) {
-      state("Couldn't load this chart", "Something went wrong on our side. Try again in a minute.", false);
-      return;
-    }
+  // The user's chart.json: the chart, null when there's none yet (404), or throws.
+  async function loadChart(lower) {
+    const res = await fetch(`${BASE}data/users/${lower}/chart.json`, {cache: "no-cache"});
+    if (res.status === 404) return null;
+    const chart = res.ok ? await res.json() : null;
+    if (!chart || chart.version !== CHART_VERSION || chart.username !== lower) throw new Error("bad chart");
+    return chart;
+  }
+
+  // The page's one chart, painted on load and again in place when a sync brings a newer one.
+  let current = null, switchesReady = false;
+
+  function paint(chart, raw, lower) {
     // Last.fm's casing in the address bar, but only a name that is this user's.
     const display = typeof chart.display_name === "string" && chart.display_name.toLowerCase() === lower
         ? chart.display_name : lower;
@@ -210,6 +198,8 @@
     if (display !== raw) {
       try { history.replaceState(null, "", `${BASE}user/${encodeURIComponent(display)}${location.search}`); } catch (_) {}
     }
+    const repaint = current !== null;
+    current = chart;
     heading(display, chart.year);
     $("controls").hidden = false;
     const updated = new Date(chart.generated_at);
@@ -217,10 +207,159 @@
       $("footer").textContent = `Data from Last.fm scrobbles · release years from MusicBrainz · updated `
           + updated.toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"});
     }
-    const render = () => renderChart(chart);
-    setupSwitch("view", "aoty-view");
-    setupSwitch("rank", "aoty-rank", render);
-    render();
+    if (!switchesReady) {  // once: a second setup would add every click listener twice
+      switchesReady = true;
+      setupSwitch("view", "aoty-view");
+      setupSwitch("rank", "aoty-rank", () => renderChart(current));
+    }
+    if (repaint) {
+      // In place: keep the scroll position, and don't replay the entrance animations.
+      const y = window.scrollY;
+      $("ranking").classList.add("no-anim");
+      renderChart(chart);
+      window.scrollTo(0, y);
+    } else {
+      renderChart(chart);
+    }
+  }
+
+  async function showUser(raw) {
+    const lower = raw.toLowerCase();
+    heading(raw, "");
+    if (!USERNAME_RE.test(lower)) {
+      state("That isn't a Last.fm username", "Check the spelling and try again.", true);
+      return;
+    }
+    let chart;
+    try {
+      chart = await loadChart(lower);
+    } catch (_) {
+      state("Couldn't load this chart", "Check your connection, or try again in a minute.", false);
+      return;
+    }
+    if (chart) {
+      paint(chart, raw, lower);
+    } else {
+      // AOTY-24 replaces this with the real first-visit flow; until then the sync below fills it.
+      state("No chart yet", `Reading ${raw}'s scrobbles. The chart appears here when it's ready.`, false);
+    }
+    watchSync(lower, async () => {
+      const fresh = await loadChart(lower);
+      if (fresh && (!current || fresh.generated_at !== current.generated_at)) paint(fresh, raw, lower);
+    });
+  }
+
+  // ---- sync on visit (AOTY-22) ------------------------------------------------------------
+  //
+  // Ask for a sync (the API answers a running sync or the 10-minute cooldown without queueing),
+  // then poll the status: every 2 s, backing off to 5 s, every 30 s while release years are
+  // checked, pausing while the tab is hidden. When the chart builder writes a newer chart,
+  // onNewChart repaints it in place. Nothing here ever blocks the chart: errors only show a
+  // quiet line.
+  const POLL_FIRST_MS = 2000, POLL_MAX_MS = 5000, POLL_DATING_MS = 30000;
+  const WATCH_FOR_MS = 10 * 60 * 1000, DATING_FOR_MS = 2 * 60 * 1000;
+
+  // The banner: #banner-msg is the page's one polite live region and changes only with the
+  // stage; the counts beside it change on every poll and are hidden from screen readers.
+  function say(msg, detail = "") {
+    const box = $("banner"), live = $("banner-msg");
+    if (live.textContent !== msg) live.textContent = msg;
+    $("banner-detail").textContent = detail;
+    box.classList.toggle("show", !!msg);
+  }
+
+  function describe(s) {
+    if (s.stage === "queued" || s.stage === "reading") {
+      const w = s.weeks || {};
+      return ["Checking for new scrobbles…", w.total ? `${num(w.done)} of ${num(w.total)} weeks` : ""];
+    }
+    if (s.stage === "building") {
+      return [s.new_plays ? `+${num(s.new_plays)} new plays · updating chart` : "Updating chart…", ""];
+    }
+    if (s.stage === "dating") {
+      const a = s.albums || {};
+      return ["Checking release years…", a.total ? `${num(a.checked)} of ${num(a.total)} albums` : ""];
+    }
+    return ["", ""];
+  }
+
+  function watchSync(lower, onNewChart) {
+    const started = Date.now();
+    let delay = POLL_FIRST_MS, timer = null, stopped = false, datingSince = null;
+    const stop = msg => { stopped = true; clearTimeout(timer); timer = null; say(msg || ""); };
+    const quiet = () => stop("Couldn't update right now.");
+    const schedule = ms => { if (!stopped && !document.hidden) timer = setTimeout(tick, ms); };
+
+    async function maybeRefresh(s) {
+      const built = s.chart_built_at || 0;
+      const have = current ? Date.parse(current.generated_at) / 1000 : 0;
+      if (built > have) {
+        try { await onNewChart(); } catch (_) {}
+      }
+    }
+
+    // The sync is over but there's still no chart to show (first visit): say so, don't wait on.
+    function gaveUp(reason) {
+      if (current) return;
+      if (reason === "private") {
+        state("This Last.fm profile is private", "Its listening isn't public, so there's no chart to build.", false);
+      } else {
+        state("Couldn't build a chart this time", "Something went wrong reading the scrobbles. Try again in a few minutes.", false);
+      }
+    }
+
+    async function handle(s) {
+      await maybeRefresh(s);
+      if (s.stage === "idle") { gaveUp(); return stop(""); }
+      if (s.stage === "error") { gaveUp(s.reason); return current ? quiet() : stop(""); }
+      const [msg, detail] = describe(s);
+      say(msg, detail);
+      if (s.stage === "dating") {
+        datingSince = datingSince || Date.now();
+        if (Date.now() - datingSince > DATING_FOR_MS) return stop("");
+        delay = POLL_DATING_MS;
+      } else {
+        delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
+      }
+      if (Date.now() - started > WATCH_FOR_MS) { gaveUp(); return stop(""); }
+      schedule(delay);
+    }
+
+    async function tick() {
+      timer = null;
+      if (stopped) return;
+      if (document.hidden) return;  // visibilitychange resumes it
+      let res;
+      try {
+        res = await fetch(`${BASE}api/users/${lower}/status`, {cache: "no-store"});
+      } catch (_) { return quiet(); }
+      if (res.status === 404) return stop("");
+      if (!res.ok) return quiet();
+      let s;
+      try { s = await res.json(); } catch (_) { return quiet(); }
+      await handle(s);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && !stopped && timer === null) schedule(0);
+    });
+
+    say("Checking for new scrobbles…");
+    (async () => {
+      let res, body = null;
+      try {
+        res = await fetch(`${BASE}api/users/${lower}/sync`, {
+          method: "POST", headers: {"content-type": "application/json"}, body: "{}", cache: "no-store",
+        });
+        body = await res.json();
+      } catch (_) { return quiet(); }
+      if (res.status === 404) {
+        if (!current) state("No such Last.fm user", "Check the spelling and try again.", true);
+        return stop("");
+      }
+      if (!res.ok || !body || !body.status) return quiet();
+      await handle(body.status);
+    })();
   }
 
   const name = routeName();

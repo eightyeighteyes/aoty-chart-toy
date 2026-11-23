@@ -55,6 +55,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/common/mbmatch.py`, `musicbrainz.py` | The matching rules (`pick_release_group`/`pick_year`, `pick_release`, `title_tier`, `is_single`, query clauses), shared by M0 (`aoty.py`/`build_page.py` re-export them) and the mb Lambda; and the standard-library MusicBrainz client with a per-call deadline. |
 | `tools/mb_parity.py` | AOTY-19 acceptance: runs `mb_core` on the laptop over `data/mb_bench/candidates.json` and diffs against M0's year and track caches into `data/mb_parity/run-<ts>/report.md`. A MusicBrainz client: run it alone. |
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
+| `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync` and `GET .../status` behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The user page shell (AOTY-21): `index.html` template, `app.css`, `app.js`, ported from `build_page.py` (no member filter, dots or Weighted). Routes `<base>user/<name>` client-side. kamp.fm's CSP allows no inline script or handlers: keep everything in `app.js`, use `addEventListener`. `scripts/build_shell.py --base <base>` builds `dist/web` with hashed assets (and fails on inline script); `tools/serve_shell.py --sample alice` previews it locally with kamp.fm's routing and CSP. |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
@@ -370,6 +371,24 @@ not daily totals from paging scrobbles (the story text was revised to match).
   never looked up by M0; the new answers look right. Track counts and types were the same for all
   568 that M0 had. There were 812 requests, 433 of them 503s (53%), taking 17.2 min at 1.48
   albums/s, including track lookups.
+
+## Sync on visit (AOTY-22, 2026-11-23)
+
+- User decisions: status is a **GET API** (`<base>api/users/<name>/status`, reading the users
+  row), not a `status.json`; a user with **no chart yet also gets the sync** (minimal "No chart
+  yet" panel; AOTY-24 replaces it).
+- POST sync order: the **conditional update first** (state=queued, `sync_requested_at`), then
+  SendMessage, undone if the send fails. Sending first loses a race: the sync worker can set
+  `syncing` before a late update, the condition fails, and the cooldown is never recorded.
+  A crash between the two is bounded by `STUCK_AFTER` (30 min), after which a POST queues again.
+- The sync worker writes `sync_finished_at` (and `done`) **before** starting the chart build,
+  so `chart_built_at` is never earlier and the status can't sit in `building`.
+- `last_synced_at` is the sync's *start* time; use `sync_finished_at` for "when it ended".
+- Abuse guards: JSON content-type only (no cross-site form POSTs), per-user cooldown, new users
+  refused while the sync queue holds > 50, `not_found` rows expire after a day (TTL). The
+  execute-api bypass is AOTY-26.
+- `tools/serve_shell.py` fakes the API (a 12 s pretend sync) so the banner and the in-place
+  repaint can be previewed locally.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

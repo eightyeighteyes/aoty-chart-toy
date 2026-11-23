@@ -23,7 +23,7 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 |----------|-------|
 | `kamp-aoty-<env>-site` bucket | Shell + `data/`. kamp.fm's CloudFront reads it through Origin Access Control (`s3:GetObject` on the key prefix only). Keys mirror the public path: prod stores `toys/aoty/...`, staging `toys/aoty-staging/...`. |
 | `kamp-aoty-<env>-store` bucket | Private Lambda state: `users/<username>/<year>/weeks.json.gz` (weekly album totals, AOTY-18) and the release index. Never readable by CloudFront. Versioned; old versions expire after 7 days. |
-| `users` table | `username` (lowercased). Deletion protection in prod. |
+| `users` table | `username` (lowercased). Deletion protection in prod. TTL on `expires_at`, which only the api's `not_found` rows set (AOTY-22). |
 | `albums` table | `artist_key` + `title_key` (`norm(album artist)`, `norm(base_title(album))`). Deletion protection in staging and prod, `prevent_destroy` everywhere; PITR in prod. |
 | `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` 2. |
 | `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. Visibility 900 s (the mb timeout). |
@@ -294,11 +294,25 @@ To bring it back, apply `envs/sandbox` as the admin again (the first-apply rule 
    (see "Bootstrap" above).
 4. Do the first apply and code deploy from a laptop (above).
 
-## Running a sync by hand (until AOTY-22)
+## Syncs: the API, or by hand
 
-The API doesn't enqueue syncs yet. To sync a user in staging, send the message the API will
-send. The group id must be the lowercased username (one sync per user at a time), and the
-dedup id must be unique, because content-based dedup would drop a repeat within 5 minutes:
+Opening `kamp.fm<base>user/<name>` asks for a sync (AOTY-22). The same through the API:
+
+```sh
+curl -X POST -H 'content-type: application/json' -d '{}' https://kamp.fm/toys/aoty-staging/api/users/alice/sync
+curl https://kamp.fm/toys/aoty-staging/api/users/alice/status
+```
+
+POST answers 202 when it queues, or 200 with `reason` `cooldown` (a sync was requested under
+`SYNC_COOLDOWN`, 10 min, ago) or `in_progress`. A new name is checked with `user.getInfo`: an
+unknown one gets 404 and a `not_found` row that expires after a day (TTL on `expires_at`).
+New users get 503 `busy` while the sync queue holds more than 50 messages. Non-JSON POSTs
+get 415. Status stages: `queued`, `reading`, `building`, `dating`, `idle`, `error`. A sync
+that hasn't moved for 30 min counts as dead, so it never blocks a user for good.
+
+To skip the cooldown (or sync without the API), send the message the API sends. The group id
+must be the lowercased username (one sync per user at a time), and the dedup id must be
+unique, because content-based dedup would drop a repeat within 5 minutes:
 
 ```sh
 aws sqs send-message --queue-url "$(aws sqs get-queue-url --queue-name kamp-aoty-staging-sync.fifo --query QueueUrl --output text)" \

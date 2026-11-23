@@ -178,7 +178,12 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
     CacheControl="no-cache",
   )  # fmt: skip
   _put_json(deps, deps.env["STORE_BUCKET"], pending_key(username, year), {"keys": pending})
-  _update_user(deps, username, {"chart_built_at": now, "chart_pending": len(pending)})
+  # The status API (AOTY-22) reads these: new plays = sync's total - chart_plays (the same sum),
+  # albums checked = chart_albums - chart_pending, hits = this year's albums found so far.
+  _update_user(deps, username, {
+    "chart_built_at": now, "chart_pending": len(pending), "chart_plays": sum(plays.values()),
+    "chart_albums": len(plays), "chart_hits": core.year_hits(plays, items, year),
+  })  # fmt: skip
   log.info("chart %s: %d albums shown, %d pending", _tag(username), len(chart["albums"]), len(pending))
   return True
 

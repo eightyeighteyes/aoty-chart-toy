@@ -128,7 +128,8 @@ def sync_user(msg, context, deps):
   full = bool(msg.get("full")) or core.wants_full_resync(user.get("last_full_sync_at"), now)
   full_since = core.full_pass_start(store, now) if full else None
   todo = core.weeks_to_fetch(store, core.week_ranges(year, now), full_since)
-  progress = {"weeks_done": 0, "weeks_total": len(todo), "plays": 0}
+  # plays: the store's year total, refreshed at each checkpoint so a status poll sees it grow.
+  progress = {"weeks_done": 0, "weeks_total": len(todo), "plays": sum(core.year_plays(store).values())}
   _update_user(deps, username, {"state": "syncing", "progress": progress, "sync_started_at": now})
   log.info("sync %s year=%s full=%s weeks=%d", tag, year, full, len(todo))
 
@@ -142,12 +143,14 @@ def sync_user(msg, context, deps):
       core.merge_week(store, (frm, to), *core.chart_plays(rows), now)
       progress["weeks_done"] = i
       if i % CHECKPOINT_EVERY == 0:
+        progress["plays"] = sum(core.year_plays(store).values())
         _save_progress(deps, username, store, progress)
   except lastfm.LastfmError as e:
     terminal = _terminal_state(deps, username, e)
     if terminal is None:
       raise
-    _update_user(deps, username, {"state": terminal, "error_code": str(e.code), "last_synced_at": now})
+    _update_user(deps, username, {"state": terminal, "error_code": str(e.code), "last_synced_at": now,
+                                  "sync_finished_at": int(deps.clock())})  # fmt: skip
     log.info("sync %s stopped: %s (Last.fm %s)", tag, terminal, e.code)
     return terminal
 
@@ -158,18 +161,17 @@ def sync_user(msg, context, deps):
   if queued:
     _save_store(deps, username, store)  # queued_at / resolved marks
     deps.lambda_.invoke(FunctionName=deps.env["MB_FUNCTION"], InvocationType="Event", Payload=b"{}")
-  names = _display_name_fields(deps, username, user, now)
-  if names:
-    _update_user(deps, username, names)  # before the chart build, which reads it
-  start_chart_build(deps, username, year, now)
-
   progress["plays"] = sum(core.year_plays(store).values())
-  done = {"state": "done", "progress": progress, "last_synced_at": now}
+  # Before the chart build starts: it reads display_name, and the status API compares its
+  # chart_built_at with sync_finished_at, so the finish must be recorded first.
+  done = {"state": "done", "progress": progress, "last_synced_at": now, "sync_finished_at": int(deps.clock()),
+          **_display_name_fields(deps, username, user, now)}  # fmt: skip
   if full:
     done["last_full_sync_at"] = now
   if store.get("last_seen_uts"):
     done["last_seen_uts"] = store["last_seen_uts"]
   _update_user(deps, username, done, remove=("error_code",))
+  start_chart_build(deps, username, year, now)
   log.info("sync %s done: %d weeks, %d plays, %d queued for mb, %d Last.fm calls",
            tag, len(todo), progress["plays"], queued, getattr(deps.lastfm, "calls", 0))  # fmt: skip
   return "done"
