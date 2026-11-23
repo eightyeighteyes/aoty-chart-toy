@@ -147,10 +147,12 @@
     document.title = year ? `${name}'s ${NAME} ${year} · a kamp toy` : TITLE;
   }
 
-  // A message panel, optionally with the username box.
+  // A message panel, optionally with the username box. The footer's profile line goes: the
+  // panel may be saying this Last.fm user doesn't exist.
   function state(title, text, withLookup) {
     $("controls").hidden = true;
     $("sub").textContent = "";
+    $("footer-user").hidden = true;
     const box = document.createElement("section");
     box.className = "state";
     box.appendChild(document.createElement("h2")).textContent = title;
@@ -296,10 +298,8 @@
     heading(display, chart.year);
     $("controls").hidden = false;
     const updated = new Date(chart.generated_at);
-    if (!isNaN(updated)) {
-      $("footer").textContent = `Data from Last.fm scrobbles · release years from MusicBrainz · updated `
-          + updated.toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"});
-    }
+    profileLine(display, isNaN(updated) ? ""
+        : updated.toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"}));
     if (!switchesReady) {  // once: a second setup would add every click listener twice
       switchesReady = true;
       setupSwitch("view", "aoty-view");
@@ -316,6 +316,18 @@
     }
   }
 
+  // The footer's line about this page's user (AOTY-29): a link to their Last.fm profile, as
+  // Last.fm's API terms ask of pages showing profile data, and when the chart was built. Built
+  // node by node (never innerHTML) in a line of its own: the credits beside it are static HTML.
+  function profileLine(name, updated) {
+    const line = $("footer-user");
+    const link = document.createElement("a");
+    link.href = intro.lastfmUserUrl(name);
+    link.textContent = name;
+    line.replaceChildren(link, " on last.fm", ...(updated ? [` · updated ${updated}`] : []));
+    line.hidden = false;
+  }
+
   async function showUser(raw) {
     const lower = raw.toLowerCase();
     heading(raw, "");
@@ -323,6 +335,7 @@
       state("that isn't a last.fm username", "they're letters, numbers, dots, dashes and underscores. try another?", true);
       return;
     }
+    profileLine(raw, "");  // the URL's casing until a chart brings Last.fm's
     let chart;
     try {
       chart = await loadChart(lower);

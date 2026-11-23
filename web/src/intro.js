@@ -61,7 +61,13 @@
     return {message: MESSAGES.generic};
   }
 
-  const api = {USERNAME_RE, MESSAGES, cleanName, outcome};
+  // The user's Last.fm profile, which Last.fm's API terms (2.7) ask pages with profile data to
+  // link to (AOTY-29).
+  function lastfmUserUrl(name) {
+    return `https://www.last.fm/user/${encodeURIComponent(String(name))}`;
+  }
+
+  const api = {USERNAME_RE, MESSAGES, cleanName, outcome, lastfmUserUrl};
   root.aotyIntro = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
