@@ -9,8 +9,12 @@
   "use strict";
 
   const BASE = document.querySelector('meta[name="aoty-base"]').content;
-  // Last.fm names as the sync worker accepts them (lambdas/sync/handler.py USERNAME_RE).
-  const USERNAME_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+  // The placeholder product name (scripts/build_shell.py NAME) and the page's own title.
+  const NAME = document.querySelector('meta[name="aoty-name"]').content;
+  const TITLE = document.title;
+  const intro = globalThis.aotyIntro;  // web/src/intro.js, loaded first
+  const USERNAME_RE = intro.USERNAME_RE;
+  const LOOKUP_TIMEOUT_MS = 10000;
   const CHART_VERSION = 1;
   const MODES = {
     track: "ranked by plays",
@@ -129,7 +133,7 @@
   }
 
   function heading(name, year) {
-    $("eyebrow").textContent = "Albums of the Year";
+    $("eyebrow").textContent = NAME;
     const h1 = $("title");
     h1.textContent = name;
     if (year) {
@@ -138,7 +142,7 @@
       y.className = "year";
       y.textContent = year;
     }
-    document.title = year ? `${name}'s Albums of the Year ${year}` : "Albums of the Year";
+    document.title = year ? `${name}'s ${NAME} ${year} · a kamp toy` : TITLE;
   }
 
   // A message panel, optionally with the username box.
@@ -153,20 +157,105 @@
     $("ranking").replaceChildren(box);
   }
 
+  // The username form on chart pages' error states: the intro's form, built in script.
+  let lookupCount = 0;
   function lookupForm() {
+    const id = `lookup-${++lookupCount}`;
     const form = document.createElement("form");
     form.className = "lookup";
-    const input = form.appendChild(document.createElement("input"));
-    Object.assign(input, {name: "user", placeholder: "Last.fm username", autocomplete: "off",
-                          spellcheck: false, required: true});
-    input.setAttribute("aria-label", "Last.fm username");
-    form.appendChild(document.createElement("button")).textContent = "Show chart";
-    form.addEventListener("submit", e => {
-      e.preventDefault();
-      const name = input.value.trim();
-      if (name) location.assign(`${BASE}user/${encodeURIComponent(name)}`);
-    });
+    form.noValidate = true;
+    const label = form.appendChild(document.createElement("label"));
+    label.className = "lookup-label";
+    label.htmlFor = `${id}-name`;
+    label.textContent = "last.fm username";
+    const row = form.appendChild(document.createElement("div"));
+    row.className = "lookup-row";
+    const input = row.appendChild(document.createElement("input"));
+    Object.assign(input, {id: `${id}-name`, name: "user", type: "text", maxLength: 128, autocomplete: "username",
+                          spellcheck: false});
+    for (const [k, v] of [["autocapitalize", "none"], ["autocorrect", "off"], ["enterkeyhint", "go"],
+                          ["aria-describedby", `${id}-msg`]]) input.setAttribute(k, v);
+    const button = row.appendChild(document.createElement("button"));
+    button.type = "submit";
+    button.textContent = "press my chart";
+    const msg = form.appendChild(document.createElement("p"));
+    Object.assign(msg, {className: "lookup-msg", id: `${id}-msg`});
+    msg.setAttribute("role", "status");
+    msg.setAttribute("aria-live", "polite");
+    bindLookup(form);
     return form;
+  }
+
+  // Validate a name through the API (POST sync, which checks it with Last.fm and starts the
+  // sync the visitor wants anyway), then go to its chart in Last.fm's casing. The chart page
+  // POSTs again; that answers "in_progress" and queues nothing. intro.js has the rules.
+  function bindLookup(form) {
+    const input = form.querySelector("input");
+    const button = form.querySelector("button");
+    const msg = form.querySelector(".lookup-msg");
+    const label = button.textContent;
+    let busy = false;
+
+    function setBusy(on) {
+      busy = on;
+      button.setAttribute("aria-busy", String(on));
+      button.setAttribute("aria-disabled", String(on));  // not disabled: that would drop focus
+      button.textContent = on ? "pressing…" : label;
+    }
+    function fail(text) {
+      setBusy(false);
+      msg.textContent = text;
+      input.setAttribute("aria-invalid", "true");
+      input.focus();
+      input.select();
+    }
+    // Back from a chart page can restore this page from the bfcache mid-"pressing…".
+    window.addEventListener("pageshow", () => setBusy(false));
+    input.addEventListener("input", () => {
+      input.removeAttribute("aria-invalid");
+      msg.textContent = "";
+    });
+
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      if (busy) return;
+      const clean = intro.cleanName(input.value);
+      if (clean.error) return fail(intro.MESSAGES[clean.error]);
+      setBusy(true);
+      msg.textContent = "";
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), LOOKUP_TIMEOUT_MS);
+      let status = 0, body = null;
+      try {
+        const res = await fetch(`${BASE}api/users/${clean.name}/sync`, {
+          method: "POST", headers: {"content-type": "application/json"}, body: "{}",
+          cache: "no-store", signal: ctl.signal,
+        });
+        status = res.status;
+        try { body = await res.json(); } catch (_) { body = null; }  // e.g. a CloudFront 502 page
+      } catch (_) {
+        status = 0;  // offline, or the timeout
+      } finally {
+        clearTimeout(timer);
+      }
+      const result = intro.outcome(status, body, clean.name);
+      if (result.go) {
+        location.assign(`${BASE}user/${encodeURIComponent(result.go)}`);
+        return;
+      }
+      fail(result.message);
+    });
+  }
+
+  // The front door: the bare base path, and any path that isn't a chart (sent to the base).
+  function showIntro() {
+    if (location.pathname !== BASE) {
+      try { history.replaceState(null, "", BASE); } catch (_) {}
+    }
+    document.title = TITLE;
+    poster.hidden = true;
+    $("intro").hidden = false;
+    bindLookup($("intro-form"));
   }
 
   // The username in <base>user/<name>, or null for any other path.
@@ -227,21 +316,21 @@
     const lower = raw.toLowerCase();
     heading(raw, "");
     if (!USERNAME_RE.test(lower)) {
-      state("That isn't a Last.fm username", "Check the spelling and try again.", true);
+      state("that isn't a last.fm username", "they're letters, numbers, dots, dashes and underscores. try another?", true);
       return;
     }
     let chart;
     try {
       chart = await loadChart(lower);
     } catch (_) {
-      state("Couldn't load this chart", "Check your connection, or try again in a minute.", false);
+      state("couldn't load this chart", "check your connection, or try again in a minute.", false);
       return;
     }
     if (chart) {
       paint(chart, raw, lower);
     } else {
       // AOTY-24 replaces this with the real first-visit flow; until then the sync below fills it.
-      state("No chart yet", `Reading ${raw}'s scrobbles. The chart appears here when it's ready.`, false);
+      state("no chart yet", `reading ${raw}'s scrobbles. a first chart takes a few minutes: we check every album's release year with musicbrainz. it appears here when it's ready.`, false);
     }
     watchSync(lower, async () => {
       const fresh = await loadChart(lower);
@@ -302,9 +391,9 @@
     function gaveUp(reason) {
       if (current) return;
       if (reason === "private") {
-        state("This Last.fm profile is private", "Its listening isn't public, so there's no chart to build.", false);
+        state("this profile is private", "its last.fm listening isn't public, so there's nothing for us to read.", false);
       } else {
-        state("Couldn't build a chart this time", "Something went wrong reading the scrobbles. Try again in a few minutes.", false);
+        state("couldn't build a chart this time", "something went wrong reading the scrobbles. try again in a few minutes.", false);
       }
     }
 
@@ -354,7 +443,7 @@
         body = await res.json();
       } catch (_) { return quiet(); }
       if (res.status === 404) {
-        if (!current) state("No such Last.fm user", "Check the spelling and try again.", true);
+        if (!current) state("we couldn't find that last.fm user", "check the spelling and try again.", true);
         return stop("");
       }
       if (!res.ok || !body || !body.status) return quiet();
@@ -364,8 +453,7 @@
 
   const name = routeName();
   if (name === null) {
-    heading("Albums of the Year", "");
-    state("Your albums of the year", "Type a Last.fm username to see the albums released this year they played most.", true);
+    showIntro();
   } else {
     showUser(name);
   }

@@ -13,7 +13,9 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
   <base>api/users/<u>/{sync,status}     a stand-in API: POST sync starts a pretend 12 s sync
                                         (queued, reading, building, then idle, which bumps the
                                         chart's generated_at so the page repaints in place);
-                                        a second POST within 10 min answers "cooldown". Only
+                                        a second POST within 10 min answers "cooldown". The
+                                        intro's errors: nobody* (404), lastfm-down, busy-busy,
+                                        broken (503s), private-* (a known private profile). Only
                                         names with a chart under --data ever get one. With
                                         --proxy, api/ and data/ go to that env instead: kamp.fm
                                         for staging and prod; for sandbox, its execute-api URL
@@ -55,7 +57,23 @@ CSP = (
 OUT = REPO / "dist" / "web-preview"
 DATA = REPO / "data" / "shell_preview"
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript",
-         ".json": "application/json"}  # fmt: skip
+         ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png"}  # fmt: skip
+# Names the fake API answers specially, so every intro message can be previewed (AOTY-23).
+FAKE_OUTCOMES = {
+  "nobody": (404, {"error": "unknown user"}),
+  "lastfm-down": (503, {"error": "lastfm_unavailable"}),
+  "busy-busy": (503, {"error": "busy"}),
+  "broken": (503, {"error": "unavailable"}),
+}
+
+
+def fake_outcome(name):
+  """(status, body) for a special preview name, else None. private-* is a known private profile."""
+  if name.startswith("nobody"):
+    return FAKE_OUTCOMES["nobody"]
+  if name.startswith("private-"):
+    return 200, {"queued": False, "reason": "cooldown", "status": {"stage": "error", "reason": "private"}}
+  return FAKE_OUTCOMES.get(name)
 
 
 def sample_chart(username, n=120):
@@ -190,6 +208,9 @@ def handler_for(base, out, data, proxy=None):
         return self.send(404, b'{"error":"not found"}', "application/json")
       name, action = parts[2].lower(), parts[3]
       now = time.time()
+      special = fake_outcome(name) if action == "sync" and method == "POST" else None
+      if special:
+        return self.send(special[0], json.dumps(special[1]).encode(), "application/json")
       if action == "sync" and method == "POST":
         fresh = name not in syncs or now - syncs[name] > 600
         if fresh:

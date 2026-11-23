@@ -360,9 +360,12 @@ Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `Ch
 with M0's rules on the same store and albums items, and exits 1 on a difference.
 
 **Previewing the page** without a deploy (sandbox has no kamp.fm path):
-`tools/serve_shell.py --sample alice` serves the shell at `http://127.0.0.1:8000/toys/aoty/`,
-with kamp.fm's routing and CSP, and a synthetic chart. To preview a real one, copy its
-`chart.json` to `data/shell_preview/users/<u>/chart.json` first.
+`tools/serve_shell.py --sample alice` serves the shell at `http://127.0.0.1:8000/toys/aoty/`
+(the intro page) and `.../user/alice`, with kamp.fm's routing and CSP, a synthetic chart, and a
+fake API: a 12 s pretend sync, and special names for the intro's errors (`nobody*`,
+`lastfm-down`, `busy-busy`, `broken`, `private-*`). To preview a real one, copy its
+`chart.json` to `data/shell_preview/users/<u>/chart.json` first, or use
+`--proxy sandbox|staging|prod` for that environment's real API and data (real syncs).
 
 ## Release index (AOTY-20)
 

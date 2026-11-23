@@ -44,7 +44,7 @@ def test_a_rebuild_leaves_no_stale_assets(src, tmp_path):
   bs.build(BASE, src=src, out=out)
   (src / "app.css").write_text("body{}")
   bs.build(BASE, src=src, out=out)
-  assert len(list((out / "assets").iterdir())) == 2
+  assert len(list((out / "assets").iterdir())) == len(bs.ASSETS)
 
 
 @pytest.mark.parametrize("base", ["toys/aoty/", "/toys/aoty", ""])
@@ -86,12 +86,44 @@ def test_app_js_has_no_inline_handlers_or_eval():
   assert 'addEventListener("error"' in js
 
 
-def test_the_shell_has_one_polite_live_region_for_the_sync_banner(tmp_path):
+def test_the_shell_has_one_polite_live_region_per_page(tmp_path):
+  # The sync banner (chart pages) and the intro form's message (the intro page): never both shown.
   bs.build(BASE, out=tmp_path / "web")
   html = (tmp_path / "web" / "index.html").read_text()
-  assert html.count("aria-live=") == 1
+  assert html.count("aria-live=") == 2
   assert re.search(r'id="banner-msg" role="status" aria-live="polite"', html)
+  assert re.search(r'id="intro-msg" role="status" aria-live="polite"', html)
   assert 'id="banner-detail" aria-hidden="true"' in html
+
+
+def test_placeholders_name_year_title_and_icon_are_filled(tmp_path):
+  published = bs.build(BASE, out=tmp_path / "web")
+  html = (tmp_path / "web" / "index.html").read_text()
+  assert f"<title>{bs.NAME} · a kamp toy</title>" in html
+  assert f"your {bs.TARGET_YEAR}, " in html
+  assert f'<meta name="aoty-name" content="{bs.NAME}">' in html
+  assert f'<link rel="icon" type="image/svg+xml" href="{BASE}{published["favicon.svg"]}">' in html
+  # intro.js loads before app.js, which reads globalThis.aotyIntro.
+  assert html.index(published["intro.js"]) < html.index(published["app.js"])
+
+
+def test_the_year_matches_the_lambdas():
+  from common.config import TARGET_YEAR
+
+  assert bs.TARGET_YEAR == TARGET_YEAR
+
+
+def test_the_placeholder_name_avoids_other_brands():
+  assert bs.NAME == bs.NAME.lower()
+  assert "aoty" not in bs.NAME.lower().split() and "wrapped" not in bs.NAME.lower()
+
+
+def test_dm_sans_and_the_kamp_bar_are_in_the_shell(tmp_path):
+  bs.build(BASE, out=tmp_path / "web")
+  html = (tmp_path / "web" / "index.html").read_text()
+  assert "family=DM+Sans" in html
+  assert 'class="kampbar"' in html and 'href="https://kamp.fm/"' in html and "a kamp toy" in html
+  bs.check_csp(html)  # the inline <svg> mark is fine
 
 
 def test_app_js_sets_up_the_switches_once_and_polls_politely():
@@ -99,3 +131,11 @@ def test_app_js_sets_up_the_switches_once_and_polls_politely():
   assert js.count('setupSwitch("rank"') == 1 and "switchesReady" in js  # no doubled listeners
   assert "visibilitychange" in js and "document.hidden" in js
   assert '"content-type": "application/json"' in js  # the API refuses anything else (415)
+
+
+def test_both_seam_fixes_stay():
+  # M0: the root paints --bg too. AOTY-23: body never paints as one flat colour (Chrome renders flat
+  # tiles and content tiles' near-black differently, so short pages showed a darker strip).
+  css = (bs.SRC / "app.css").read_text()
+  assert "html { background: var(--bg)" in css
+  assert "background-image: linear-gradient(var(--bg), #0d0c13)" in css
