@@ -47,6 +47,21 @@ h1 .year {
 .sub { color: var(--muted); margin-top: 14px; font-size: 15px; }
 .pending { color: var(--accent-2); }
 
+/* Sync banner (AOTY-22): a small pill that never moves the page. Its line is always reserved
+   (min-height), so showing and hiding it changes only its opacity. */
+.banner {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center;
+  min-height: 34px; margin-top: 14px; padding: 7px 16px; width: fit-content; max-width: 100%;
+  border-radius: 999px; background: var(--panel);
+  font-size: 13px; color: var(--muted);
+  opacity: 0; transition: opacity .25s;
+}
+.banner.show { opacity: 1; }
+.banner #banner-msg { color: var(--ink); font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { .banner { transition: none; } }
+/* A repaint after a sync keeps everything still. */
+.no-anim .card, .no-anim .row { animation: none; }
+
 /* #1 */
 .hero {
   position: relative; overflow: hidden;
