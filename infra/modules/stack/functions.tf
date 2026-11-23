@@ -30,6 +30,7 @@ locals {
     MB_FUNCTION    = "${local.prefix}-mb"
     CHART_FUNCTION = "${local.prefix}-chart"
     SITE_PREFIX    = local.s3_key_prefix
+    SYNC_COOLDOWN  = tostring(var.sync_cooldown_seconds)
   }
 
   queue_consume = [
@@ -40,7 +41,11 @@ locals {
   # What each function's flow needs (AOTY-18/19/22), on top of logs + SSM.
   function_statements = {
     api = [
-      { actions = ["sqs:SendMessage"], resources = [aws_sqs_queue.main["sync"].arn] },
+      # Queue syncs (AOTY-22), and read the queue's depth for the status and the busy guard.
+      {
+        actions   = ["sqs:SendMessage", "sqs:GetQueueAttributes"]
+        resources = [aws_sqs_queue.main["sync"].arn]
+      },
       {
         actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         resources = [aws_dynamodb_table.users.arn]
