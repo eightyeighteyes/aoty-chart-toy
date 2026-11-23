@@ -81,6 +81,32 @@ resource "aws_apigatewayv2_stage" "default" {
   }
 }
 
+# Server errors for the api-5xx alarm (AOTY-27, alarms.tf). API Gateway's own 5xx metric would
+# count the api's deliberate 503s (busy, paused, Last.fm or SQS down), so this counts 5xx from
+# the access log instead, minus 503s the api answered itself. An integration timeout or crash
+# is still a 503 (or 500/502/504) but carries an integration error message; an empty one is "-".
+# status is a string because the format is jsonencoded. Only where the alarm exists: a metric
+# that's published costs money. A filter's dimensions can only come from log fields (and rule out
+# a default value), so the environment is in the metric's name instead of a dimension.
+locals {
+  api_server_errors_metric = "ApiServerErrors-${var.environment}"
+}
+
+resource "aws_cloudwatch_log_metric_filter" "api_server_errors" {
+  count = var.alarms == "full" ? 1 : 0
+
+  name           = "${local.prefix}-api-server-errors"
+  log_group_name = aws_cloudwatch_log_group.api_access.name
+  pattern        = "{ ($.status = \"5*\") && (($.status != \"503\") || ($.error != \"-\")) }"
+
+  metric_transformation {
+    name          = local.api_server_errors_metric
+    namespace     = "kamp-aoty"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
 resource "aws_lambda_permission" "api" {
   statement_id  = "AllowHttpApi"
   action        = "lambda:InvokeFunction"

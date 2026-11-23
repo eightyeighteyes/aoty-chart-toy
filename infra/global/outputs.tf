@@ -12,6 +12,11 @@ output "deploy_role_arns" {
   value       = { for env, role in aws_iam_role.deploy : env => role.arn }
 }
 
+output "alerts_topic_arn" {
+  description = "Every env's alarms and the budget publish here (AOTY-27; modules/stack/alarms.tf builds the same ARN)"
+  value       = aws_sns_topic.alerts.arn
+}
+
 output "boundary_policy_arns" {
   description = "Permissions boundary each env's workload roles must carry"
   value       = { for env, p in aws_iam_policy.boundary : env => p.arn }
