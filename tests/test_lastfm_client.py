@@ -1,5 +1,6 @@
 """The Lambdas' Last.fm client (lambdas/common/lastfm.py), against a fake urlopen."""
 
+import hashlib
 import io
 import json
 import urllib.error
@@ -82,6 +83,32 @@ def test_user_info_returns_lastfms_casing():
   assert client(FakeHTTP((200, {"user": {"name": "AliCe"}}))).user_info("alice") == "AliCe"
   assert client(FakeHTTP((200, {"user": {}}))).user_info("alice") == "alice"
   assert client(FakeHTTP((404, {"error": 6, "message": "User not found"}))).user_info("x") is None
+
+
+def test_api_sig_is_sorted_names_and_values_then_the_secret_without_format():
+  # Last.fm's spec: "api_keyxxxxxxxxmethodauth.getSessiontokenyyyyyy" + secret, md5 hex.
+  params = {"token": "yyyyyy", "method": "auth.getSession", "api_key": "xxxxxxxx", "format": "json"}
+  expected = hashlib.md5(b"api_keyxxxxxxxxmethodauth.getSessiontokenyyyyyysecret").hexdigest()
+  assert lastfm.api_sig(params, "secret") == expected
+  assert lastfm.api_sig({**params, "callback": "cb"}, "secret") == expected
+
+
+def test_auth_get_session_signs_the_call_and_returns_only_the_lowercased_name():
+  http = FakeHTTP((200, {"session": {"name": "AliCe", "key": "SESSIONKEY", "subscriber": 0}}))
+  assert client(http).auth_get_session("TOK", "SECRET") == "alice"
+  q = http.queries[0]
+  assert q["method"] == "auth.getSession" and q["token"] == "TOK" and q["format"] == "json"
+  unsigned = {k: v for k, v in q.items() if k != "api_sig"}
+  assert q["api_sig"] == lastfm.api_sig(unsigned, "SECRET")
+  assert client(FakeHTTP((200, {"session": {}}))).auth_get_session("TOK", "SECRET") is None
+
+
+def test_a_refused_token_raises_without_the_token_in_the_message():
+  http = FakeHTTP((403, {"error": 4, "message": "Invalid authentication token supplied"}))
+  with pytest.raises(lastfm.LastfmError) as e:
+    client(http).auth_get_session("SECRET-TOKEN-123", "SECRET")
+  assert e.value.code == 4
+  assert "SECRET-TOKEN-123" not in str(e.value)
 
 
 def test_album_image_takes_the_largest_real_cover():

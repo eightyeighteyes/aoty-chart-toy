@@ -8,6 +8,7 @@ Behaviour comes from the AOTY-11 spike (tools/lastfm_spike.py):
   1,000 album rows; the caller splits ranges near the cap (sync/core.py).
 """
 
+import hashlib
 import json
 import os
 import time
@@ -86,15 +87,25 @@ class Client:
       return None, status
 
   def call(self, method, **params):
+    return self._call_counted(method, params, None)
+
+  def signed_call(self, method, secret, **params):
+    """A call carrying api_sig, for the auth methods. Errors never include the params."""
+    return self._call_counted(method, params, secret)
+
+  def _call_counted(self, method, params, secret):
     try:
-      return self._call(method, params)
+      return self._call(method, params, secret)
     except LastfmError as e:
       if e.code not in EXPECTED_CODES:
         _emit_error(method, e.code)
       raise
 
-  def _call(self, method, params):
-    q = {"method": method, "api_key": self.api_key, "format": "json", **params}
+  def _call(self, method, params, secret=None):
+    q = {"method": method, "api_key": self.api_key, **params}
+    if secret is not None:
+      q["api_sig"] = api_sig(q, secret)
+    q["format"] = "json"
     error = None
     for attempt in range(1, self.max_attempts + 1):
       self._pace()
@@ -177,6 +188,21 @@ class Client:
   def user_exists(self, user):
     """False only on a definite "User not found"; other errors propagate."""
     return self.user_info(user) is not None
+
+  def auth_get_session(self, token, secret):
+    """The lowercased username a web-auth token belongs to (sign-in, AOTY-47), or None when
+    Last.fm's answer has no name. Last.fm's session key is dropped here: nothing stores it.
+    A bad, used or expired token raises LastfmError (codes 4, 14, 15)."""
+    data = self.signed_call("auth.getSession", secret, token=token)
+    name = (data.get("session") or {}).get("name")
+    return name.lower() if isinstance(name, str) and name else None
+
+
+def api_sig(params, secret):
+  """Last.fm's request signature: md5 of every param's name and value, sorted by name, then the
+  shared secret. format and callback aren't signed (Last.fm's auth spec)."""
+  text = "".join(f"{k}{params[k]}" for k in sorted(params) if k not in ("format", "callback"))
+  return hashlib.md5((text + secret).encode("utf-8")).hexdigest()  # noqa: S324 (Last.fm's scheme)
 
 
 def _emit_error(method, code):

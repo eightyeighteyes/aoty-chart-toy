@@ -190,6 +190,40 @@ sequenceDiagram
   CF-->>V: repaint in place (scroll, view and ranking kept)
 ```
 
+## Sign-in (AOTY-47)
+
+Built: the api half. The page's sign-in state and buttons are AOTY-52. Nothing is stored: the
+session is a signed cookie, and Last.fm's session key is dropped. The secrets are SSM
+SecureStrings only the api can read (`session_key`, `session_key_previous`, `lastfm_api_secret`).
+Runbook: `infra/README.md`, "Sign-in".
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor V as Visitor
+  participant API as api Lambda (via kamp.fm CloudFront)
+  participant SSM as SSM
+  participant L as Last.fm
+
+  V->>API: GET api/auth/start?next=<path under base>
+  API->>SSM: session keys + shared secret (cached 5 min; none: 503)
+  API-->>V: 302 to last.fm/api/auth/?api_key&cb=.../api/auth/callback/<nonce>, plus a signed state cookie {nonce, next} (10 min, Path=<base>api/auth/)
+  V->>L: approve
+  L-->>V: 302 to .../api/auth/callback/<nonce>?token=T
+  V->>API: GET api/auth/callback/<nonce>?token=T (state cookie)
+  alt state missing, expired, badly signed or for another nonce
+    API-->>V: 302 to <base>?signin=failed (no Last.fm call)
+  else
+    API->>L: auth.getSession(token, api_sig) (3 s, one attempt)
+    L-->>API: {name, key}: key dropped, name lowercased
+    API-->>V: 302 to next, session cookie {u, iat, exp} (30 days, Path=<base>, HttpOnly, Secure, SameSite=Lax)
+  end
+  V->>API: GET api/me (session cookie)
+  API-->>V: 200 {username} | 401 signed out | 503 keys unreadable
+  V->>API: POST api/auth/signout (JSON only)
+  API-->>V: 200, cookie cleared
+```
+
 ## Background flow: sync, then the mb lane
 
 What happens after a sync message is queued. The sync worker, the mb lane and the release
@@ -305,6 +339,8 @@ and the next day's run starts over.
 | site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
+| SSM `session_key`, `session_key_previous`, `lastfm_api_secret` (AOTY-47) | the admin, by hand | api only |
+| `__Secure-kamp_aoty_session` / `_state` cookies | api | api (the browser holds them; nothing server-side) |
 
 An album's year comes from the `albums` table if it has an item. If not, the mb lane tries the
 index, then a live search. The lane writes the item whichever of the two found the year, and

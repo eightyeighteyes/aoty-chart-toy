@@ -39,6 +39,9 @@ locals {
     ENFORCE_ORIGIN = tostring(var.enforce_origin)
     # For the status API's estimated wait (AOTY-26): syncs that run side by side.
     SYNC_CONCURRENCY = tostring(var.sync_concurrency)
+    # Sign-in's callback host (AOTY-47): kamp.fm, or sandbox's own execute-api URL, since sandbox
+    # isn't served through kamp.fm.
+    PUBLIC_ORIGIN = var.cloudfront_distribution_arn != null ? "https://kamp.fm" : aws_apigatewayv2_api.http.api_endpoint
   }
 
   queue_consume = [
@@ -64,9 +67,10 @@ locals {
         resources = [aws_dynamodb_table.guard.arn]
       },
       {
-        # kamp.fm's origin secret (AOTY-26); decrypting it is DecryptParams below.
+        # kamp.fm's origin secret (AOTY-26), and sign-in's session keys and Last.fm shared secret
+        # (AOTY-47), which no other function may read; decrypting them is DecryptParams below.
         actions   = ["ssm:GetParameters"]
-        resources = local.origin_secret_arns
+        resources = concat(local.origin_secret_arns, local.auth_param_arns)
       },
     ]
     sync = [

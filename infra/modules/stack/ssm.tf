@@ -29,4 +29,12 @@ locals {
     for n in ["origin_secret", "origin_secret_previous"] :
     "arn:aws:ssm:${local.region}:${local.account}:parameter${local.ssm_prefix}${n}"
   ]
+
+  # Sign-in (AOTY-47, lambdas/api/handler.py AUTH_SECRETS): SecureStrings set by hand. Kept out of
+  # ssm_params on purpose: function_params grants ssm_params to sync, mb and chart as well, and
+  # these are the api's alone.
+  auth_param_arns = [
+    for n in ["session_key", "session_key_previous", "lastfm_api_secret"] :
+    "arn:aws:ssm:${local.region}:${local.account}:parameter${local.ssm_prefix}${n}"
+  ]
 }

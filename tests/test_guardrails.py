@@ -122,6 +122,13 @@ def test_no_origin_secret_means_none():
   assert g.OriginSecrets(SecretSSM(fail=True), PREFIX, clock=Clock()).get() == ()
 
 
+def test_secrets_returns_only_names_with_values():
+  ssm = SecretSSM({"session_key": "k", "lastfm_api_secret": "", "other": "x"})
+  r = g.Secrets(ssm, PREFIX, ("session_key", "session_key_previous", "lastfm_api_secret"), clock=Clock())
+  assert r.get() == {"session_key": "k"}  # missing and empty values are left out
+  assert g.Secrets(SecretSSM(fail=True), PREFIX, ("session_key",), clock=Clock()).get() == {}
+
+
 def test_origin_ok():
   assert g.origin_ok("a", ("x", "a"))
   assert not g.origin_ok("a", ())

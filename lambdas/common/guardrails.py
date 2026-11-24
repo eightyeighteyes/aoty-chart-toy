@@ -120,32 +120,49 @@ ORIGIN_SECRETS = ("origin_secret", "origin_secret_previous")
 SECRET_TTL_S = 300
 
 
-class OriginSecrets:
-  """kamp.fm's CloudFront origin secret(s) (AOTY-26), SecureStrings written by kamp-site.
+class Secrets:
+  """Cached SecureStrings under one environment's prefix. get() returns {name: value} for the
+  names that exist and are non-empty, and never raises.
 
-  get() returns the values that exist (none in sandbox, which isn't behind CloudFront).
-  _previous is only there while a rotation is rolling out. On an SSM failure the last good values
-  stay, so a blip neither opens the lock nor locks everyone out. A cold container that can't read
-  them has none, which the api treats as "not from CloudFront": with enforcement on, that's a 403
-  until SSM answers again (fail closed).
+  On an SSM failure the last good values stay, so a blip neither opens a lock nor locks everyone
+  out. A cold container that can't read them has none: callers treat that as "no secret" and fail
+  closed (a 403 for the origin lock, a 503 for sign-in).
   """
 
-  def __init__(self, ssm, prefix, *, clock=time.monotonic):
-    self.ssm, self.prefix, self._clock = ssm, prefix, clock
-    self._values, self._expires = (), None
+  def __init__(self, ssm, prefix, names, *, clock=time.monotonic):
+    self.ssm, self.prefix, self.names, self._clock = ssm, prefix, tuple(names), clock
+    self._values, self._expires = {}, None
 
   def get(self):
     now = self._clock()
     if self._expires is not None and now < self._expires:
       return self._values
     try:
-      out = self.ssm.get_parameters(Names=[self.prefix + n for n in ORIGIN_SECRETS], WithDecryption=True)
-      self._values = tuple(p["Value"] for p in out.get("Parameters", []) if p.get("Value"))
+      out = self.ssm.get_parameters(Names=[self.prefix + n for n in self.names], WithDecryption=True)
+      self._values = {
+        p["Name"].removeprefix(self.prefix): p["Value"] for p in out.get("Parameters", []) if p.get("Value")
+      }
       self._expires = now + SECRET_TTL_S
     except Exception:
-      log.exception("could not read the origin secret; keeping the last good one")
+      log.exception("could not read %s; keeping the last good values", ", ".join(self.names))
       self._expires = now + 5
     return self._values
+
+
+class OriginSecrets(Secrets):
+  """kamp.fm's CloudFront origin secret(s) (AOTY-26), SecureStrings written by kamp-site.
+
+  get() returns the values that exist (none in sandbox, which isn't behind CloudFront).
+  _previous is only there while a rotation is rolling out. With none, the api treats a request as
+  "not from CloudFront": with enforcement on, that's a 403 until SSM answers again.
+  """
+
+  def __init__(self, ssm, prefix, *, clock=time.monotonic):
+    super().__init__(ssm, prefix, ORIGIN_SECRETS, clock=clock)
+
+  def get(self):
+    values = super().get()
+    return tuple(values[n] for n in self.names if n in values)
 
 
 def origin_ok(header, secrets):

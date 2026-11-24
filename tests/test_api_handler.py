@@ -3,11 +3,12 @@
 import importlib.util
 import json
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 
 import api_core as core
 import pytest
 
-from common import dynamo, guardrails
+from common import dynamo, guardrails, lastfm, session
 
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "api" / "handler.py"
 BASE = "/toys/aoty-test/"
@@ -549,3 +550,244 @@ def test_logs_never_name_the_user(h, caplog):
     sync(h, deps(h), "alice")
     sync(h, deps(h, sqs=FakeSQS(fail=True)), "alice")
   assert caplog.records and not any("alice" in r.getMessage() for r in caplog.records)
+
+
+# ---- sign-in (AOTY-47) --------------------------------------------------------------------
+
+KEY, OLD_KEY = "k" * 48, "o" * 48
+AUTH = {"session_key": KEY, "lastfm_api_secret": "SHARED"}
+ORIGIN = {"PUBLIC_ORIGIN": "https://kamp.fm"}
+STATE_PATH = f"{BASE}api/auth/"
+
+
+class AuthLastfm(FakeLastfm):
+  api_key = "APIKEY"
+
+  def __init__(self, session_name="AliCe", **kw):
+    super().__init__(**kw)
+    self.session_name, self.sessions = session_name, []
+
+  def auth_get_session(self, token, secret):
+    self.calls += 1
+    self.sessions.append((token, secret))
+    if self.error:
+      raise self.error
+    return self.session_name.lower() if self.session_name else None
+
+
+def auth_deps(h, auth=AUTH, fm=None, now=NOW, env=None, **kw):
+  d = deps(h, fm=fm or AuthLastfm(), now=now, env={**ORIGIN, **(env or {})}, **kw)
+  d.auth_secrets = lambda: dict(auth)
+  return d
+
+
+def auth_call(h, d, method, path, cookies=None, query=None, ctype=None, headers=None):
+  event = {"rawPath": f"{BASE}api/{path}", "requestContext": {"http": {"method": method, "sourceIp": "1.2.3.4"}},
+           "headers": {**({"content-type": ctype} if ctype else {}), **(headers or {})}}  # fmt: skip
+  if cookies:
+    event["cookies"] = [f"{k}={v}" for k, v in cookies.items()]  # payload v2: not headers["cookie"]
+  if query:
+    event["queryStringParameters"] = query
+  out = h.handler(event, None, d)
+  assert out["headers"]["cache-control"] == "no-store"
+  return out
+
+
+def set_cookies(out):
+  """{name: (value, attributes)} from a response's cookies list."""
+  got = {}
+  for c in out.get("cookies", []):
+    head, _, attrs = c.partition("; ")
+    name, _, value = head.partition("=")
+    got[name] = (value, attrs)
+  return got
+
+
+def start(h, d, next_path=None):
+  out = auth_call(h, d, "GET", "auth/start", query={"next": next_path} if next_path else None)
+  assert out["statusCode"] == 302
+  state = set_cookies(out)[session.STATE_COOKIE][0]
+  cb = dict(parse_qsl(urlsplit(out["headers"]["location"]).query))["cb"]
+  return state, cb.rsplit("/", 1)[1], out
+
+
+def test_start_sets_a_state_cookie_and_sends_the_visitor_to_lastfm(h):
+  state, nonce, out = start(h, auth_deps(h))
+  loc = urlsplit(out["headers"]["location"])
+  assert f"{loc.scheme}://{loc.netloc}{loc.path}" == "https://www.last.fm/api/auth/"
+  q = dict(parse_qsl(loc.query))
+  assert q == {"api_key": "APIKEY", "cb": f"https://kamp.fm{BASE}api/auth/callback/{nonce}"}
+  attrs = set_cookies(out)[session.STATE_COOKIE][1]
+  assert (
+    f"Path={STATE_PATH}" in attrs and "HttpOnly" in attrs and "Secure" in attrs and "Max-Age=600" in attrs
+  )
+  assert out["headers"]["referrer-policy"] == "no-referrer"
+
+
+def test_the_full_sign_in_sets_a_session_and_me_names_the_user(h):
+  fm = AuthLastfm(session_name="AliCe")
+  d = auth_deps(h, fm=fm)
+  state, nonce, _ = start(h, d, f"{BASE}group/the-server")
+  out = auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state},
+                  query={"token": "TOK"})  # fmt: skip
+  assert out["statusCode"] == 302 and out["headers"]["location"] == f"{BASE}group/the-server"
+  assert fm.sessions == [("TOK", "SHARED")]
+  got = set_cookies(out)
+  assert got[session.STATE_COOKIE][0] == "" and f"Path={STATE_PATH}" in got[session.STATE_COOKIE][1]
+  cookie, attrs = got[session.SESSION_COOKIE]
+  assert f"Path={BASE};" in attrs and "SameSite=Lax" in attrs and "Max-Age=2592000" in attrs
+  me = auth_call(h, d, "GET", "me", cookies={session.SESSION_COOKIE: cookie})
+  assert me["statusCode"] == 200 and json.loads(me["body"]) == {"username": "alice"}
+
+
+@pytest.mark.parametrize("case", ["no_cookie", "wrong_nonce", "expired", "session_as_state", "other_key"])
+def test_a_bad_state_never_reaches_lastfm(h, case):
+  fm = AuthLastfm()
+  d = auth_deps(h, fm=fm)
+  state, nonce, _ = start(h, d)
+  cookies = {session.STATE_COOKIE: state}
+  if case == "no_cookie":
+    cookies = None
+  elif case == "wrong_nonce":
+    nonce = "x" + nonce[1:]
+  elif case == "expired":
+    d.clock = lambda: NOW + session.STATE_TTL_S
+  elif case == "session_as_state":
+    cookies = {session.STATE_COOKIE: session.new_session("alice", KEY, NOW)}
+  elif case == "other_key":
+    cookies = {session.STATE_COOKIE: session.new_state(nonce, BASE, "z" * 48, NOW)}
+  out = auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies=cookies, query={"token": "TOK"})
+  assert out["statusCode"] == 302 and out["headers"]["location"] == f"{BASE}?signin=failed"
+  assert fm.sessions == []
+  assert session.SESSION_COOKIE not in set_cookies(out)
+
+
+def test_a_refused_token_lands_back_with_signin_failed(h):
+  fm = AuthLastfm(error=lastfm.LastfmError(4, "Invalid authentication token supplied"))
+  d = auth_deps(h, fm=fm)
+  state, nonce, _ = start(h, d, f"{BASE}user/bob")
+  out = auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state},
+                  query={"token": "TOK"})  # fmt: skip
+  assert out["headers"]["location"] == f"{BASE}user/bob?signin=failed"
+  assert session.SESSION_COOKIE not in set_cookies(out)
+
+
+def test_a_callback_without_a_token_is_refused(h):
+  d = auth_deps(h)
+  state, nonce, _ = start(h, d)
+  out = auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state})
+  assert out["headers"]["location"] == f"{BASE}?signin=failed"
+
+
+def test_start_ignores_a_next_off_this_site(h):
+  d = auth_deps(h)
+  for evil in ("//evil.example/", "https://evil.example/", "/toys/aoty/"):
+    state, nonce, _ = start(h, d, evil)
+    out = auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state},
+                    query={"token": "TOK"})  # fmt: skip
+    assert out["headers"]["location"] == BASE
+
+
+@pytest.mark.parametrize(
+  "auth", [{}, {"session_key": "short", "lastfm_api_secret": "S"}, {"session_key": KEY}]
+)
+def test_unreadable_or_weak_secrets_make_start_503(h, auth):
+  out = auth_call(h, auth_deps(h, auth=auth), "GET", "auth/start")
+  assert out["statusCode"] == 503 and "cookies" not in out
+
+
+def test_no_public_origin_makes_start_503(h):
+  d = auth_deps(h)
+  d.env.pop("PUBLIC_ORIGIN")
+  assert auth_call(h, d, "GET", "auth/start")["statusCode"] == 503
+
+
+def test_me_is_401_signed_out_and_clears_a_bad_cookie(h):
+  d = auth_deps(h)
+  out = auth_call(h, d, "GET", "me")
+  assert out["statusCode"] == 401 and "cookies" not in out
+  good = session.new_session("alice", KEY, NOW)
+  tampered = good[:-2] + ("AA" if not good.endswith("AA") else "BB")
+  out = auth_call(h, d, "GET", "me", cookies={session.SESSION_COOKIE: tampered})
+  assert out["statusCode"] == 401
+  assert set_cookies(out)[session.SESSION_COOKIE][0] == ""
+
+
+def test_an_expired_session_is_401(h):
+  cookie = session.new_session("alice", KEY, NOW - session.SESSION_TTL_S)
+  out = auth_call(h, auth_deps(h), "GET", "me", cookies={session.SESSION_COOKIE: cookie})
+  assert out["statusCode"] == 401
+
+
+def test_a_session_signed_with_the_previous_key_still_works(h):
+  d = auth_deps(h, auth={**AUTH, "session_key_previous": OLD_KEY})
+  out = auth_call(
+    h, d, "GET", "me", cookies={session.SESSION_COOKIE: session.new_session("bob", OLD_KEY, NOW)}
+  )
+  assert json.loads(out["body"]) == {"username": "bob"}
+
+
+def test_me_is_503_not_401_when_the_keys_cant_be_read(h):
+  cookie = session.new_session("alice", KEY, NOW)
+  out = auth_call(h, auth_deps(h, auth={}), "GET", "me", cookies={session.SESSION_COOKIE: cookie})
+  assert out["statusCode"] == 503 and "cookies" not in out
+
+
+def test_signout_clears_the_session_cookie(h):
+  out = auth_call(h, auth_deps(h), "POST", "auth/signout", ctype="application/json")
+  assert out["statusCode"] == 200
+  value, attrs = set_cookies(out)[session.SESSION_COOKIE]
+  assert value == "" and f"Path={BASE};" in attrs and "Max-Age=0" in attrs
+
+
+@pytest.mark.parametrize(
+  "ctype", [None, "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"]
+)
+def test_a_cross_site_form_cant_sign_anyone_out(h, ctype):
+  cookie = session.new_session("alice", KEY, NOW)
+  out = auth_call(
+    h, auth_deps(h), "POST", "auth/signout", cookies={session.SESSION_COOKIE: cookie}, ctype=ctype
+  )
+  assert out["statusCode"] == 415 and "cookies" not in out
+
+
+@pytest.mark.parametrize("method, path", [("GET", "auth/start"), ("GET", "me"), ("GET", "auth/callback/abc"),
+                                          ("POST", "auth/signout")])  # fmt: skip
+def test_sign_in_routes_are_behind_the_origin_lock(h, method, path):
+  d = auth_deps(h, env={"ENFORCE_ORIGIN": "true"}, secrets=("s3cret",))
+  out = auth_call(h, d, method, path, ctype="application/json")
+  assert out["statusCode"] == 403
+  out = auth_call(h, d, method, path, ctype="application/json", headers={"x-kamp-origin": "s3cret"})
+  assert out["statusCode"] != 403
+
+
+def test_sign_in_logs_and_metric_lines_carry_no_token_nonce_or_name(h, caplog, capsys):
+  fm = AuthLastfm(session_name="AliCe")
+  d = auth_deps(h, fm=fm)
+  with caplog.at_level("INFO"):
+    state, nonce, _ = start(h, d)
+    auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state},
+              query={"token": "SECRET-TOKEN"})  # fmt: skip
+    fm.error = lastfm.LastfmError(14, "This token has not been authorized")
+    state, nonce2, _ = start(h, d)
+    auth_call(h, d, "GET", f"auth/callback/{nonce2}", cookies={session.STATE_COOKIE: state},
+              query={"token": "SECRET-TOKEN"})  # fmt: skip
+  text = " ".join(r.getMessage() for r in caplog.records) + capsys.readouterr().out
+  assert caplog.records
+  for secret in ("SECRET-TOKEN", nonce, nonce2, "alice", "AliCe", "SHARED", KEY):
+    assert secret not in text
+
+
+def test_each_sign_in_request_emits_one_line_with_its_outcome(h, capsys):
+  d = auth_deps(h)
+  state, nonce, _ = start(h, d)
+  auth_call(
+    h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state}, query={"token": "T"}
+  )
+  auth_call(h, d, "GET", "me")
+  lines = _emf(capsys)
+  assert [x["auth"] for x in lines] == ["started", "signed_in", "anonymous"]
+  assert [x["LastfmCalls"] for x in lines] == [0, 1, 0]
+  assert all(
+    set(m["Name"] for m in x["_aws"]["CloudWatchMetrics"][0]["Metrics"]) == {"LastfmCalls"} for x in lines
+  )
