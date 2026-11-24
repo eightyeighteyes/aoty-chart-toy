@@ -26,6 +26,12 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
                                         --proxy, api/ and data/ go to that env instead: kamp.fm
                                         for staging and prod; for sandbox, its execute-api URL
                                         and its site bucket (it has no CloudFront path).
+  <base>api/{me,auth/*,groups*}         fake sign-in and groups (AOTY-52, tools/preview_groups.py:
+  <base>data/groups/<id>/chart.json     its docstring lists the special names and seeded groups).
+                                        "sign in with last.fm" signs you in as alice;
+                                        <base>api/auth/start?as=bob&next=<path> as anyone else.
+                                        With --proxy sandbox --sign-in-as NAME, sign-in mints a
+                                        real sandbox session for NAME instead (admin credentials).
   any other path under <base>           index.html, as kamp.fm's shell function does
 with kamp.fm's Content-Security-Policy, so CSP violations show in the browser console.
 data/ is git-ignored, so real charts copied there stay local.
@@ -48,6 +54,8 @@ sys.path[:0] = [str(REPO), str(REPO / "lambdas"), str(REPO / "lambdas" / "chart"
 
 import api_core  # noqa: E402
 import chart_core  # noqa: E402
+import preview_groups  # noqa: E402  (tools/, beside this script)
+from common import session  # noqa: E402
 from common.albumkey import album_key, join_key  # noqa: E402
 from scripts import build_shell  # noqa: E402
 
@@ -278,8 +286,9 @@ class KampProxy:
   def __init__(self, base_url):
     self.base_url, self.label = base_url, base_url
 
-  def api(self, method, rest, body, ctype):
-    return forward(self.base_url, method, rest, body, ctype)
+  def api(self, method, rest, body, ctype, query=""):
+    # No sign-in here: Last.fm would send you back to kamp.fm, so writes answer 401.
+    return (*forward(self.base_url, method, rest, body, ctype, query), [])
 
   def data(self, rest):
     return forward(self.base_url, "GET", rest)
@@ -291,8 +300,11 @@ class SandboxProxy:
 
   def __init__(self, stack):
     self.api_base = f"{stack['api_endpoint']}{stack['base_path']}"
+    self.base = stack["base_path"]
     self.bucket, self.prefix = stack["site_bucket_name"], stack["s3_key_prefix"]
     self.label = f"{self.api_base} and s3://{self.bucket}/{self.prefix}"
+    self.session_name = None  # --sign-in-as: sign-in is simulated here (see SandboxSession)
+    self.cookie = None  # the minted session while "signed in"
 
   @classmethod
   def from_terraform(cls):
@@ -302,8 +314,30 @@ class SandboxProxy:
       raise SystemExit(f"can't read sandbox's stack outputs (terraform init there first?):\n{out.stderr}")
     return cls(json.loads(out.stdout))
 
-  def api(self, method, rest, body, ctype):
-    return forward(self.api_base, method, rest, body, ctype)
+  def sign_in_as(self, name):
+    """AOTY-52: Last.fm's sign-in would land on sandbox's own origin, not here, so with
+    --sign-in-as the proxy mints a real session for name with sandbox's session_key (read from
+    SSM with your admin credentials) and adds it to the api requests it forwards. auth/start
+    and auth/signout are answered here; everything else is sandbox's real API."""
+    out = subprocess.run(["aws", "ssm", "get-parameter", "--name", "/kamp-aoty/sandbox/session_key",
+                          "--with-decryption", "--query", "Parameter.Value", "--output", "text"],
+                         capture_output=True, text=True)  # fmt: skip
+    if out.returncode != 0:
+      raise SystemExit(f"can't read sandbox's session_key (admin credentials?):\n{out.stderr}")
+    self.session_name, self._key = name.lower(), out.stdout.strip()
+
+  def api(self, method, rest, body, ctype, query=""):
+    if self.session_name:
+      path = rest.rstrip("/")
+      if path == "api/auth/start":
+        self.cookie = session.new_session(self.session_name, self._key, time.time())
+        landing = dict(urllib.parse.parse_qsl(query)).get("next") or self.base
+        return 302, b"", "text/plain", [("Location", landing if landing.startswith(self.base) else self.base)]
+      if path == "api/auth/signout":
+        self.cookie = None
+        return 200, b'{"signed_out": true}', "application/json", []
+    cookie = f"{session.SESSION_COOKIE}={self.cookie}" if self.cookie else None
+    return (*forward(self.api_base, method, rest, body, ctype, query, cookie), [])
 
   def data(self, rest):
     out = subprocess.run(["aws", "s3", "cp", f"s3://{self.bucket}/{self.prefix}{rest}", "-", "--only-show-errors"],
@@ -322,12 +356,22 @@ def make_proxy(name):
   return SandboxProxy.from_terraform() if name == "sandbox" else KampProxy(KAMP[name])
 
 
-def forward(target, method, rest, body=b"", ctype=None):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+  def redirect_request(self, *args, **kwargs):
+    return None  # a redirect comes back as an HTTPError, passed through like any other answer
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def forward(target, method, rest, body=b"", ctype=None, query="", cookie=None):
   """(status, body, content type) from the real site for <target><rest>: errors pass through."""
-  req = urllib.request.Request(f"{target}{rest}", data=body if method == "POST" else None, method=method,
-                               headers={"User-Agent": "aoty-serve-shell/1", **({"Content-Type": ctype} if ctype else {})})  # fmt: skip
+  headers = {"User-Agent": "aoty-serve-shell/1", **({"Content-Type": ctype} if ctype else {}),
+             **({"Cookie": cookie} if cookie else {})}  # fmt: skip
+  url = f"{target}{rest}{'?' + query if query else ''}"
+  req = urllib.request.Request(url, data=body if method != "GET" else None, method=method, headers=headers)
   try:
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with _OPENER.open(req, timeout=30) as r:
       return r.status, r.read(), r.headers.get("Content-Type", "application/json")
   except urllib.error.HTTPError as e:
     return e.code, e.read(), e.headers.get("Content-Type", "application/json")
@@ -336,17 +380,39 @@ def forward(target, method, rest, body=b"", ctype=None):
 def handler_for(base, out, data, proxy=None):
   syncs = {}  # username -> when its pretend sync started
   polls = {}  # username -> status polls so far (crowded*'s throttled ones)
+  groups = preview_groups.FakeGroups()  # sign-in and groups (AOTY-52)
 
   class Handler(http.server.BaseHTTPRequestHandler):
     def proxied(self, method, rest, body=b""):
       if rest.startswith("data/"):
         status, payload, ctype = proxy.data(rest)
         return self.send(status, payload, ctype, "no-cache")
-      status, payload, ctype = proxy.api(method, rest, body, self.headers.get("Content-Type"))
-      return self.send(status, payload, ctype, "no-store")
+      status, payload, ctype, extra = proxy.api(method, rest, body, self.headers.get("Content-Type"), self.query)
+      return self.send(status, payload, ctype, "no-store", extra)
 
-    def api(self, method, rest):
-      """A stand-in for the API (AOTY-22): POST sync starts a pretend sync, status follows it."""
+    def cookies(self):
+      out = {}
+      for part in (self.headers.get("Cookie") or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k:
+          out[k] = v
+      return out
+
+    def api(self, method, rest, body=b""):
+      """A stand-in for the API (AOTY-22): POST sync starts a pretend sync, status follows it.
+      Sign-in and groups (AOTY-52) are preview_groups.FakeGroups'."""
+      try:
+        parsed = json.loads(body or b"{}")
+      except ValueError:
+        parsed = None
+      if not isinstance(parsed, dict):
+        return self.send(400, b'{"error":"send a JSON object"}', "application/json")
+      query = dict(urllib.parse.parse_qsl(self.query))
+      answer = groups.api(method, rest, query, parsed, self.headers.get("Content-Type"), self.cookies(), base)
+      if answer is not None:
+        status, payload, extra = answer
+        raw = b"" if payload is None else json.dumps(payload).encode()
+        return self.send(status, raw, "application/json", "no-store", extra)
       parts = rest.split("/")  # api, users, <name>, sync|status
       if len(parts) != 4 or parts[:2] != ["api", "users"] or parts[3] not in ("sync", "status"):
         return self.send(404, b'{"error":"not found"}', "application/json")
@@ -392,16 +458,25 @@ def handler_for(base, out, data, proxy=None):
       self.send(*((200, json.dumps(chart).encode()) if chart else (404, b"{}")), "application/json", "no-cache")
       return True
 
-    def do_POST(self):
-      path = self.path.split("?", 1)[0]
+    def write(self, method):
+      path, _, self.query = self.path.partition("?")
       body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
       if path.startswith(f"{base}api/"):
         rest = path[len(base) :]
-        return self.proxied("POST", rest, body) if proxy else self.api("POST", rest)
+        return self.proxied(method, rest, body) if proxy else self.api(method, rest, body)
       return self.send(405, b"", "text/plain")
 
+    def do_POST(self):
+      return self.write("POST")
+
+    def do_PATCH(self):
+      return self.write("PATCH")
+
+    def do_DELETE(self):
+      return self.write("DELETE")
+
     def do_GET(self):
-      path = self.path.split("?", 1)[0]
+      path, _, self.query = self.path.partition("?")
       if not path.startswith(base):
         return self.send(404, b"not under the base path\n", "text/plain")
       rest = path[len(base) :]
@@ -412,6 +487,10 @@ def handler_for(base, out, data, proxy=None):
       if rest.startswith("data/"):
         if self.first_visit_chart(rest):
           return None
+        gparts = rest.split("/")  # data, groups, <slug>, chart.json
+        if len(gparts) == 4 and gparts[1] == "groups" and gparts[3] == "chart.json" and gparts[2] in groups.groups:
+          chart = groups.chart(gparts[2])
+          return self.send(*((200, json.dumps(chart).encode()) if chart else (404, b"{}")), "application/json", "no-cache")
         f = data / rest[len("data/") :]
         return self.file(f, "no-cache") if f.is_file() else self.send(404, b"{}", "application/json")
       f = out / rest
@@ -422,8 +501,10 @@ def handler_for(base, out, data, proxy=None):
     def file(self, f, cache):
       self.send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"), cache)
 
-    def send(self, status, body, ctype, cache="no-store"):
+    def send(self, status, body, ctype, cache="no-store", extra=()):
       self.send_response(status)
+      for k, v in extra:
+        self.send_header(k, v)
       self.send_header("Content-Type", ctype)
       self.send_header("Content-Security-Policy", CSP)
       self.send_header("Cache-Control", cache)
@@ -443,7 +524,12 @@ def main():
   p.add_argument("--proxy", choices=sorted(PROXIES),
                  help="send api/ and data/ to that environment (real users, real syncs); sandbox "
                       "reads data/ from its bucket with your AWS credentials")  # fmt: skip
+  p.add_argument("--sign-in-as", metavar="NAME",
+                 help="with --proxy sandbox: 'sign in with last.fm' signs you in as NAME with a real "
+                      "session minted from sandbox's session_key (admin credentials), AOTY-52")  # fmt: skip
   args = p.parse_args()
+  if args.sign_in_as and args.proxy != "sandbox":
+    p.error("--sign-in-as works only with --proxy sandbox")
   build_shell.build(args.base, out=OUT)
   if args.sample:
     f = args.data / "users" / args.sample.lower() / "chart.json"
@@ -451,6 +537,8 @@ def main():
     f.write_text(json.dumps(sample_chart(args.sample)), encoding="utf-8")
     print(f"sample chart: {f}")
   proxy = make_proxy(args.proxy)
+  if args.sign_in_as:
+    proxy.sign_in_as(args.sign_in_as)
   if proxy:
     print(f"api/ and data/ go to {proxy.label}: syncs are real (the API's cooldown still applies)")
   server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data, proxy))

@@ -87,13 +87,18 @@ def test_app_js_has_no_inline_handlers_or_eval():
   assert 'addEventListener("error"' in js
 
 
-def test_the_shell_has_one_polite_live_region_per_page(tmp_path):
-  # The sync banner (chart pages) and the intro form's message (the intro page): never both shown.
+# The polite live regions. Only the sync banner speaks on its own (chart pages); every other one
+# is empty until it answers something the visitor just did: a form's message (the intro's, and
+# AOTY-52's create, rename and add) or an action's (sign in or out, copy link).
+LIVE_REGIONS = {"banner-msg", "intro-msg", "account-msg", "share-msg", "create-msg", "rename-msg", "add-msg"}
+
+
+def test_the_shell_has_one_live_region_that_speaks_on_its_own(tmp_path):
   bs.build(BASE, out=tmp_path / "web")
   html = (tmp_path / "web" / "index.html").read_text()
-  assert html.count("aria-live=") == 2
-  assert re.search(r'id="banner-msg" role="status" aria-live="polite"', html)
-  assert re.search(r'id="intro-msg" role="status" aria-live="polite"', html)
+  found = set(re.findall(r'id="([a-z-]+)" role="status" aria-live="polite"', html))
+  assert found == LIVE_REGIONS
+  assert html.count("aria-live=") == len(LIVE_REGIONS)
   assert 'id="banner-detail" aria-hidden="true"' in html
 
 
