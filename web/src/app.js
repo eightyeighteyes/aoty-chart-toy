@@ -948,14 +948,28 @@
     out.type = "button";
     out.className = "link-button";
     out.textContent = "sign out";
-    out.addEventListener("click", () => signOut(out));
-    row.replaceChildren(name, " · ", groups, " · ", out);
+    out.addEventListener("click", () => signOut(out, false));
+    // AOTY-57: also revokes the sessions of every other browser or copied cookie.
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "link-button";
+    all.textContent = "sign out everywhere";
+    all.addEventListener("click", () => signOut(all, true));
+    row.replaceChildren(name, " · ", groups, " · ", out, " · ", all);
   }
 
-  async function signOut(button) {
+  async function signOut(button, everywhere) {
     if (isBusy(button)) return;
     busy(button, true, "signing out…");
-    const r = await apiCall("POST", "auth/signout");
+    const r = await apiCall("POST", everywhere ? "auth/signout?everywhere=1" : "auth/signout");
+    if (everywhere && r.status === 401) {  // this session was already revoked elsewhere
+      me = null;
+      renderAccount();
+      showGroupTools(false);
+      $("account-msg").textContent = "you were already signed out.";
+      $("account-row").querySelector("a").focus();
+      return;
+    }
     if (r.status !== 200) {
       busy(button, false);
       $("account-msg").textContent = "couldn't sign out just now. try again?";
@@ -964,7 +978,7 @@
     me = null;
     renderAccount();
     showGroupTools(false);
-    $("account-msg").textContent = "signed out.";
+    $("account-msg").textContent = everywhere ? "signed out everywhere." : "signed out.";
     $("account-row").querySelector("a").focus();
   }
 

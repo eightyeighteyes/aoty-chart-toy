@@ -100,7 +100,12 @@ class FakeGroups:
         landing = base
       return 302, None, [("Location", landing), ("Set-Cookie", f"{COOKIE}={name}; Path={base}; Max-Age=2592000; SameSite=Lax")]
     if path == "api/auth/signout" and method == "POST":
-      return 200, {"signed_out": True}, [("Set-Cookie", f"{COOKIE}=; Path={base}; Max-Age=0; SameSite=Lax")]
+      out = {"signed_out": True}
+      if query.get("everywhere") == "1":  # AOTY-57; the fake cookie is just a name, so nothing to revoke
+        if not user:
+          return 401, {"error": "signed_out"}, []
+        out["everywhere"] = True
+      return 200, out, [("Set-Cookie", f"{COOKIE}=; Path={base}; Max-Age=0; SameSite=Lax")]
     if path == "api/me" and method == "GET":
       if not user:
         return 401, {"error": "signed_out", "group_writes": True}, []
