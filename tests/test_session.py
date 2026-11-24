@@ -1,4 +1,7 @@
-"""Signed sessions, sign-in state and cookies (lambdas/common/session.py, AOTY-47)."""
+"""Signed sessions, sign-in state and cookies (lambdas/common/session.py, AOTY-47), and revocation
+(AOTY-57)."""
+
+import pytest
 
 from common import session as s
 
@@ -93,3 +96,22 @@ def test_cookie_attributes():
   cleared = s.clear_cookie(s.STATE_COOKIE, "/toys/aoty/api/auth/")
   assert cleared.startswith("__Secure-kamp_aoty_state=; Path=/toys/aoty/api/auth/; Max-Age=0;")
   assert "Secure" in cleared and "HttpOnly" in cleared
+
+
+def test_a_session_is_revoked_at_or_before_the_cutoff():
+  claims = {"u": "alice", "iat": 1000, "exp": 9000}
+  assert not s.is_revoked(claims, None)  # never revoked
+  assert s.is_revoked(claims, 1000)  # the same second: fail safe
+  assert s.is_revoked(claims, 1000.5) and s.is_revoked(claims, 2000)
+  assert not s.is_revoked(claims, 999)  # signed in again after the revoke
+
+
+@pytest.mark.parametrize("cutoff", ["1000", {"S": "1000"}, True, [1]])
+def test_a_cutoff_that_isnt_a_number_revokes(cutoff):
+  assert s.is_revoked({"u": "alice", "iat": 5000, "exp": 9000}, cutoff)
+
+
+@pytest.mark.parametrize("iat", [None, "1000", True, 1000.0])
+def test_a_session_without_a_usable_iat_is_revoked_once_there_is_a_cutoff(iat):
+  assert s.is_revoked({"u": "alice", "iat": iat, "exp": 9000}, 1)
+  assert not s.is_revoked({"u": "alice", "iat": iat, "exp": 9000}, None)

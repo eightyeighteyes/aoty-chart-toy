@@ -11,6 +11,12 @@ pass as a session and vice versa:
 Keys are SSM SecureStrings (session_key, plus session_key_previous during a rotation). Signing
 always uses the current key; verifying tries current, then previous. A key shorter than
 MIN_KEY_BYTES is treated as missing, so a placeholder value can't quietly sign sessions.
+
+Revocation (AOTY-57): "sign out everywhere" stores a per-user cutoff, revoked_at (epoch seconds),
+and a session whose signed iat is at or before it is revoked. A cutoff rather than a counter
+signed into the cookie, so the cookie format is unchanged and sessions issued before this existed
+are covered too. The cost is that a sign-in in the very second of the revoke is revoked as well:
+it fails safe, and signing in again takes a Last.fm round trip.
 """
 
 import base64
@@ -83,6 +89,23 @@ def verify(kind, token, keys, now):
   if not isinstance(exp, int) or isinstance(exp, bool) or exp <= now:
     return None
   return claims
+
+
+def is_revoked(claims, revoked_at):
+  """Whether "sign out everywhere" has revoked this verified session.
+
+  revoked_at: None when the user never revoked, else the stored cutoff. Anything that isn't a
+  number (a hand-written runbook value of the wrong type, say) revokes: fail closed. So does a
+  session without a usable iat.
+  """
+  if revoked_at is None:
+    return False
+  if isinstance(revoked_at, bool) or not isinstance(revoked_at, (int, float)):
+    return True
+  iat = (claims or {}).get("iat")
+  if isinstance(iat, bool) or not isinstance(iat, int):
+    return True
+  return iat <= revoked_at
 
 
 def new_session(username, key, now):
