@@ -42,6 +42,9 @@ module "stack" {
   cloudfront_distribution_arn = "arn:aws:cloudfront::424416271636:distribution/EU1A3HSUCEQS9" # kamp.fm
   # DLQs and the uptime check only (AOTY-27): the full set is prod's, and alarms past 10 cost.
   alarms = "basic"
+  # The execute-api lock (AOTY-26): user routes need kamp.fm's origin secret. Turned on 2026-11-23
+  # after the api logged origin_ok=True for requests through kamp.fm (infra/README.md).
+  enforce_origin = true
 }
 
 # One object so staging and prod expose identical outputs; kamp-site reads
