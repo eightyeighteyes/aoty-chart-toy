@@ -1,6 +1,7 @@
 """The API's pure core (lambdas/api/api_core.py): routing, the sync decision, status stages."""
 
 import json
+from urllib.parse import parse_qsl, urlsplit
 
 import api_core as core
 import pytest
@@ -50,10 +51,68 @@ COOL = 600
     ("GET", f"{BASE}api/users//status", ("not_found", None)),
     ("GET", "/toys/aoty/api/health", ("not_found", None)),
     ("GET", f"{BASE}api/nope", ("not_found", None)),
+    ("GET", f"{BASE}api/auth/start", ("auth_start", None)),
+    ("POST", f"{BASE}api/auth/start", ("method", None)),
+    ("GET", f"{BASE}api/me", ("me", None)),
+    ("GET", f"{BASE}api/me/", ("me", None)),
+    ("POST", f"{BASE}api/me", ("method", None)),
+    ("POST", f"{BASE}api/auth/signout", ("auth_signout", None)),
+    ("GET", f"{BASE}api/auth/signout", ("method", None)),
+    ("GET", f"{BASE}api/auth/callback/abc_DEF-123", ("auth_callback", "abc_DEF-123")),
+    ("POST", f"{BASE}api/auth/callback/abc", ("method", None)),
+    ("GET", f"{BASE}api/auth/callback/", ("not_found", None)),
+    ("GET", f"{BASE}api/auth/callback/a.b", ("not_found", None)),
+    ("GET", f"{BASE}api/auth/callback/{'a' * 65}", ("not_found", None)),
   ],
 )
 def test_route(method, path, expected):
   assert core.route(method, path, BASE) == expected
+
+
+# ---- sign-in ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+  "raw, expected",
+  [
+    (None, BASE),
+    ("", BASE),
+    (BASE, BASE),
+    (f"{BASE}user/alice", f"{BASE}user/alice"),
+    (f"{BASE}group/the-server?user=bob", f"{BASE}group/the-server?user=bob"),
+    ("/toys/aoty/", BASE),  # another env's base
+    ("//evil.example/", BASE),
+    ("https://evil.example/", BASE),
+    (f"{BASE}/evil.example", BASE),
+    (f"{BASE}\\evil.example", BASE),
+    (f"{BASE}x\r\nSet-Cookie: a=b", BASE),
+    (f"{BASE}x y", BASE),
+    (f"{BASE}<script>", BASE),
+    (BASE + "a" * 600, BASE),
+  ],
+)
+def test_safe_next(raw, expected):
+  assert core.safe_next(raw, BASE) == expected
+
+
+def test_with_query_adds_or_replaces_a_param():
+  assert core.with_query(BASE, signin="failed") == f"{BASE}?signin=failed"
+  assert core.with_query(f"{BASE}group/x?user=bob", signin="failed") == f"{BASE}group/x?user=bob&signin=failed"
+  assert core.with_query(f"{BASE}?signin=ok&a=1", signin="failed") == f"{BASE}?a=1&signin=failed"
+
+
+def test_lastfm_auth_url_puts_the_nonce_in_the_callback_path():
+  url = core.lastfm_auth_url("KEY", "https://kamp.fm/", BASE, "n0nce")
+  query = dict(parse_qsl(urlsplit(url).query))
+  assert url.startswith("https://www.last.fm/api/auth/?")
+  assert query == {"api_key": "KEY", "cb": f"https://kamp.fm{BASE}api/auth/callback/n0nce"}
+
+
+def test_session_username():
+  assert core.session_username({"u": "alice"}) == "alice"
+  assert core.session_username({"u": "Alice"}) is None
+  assert core.session_username({"u": 3}) is None
+  assert core.session_username(None) is None
 
 
 def test_routed_names_still_need_validation():

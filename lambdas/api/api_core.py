@@ -24,7 +24,7 @@ import ipaddress
 import json
 import math
 import re
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote, urlencode
 
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
 ACTIVE = frozenset({"queued", "syncing", "retrying"})
@@ -33,18 +33,35 @@ STUCK_AFTER = 30 * 60  # a sync that hasn't moved this long is dead (OOM, timeou
 BUILDING_MAX = 5 * 60  # the chart builder runs within seconds of a sync; past this, give up waiting
 DATING_FRESH = 10 * 60  # charts rebuild about once a minute while albums resolve
 _USER_ROUTE = re.compile(r"api/users/([^/]+)/(sync|status)/?")
+_CALLBACK_ROUTE = re.compile(r"api/auth/callback/([A-Za-z0-9_-]{1,64})/?")
+USER_ACTIONS = frozenset({"sync", "status"})
+# Sign-in (AOTY-47): path -> (action, method). Only the callback changes anything on a GET, and
+# only after its state check; signout is a JSON-only POST like sync.
+_AUTH_ROUTES = {
+  "api/auth/start": ("auth_start", "GET"),
+  "api/me": ("me", "GET"),
+  "api/auth/signout": ("auth_signout", "POST"),
+}
 
 
 def route(method, path, base):
-  """(action, username) for a request: action is health, sync, status, method or not_found.
+  """(action, arg) for a request. action is health, sync, status, auth_start, auth_callback, me,
+  auth_signout, method or not_found.
 
-  username is lowercased but not yet validated (the caller answers 400 for a bad one).
+  For sync and status, arg is the username, lowercased but not yet validated (the caller answers
+  400 for a bad one). For auth_callback it's the state nonce from the path. Otherwise None.
   """
   if not path.startswith(base):
     return "not_found", None
   rest = path[len(base) :]
   if rest == "api/health":
     return ("health", None) if method in ("GET", "HEAD") else ("method", None)
+  auth = _AUTH_ROUTES.get(rest.rstrip("/"))
+  if auth:
+    return (auth[0], None) if method == auth[1] else ("method", None)
+  m = _CALLBACK_ROUTE.fullmatch(rest)
+  if m:
+    return ("auth_callback", m.group(1)) if method == "GET" else ("method", None)
   m = _USER_ROUTE.fullmatch(rest)
   if not m:
     return "not_found", None
@@ -52,6 +69,46 @@ def route(method, path, base):
   if method != ("POST" if action == "sync" else "GET"):
     return "method", None
   return action, unquote(m.group(1)).strip().lower()
+
+
+# ---- sign-in (AOTY-47) ----------------------------------------------------------------------
+
+LASTFM_AUTH_URL = "https://www.last.fm/api/auth/"
+_NEXT_CHARS = re.compile(r"[A-Za-z0-9/_.~%?=&+-]{1,512}")
+
+
+def safe_next(raw, base):
+  """Where a sign-in may land: a path under base, else base itself.
+
+  raw is the already-decoded ?next= value. It must start with base (which starts with "/"), and
+  may hold no "//" or backslash (either could make a browser read it as another host), no control
+  characters or spaces (header splitting), only URL-safe characters, and at most 512 of them.
+  """
+  if not isinstance(raw, str) or not raw.startswith(base) or "//" in raw or "\\" in raw:
+    return base
+  return raw if _NEXT_CHARS.fullmatch(raw) else base
+
+
+def with_query(path, **params):
+  """path with params added to (or replacing in) its query string."""
+  head, _, query = path.partition("?")
+  pairs = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k not in params]
+  return f"{head}?{urlencode(pairs + list(params.items()))}"
+
+
+def lastfm_auth_url(api_key, public_origin, base, nonce):
+  """Last.fm's web-auth page, sending the visitor back to our callback with the nonce in its path.
+
+  The nonce goes in the path, not the query: Last.fm appends ?token=... to cb itself.
+  """
+  cb = f"{public_origin.rstrip('/')}{base}api/auth/callback/{nonce}"
+  return f"{LASTFM_AUTH_URL}?{urlencode({'api_key': api_key, 'cb': cb})}"
+
+
+def session_username(claims):
+  """The username a verified session names, or None if it isn't one the api would accept."""
+  u = (claims or {}).get("u")
+  return u if isinstance(u, str) and USERNAME_RE.match(u) else None
 
 
 # Answers for the sync request's metric line (AOTY-41), by status where the body can't tell them
