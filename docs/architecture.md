@@ -245,7 +245,7 @@ Built: the api, the table and the editing UI (AOTY-52: the group page's owner-on
 every member is ready (`groupedit.rebuild`), with one poller per page so a rename's old slug is
 never read again. A group is
 addressed by a slug made from its name; renaming it moves it to the new name's slug. Writes need a
-session and are off in prod (`group_writes`) until sessions can be revoked (AOTY-57). Layout and
+session; `group_writes` (Terraform) can turn them off per env. Layout and
 rules: `lambdas/common/groups.py`; runbook: `infra/README.md`, "Groups".
 
 ```mermaid

@@ -507,8 +507,8 @@ def get_me(deps, event, headers, _arg, base, info):
   if not keys:  # not 401: an SSM outage mustn't tell the page the visitor signed out
     info["auth"] = "unavailable"
     return _response(503, {"error": "signin_unavailable"})
-  # group_writes tells the page whether to offer sign-in, create and edit at all (off in prod until
-  # AOTY-57), so it hides them rather than showing controls that answer 503.
+  # group_writes tells the page whether to offer sign-in, create and edit at all, so where it's off
+  # the page hides them rather than showing controls that answer 503.
   writes = deps.env.get("GROUP_WRITES") == "true"
   try:
     user, word = session_user(deps, event, keys, consistent=False)
@@ -577,7 +577,7 @@ _AUTH_HANDLERS = {"auth_start": auth_start, "auth_callback": auth_callback, "me"
 #
 # GET groups/<id> also counts members syncing now (queued or running, not stuck), for the page.
 #
-# Writes: 503 groups_unavailable unless GROUP_WRITES=true (Terraform; off in prod until AOTY-57),
+# Writes: 503 groups_unavailable unless GROUP_WRITES=true (Terraform, the kill switch),
 # 415 unless JSON, 503 signin_unavailable when the session keys can't be read, 401 without a
 # session, 404 for no such group, 403 for someone else's. A changed membership stamps the meta's
 # chart_requested_at and pokes the chart builder; a delete or a move asks it to delete the old

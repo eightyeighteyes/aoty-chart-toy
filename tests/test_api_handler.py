@@ -739,7 +739,7 @@ def test_me_says_whether_group_writes_are_on(h, value, offered):
     d.env["GROUP_WRITES"] = value
   out = auth_call(h, d, "GET", "me", cookies={session.SESSION_COOKIE: session.new_session("alice", KEY, NOW)})
   assert json.loads(out["body"]) == {"username": "alice", "group_writes": offered}
-  out = auth_call(h, d, "GET", "me")  # signed out too, so prod can hide "sign in" until AOTY-57
+  out = auth_call(h, d, "GET", "me")  # signed out too, so an env with writes off can hide "sign in"
   assert out["statusCode"] == 401
   assert json.loads(out["body"]) == {"error": "signed_out", "group_writes": offered}
 

@@ -920,7 +920,7 @@
   }
 
   // The row under the top bar. Hidden while api/me is unknown, and where group writes are off
-  // (prod until AOTY-57): signing in would offer nothing there yet.
+  // (group_writes): signing in would offer nothing there.
   function renderAccount() {
     const row = $("account-row");
     $("account").hidden = me === undefined || !writesOn;

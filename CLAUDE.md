@@ -514,8 +514,8 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - **`everywhere` needs a valid, unrevoked session**, so a revoked copy can't keep pushing the cutoff
   forward. Its write only moves the cutoff forward (`groups_store.REVOKE`). On failure it answers
   503 and keeps the cookie.
-- Prod's `group_writes` flip is a separate PR, after the release carrying this is live in prod.
-  Flipping it in the same PR could turn writes on before the revocation code is deployed.
+- Prod's `group_writes` flip was its own PR (AOTY-62), after the release carrying this was live in
+  prod, so writes couldn't turn on before the revocation code was deployed.
 - Runbook (revoking one user by hand): `infra/README.md`, "Revoking sessions".
 
 ## Groups (AOTY-48, 2026-11-24)
@@ -540,7 +540,7 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   refused before anything is written while new users are paused or the queue is busy. A failed SQS
   send keeps the member (`sync: not_queued`): undoing it would be a second write that can fail too.
 - `block_group_adds` on the users row is read here (409 `cannot_add`, neutral); AOTY-49 sets it.
-- **Prod writes are off** (`group_writes`, Terraform) until revocable sessions land (AOTY-57).
+- **`group_writes`** (Terraform) is the writes kill switch: on in every env since AOTY-62.
 - **Migration:** the beta's S3 groups move with `tools/beta_group.py migrate` right after each
   env's deploy; until then their charts serve but don't rebuild.
 
@@ -549,7 +549,7 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - User decisions: the sign-in state is **its own quiet row under the top bar**, right-aligned,
   never between the two endorsements. "Start a group" is on the intro (signed-in only) and in the
   "your groups" dialog.
-- `api/me` carries `group_writes` (signed in or not). Where it's off (prod until AOTY-57), the page
+- `api/me` carries `group_writes` (signed in or not). Where it's off, the page
   shows no sign-in row, no "start a group" and no edit controls. A 503 from `me` is "unknown",
   never "signed out".
 - **One poller per group page**, with a generation counter checked after every await. A rename
