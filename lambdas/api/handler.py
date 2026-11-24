@@ -468,14 +468,17 @@ def get_me(deps, event, headers, _arg, base, info):
   if not keys:  # not 401: an SSM outage mustn't tell the page the visitor signed out
     info["auth"] = "unavailable"
     return _response(503, {"error": "signin_unavailable"})
+  # group_writes tells the page whether to offer sign-in, create and edit at all (off in prod until
+  # AOTY-57), so it hides them rather than showing controls that answer 503.
+  writes = deps.env.get("GROUP_WRITES") == "true"
   user = session_user(deps, event, keys)
   if not user:
     had_cookie = session.SESSION_COOKIE in session.parse_cookies(event.get("cookies"))
     info["auth"] = "bad_session" if had_cookie else "anonymous"
     clear = [session.clear_cookie(session.SESSION_COOKIE, base)] if had_cookie else None
-    return _response(401, {"error": "signed_out"}, clear)
+    return _response(401, {"error": "signed_out", "group_writes": writes}, clear)
   info["auth"] = "me"
-  return _response(200, {"username": user})
+  return _response(200, {"username": user, "group_writes": writes})
 
 
 def post_signout(deps, event, headers, _arg, base, info):
