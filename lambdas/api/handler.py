@@ -11,6 +11,8 @@ answer, errors included, is Cache-Control: no-store.
                                       503 Last.fm or SQS unavailable, too busy for a new user
                                       (busy), or new users paused (paused)
   GET  <base>api/users/<name>/status  200 status (api_core.status) | 404 unknown user
+  GET  <base>api/auth/start, GET <base>api/auth/callback/<nonce>, GET <base>api/me,
+  POST <base>api/auth/signout         sign in with Last.fm (AOTY-47; see "sign-in" below)
 
 POST sync, in order:
   1. A user with no row (or an expired not_found one) is new. Unless new users are paused, the
@@ -54,7 +56,7 @@ from pathlib import Path
 
 import api_core as core
 
-from common import dynamo, emf, guardrails, lastfm
+from common import dynamo, emf, guardrails, lastfm, session
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -62,6 +64,9 @@ log.setLevel(logging.INFO)
 ORIGIN_HEADER = "x-kamp-origin"  # added by kamp.fm's CloudFront on the api origins (kamp-site)
 NOT_FOUND_TTL_S = 86400
 LASTFM_TIMEOUT_S = 3
+# SecureStrings set by hand (infra/README.md, "Sign-in"); readable by the api alone.
+AUTH_SECRETS = (*session.KEY_NAMES, "lastfm_api_secret")
+AUTH_ACTIONS = frozenset({"auth_start", "auth_callback", "me", "auth_signout"})
 
 
 def _build_sha(path):
@@ -85,11 +90,13 @@ class Deps:
   current guardrails.Settings (cached by guardrails.Reader in the real thing)."""
 
   def __init__(self, *, ddb, sqs, env, lastfm_client=None, lastfm_factory=None, clock=time.time,
-               settings=None, origin_secrets=None):  # fmt: skip
+               settings=None, origin_secrets=None, auth_secrets=None):  # fmt: skip
     self.ddb, self.sqs, self.env, self.clock = ddb, sqs, env, clock
     self._lastfm, self._lastfm_factory = lastfm_client, lastfm_factory
     self.settings = settings or (lambda: guardrails.DEFAULTS)
     self.origin_secrets = origin_secrets or (lambda: ())
+    # {name: value} of AUTH_SECRETS that exist (sign-in, AOTY-47); none means sign-in is down (503).
+    self.auth_secrets = auth_secrets or (lambda: {})
     self.depth_cache = self.counters_cache = None  # (expires, value): _queue_depth, _queue_counters
 
   @property
@@ -115,29 +122,57 @@ class Deps:
     ssm = boto3.client("ssm")
     reader = guardrails.Reader(ssm, env["SSM_PREFIX"], env_name=env.get("AOTY_ENV", ""))
     secrets = guardrails.OriginSecrets(ssm, env["SSM_PREFIX"])
+    auth = guardrails.Secrets(ssm, env["SSM_PREFIX"], AUTH_SECRETS)
     return cls(ddb=boto3.client("dynamodb"), sqs=boto3.client("sqs"), env=env, lastfm_factory=make_lastfm,
-               settings=reader.get, origin_secrets=secrets.get)  # fmt: skip
+               settings=reader.get, origin_secrets=secrets.get, auth_secrets=auth.get)  # fmt: skip
 
 
 _deps = None
 
 
-def _response(status, body):
-  return {
+def _response(status, body, cookies=None):
+  out = {
     "statusCode": status,
     # no-store: no cache between here and the browser may keep an API answer, errors included.
     "headers": {"content-type": "application/json", "cache-control": "no-store"},
     "body": json.dumps(body),
   }
+  if cookies:
+    out["cookies"] = list(cookies)  # payload v2: Set-Cookie goes here, not in headers
+  return out
+
+
+def _redirect(location, cookies=()):
+  """A 302 to Last.fm's auth page or to a path on this site (relative, from core.safe_next), with
+  no Referer to carry the callback's token onward."""
+  out = {
+    "statusCode": 302,
+    "headers": {"location": location, "cache-control": "no-store", "referrer-policy": "no-referrer"},
+    "body": "",
+  }
+  if cookies:
+    out["cookies"] = list(cookies)
+  return out
 
 
 def handler(event, context, deps=None):
-  """Dispatch; a POST sync's outcome is counted once here, whichever return it took (AOTY-41)."""
+  """Dispatch; a POST sync's outcome is counted once here, whichever return it took (AOTY-41).
+  Sign-in requests get one line too, with the outcome as a plain field (no new metric names)."""
   info = {}
   started = time.time()
   out = _dispatch(event or {}, context, deps, info)
   if info.get("action") == "sync":
     _emit(info, out, time.time() - started)
+  elif info.get("action") in AUTH_ACTIONS:
+    emf.emit(
+      os.environ.get("AOTY_ENV", ""),
+      {"LastfmCalls": (info.get("lastfm_calls", 0), "Count")},
+      source="api",
+      auth=info.get("auth") or str(out.get("statusCode")),
+      action=info["action"],
+      status=out.get("statusCode"),
+      seconds=round(time.time() - started, 3),
+    )
   return out
 
 
@@ -163,7 +198,7 @@ def _dispatch(event, context, deps, info):
   global _deps
   base = os.environ.get("BASE_PATH", "/")
   method = ((event.get("requestContext") or {}).get("http") or {}).get("method", "GET").upper()
-  action, name = core.route(method, event.get("rawPath", ""), base)
+  action, arg = core.route(method, event.get("rawPath", ""), base)
   info["action"] = action
   if action == "health":
     # "source" tells CD's smoke test this is deployed code, not Terraform's placeholder, and
@@ -174,7 +209,8 @@ def _dispatch(event, context, deps, info):
     return _response(405, {"error": "method not allowed"})
   if action == "not_found":
     return _response(404, {"error": "not found"})
-  if not core.USERNAME_RE.match(name):
+  user_route = action in core.USER_ACTIONS
+  if user_route and not core.USERNAME_RE.match(arg):
     return _response(400, {"error": "invalid username"})
   if deps is None:
     _deps = _deps or Deps.from_env()
@@ -183,16 +219,21 @@ def _dispatch(event, context, deps, info):
   calls_before = deps.lastfm_calls()  # the client outlives the request: count the difference
   try:
     # Through kamp.fm's CloudFront, the request carries the origin secret. Health above is exempt,
-    # so a mis-set secret can't fail CD's smoke test.
+    # so a mis-set secret can't fail CD's smoke test. Sign-in routes are behind it like the rest.
     trusted = guardrails.origin_ok(headers.get(ORIGIN_HEADER), deps.origin_secrets())
     if not trusted and deps.env.get("ENFORCE_ORIGIN") == "true":
+      info["auth"] = "origin_refused"
       return _response(403, {"error": "forbidden"})
     if action == "status":
-      return get_status(deps, name)
+      return get_status(deps, arg)
+    if action in AUTH_ACTIONS:
+      return _AUTH_HANDLERS[action](deps, event, headers, arg, base, info)
     source_ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
-    return post_sync(deps, name, headers, core.client_ip(headers, source_ip, trusted), trusted, info)
+    return post_sync(deps, arg, headers, core.client_ip(headers, source_ip, trusted), trusted, info)
   except Exception:
-    log.exception("%s failed for %s", action, _tag(name))
+    # Never log a sign-in route's arg: it's the state nonce.
+    log.exception("%s failed for %s", action, _tag(arg) if user_route else "-")
+    info["auth"] = "error"
     return _response(503, {"error": "unavailable"})
   finally:
     info["lastfm_calls"] = deps.lastfm_calls() - calls_before
@@ -289,6 +330,115 @@ def post_sync(deps, name, headers, ip, trusted=False, info=None):
   _burn_tickets(deps, previous["queue_ticket"])
   row = _get_user(deps, name)
   return _response(202, {"queued": True, "status": _status(deps, row, now, cooldown)})
+
+
+# ---- sign-in (AOTY-47) --------------------------------------------------------------------
+#
+# GET  auth/start?next=<path>   302 to Last.fm, with a signed state cookie (10 min) holding a nonce
+#                               and the landing path; 503 when the keys or secret can't be read
+# GET  auth/callback/<nonce>    Last.fm sends the visitor back here with ?token=. The nonce must
+#                               match the state cookie's (else no Last.fm call at all), then
+#                               auth.getSession names the user: session cookie set, 302 to next.
+#                               Every failure is a 302 to the landing path with ?signin=failed.
+# GET  me                       200 {username} | 401 signed out | 503 keys unreadable
+# POST auth/signout             JSON only (415 otherwise): clears the session cookie
+#
+# The session cookie is scoped to <base> and is sent with every request to it, from any kamp.fm
+# page: the whole kamp.fm origin is the trust boundary. Signing out clears this browser's cookie
+# only; a copied cookie stays valid until it expires.
+
+
+def _state_path(base):
+  return f"{base}api/auth/"
+
+
+def _auth_keys(deps):
+  return session.usable_keys(deps.auth_secrets())
+
+
+def session_user(deps, event, keys):
+  """The signed-in username, or None. keys: _auth_keys(deps), non-empty (the caller has already
+  answered 503 when it's empty)."""
+  token = session.parse_cookies(event.get("cookies")).get(session.SESSION_COOKIE)
+  claims = session.verify(session.SESSION, token, keys, int(deps.clock()))
+  return core.session_username(claims)
+
+
+def auth_start(deps, event, headers, _arg, base, info):
+  keys, secrets = _auth_keys(deps), deps.auth_secrets()
+  origin = deps.env.get("PUBLIC_ORIGIN")
+  if not keys or not secrets.get("lastfm_api_secret") or not origin:
+    info["auth"] = "unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  landing = core.safe_next((event.get("queryStringParameters") or {}).get("next"), base)
+  nonce = session.new_nonce()
+  state = session.new_state(nonce, landing, keys[0], int(deps.clock()))
+  info["auth"] = "started"
+  return _redirect(
+    core.lastfm_auth_url(deps.lastfm.api_key, origin, base, nonce),
+    [session.set_cookie(session.STATE_COOKIE, state, _state_path(base), session.STATE_TTL_S)],
+  )
+
+
+def auth_callback(deps, event, headers, nonce, base, info):
+  clear_state = session.clear_cookie(session.STATE_COOKIE, _state_path(base))
+  keys, secret = _auth_keys(deps), deps.auth_secrets().get("lastfm_api_secret")
+  if not keys or not secret:
+    info["auth"] = "unavailable"
+    return _redirect(core.with_query(base, signin="failed"), [clear_state])
+  cookie = session.parse_cookies(event.get("cookies")).get(session.STATE_COOKIE)
+  claims = session.verify(session.STATE, cookie, keys, int(deps.clock()))
+  if not session.nonce_matches(claims, nonce):
+    # A forged or replayed callback, an expired sign-in, or a second tab's newer state cookie.
+    info["auth"] = "bad_state" if cookie else "no_state"
+    return _redirect(core.with_query(base, signin="failed"), [clear_state])
+  landing = core.safe_next(claims.get("next"), base)  # checked at start too; signed, but cheap
+  failed = core.with_query(landing, signin="failed")
+  token = (event.get("queryStringParameters") or {}).get("token") or ""
+  if not token or len(token) > 128:
+    info["auth"] = "no_token"
+    return _redirect(failed, [clear_state])
+  try:
+    name = deps.lastfm.auth_get_session(token, secret)
+  except Exception as e:  # LastfmError (a used or expired token), a timeout, SSM for the API key
+    log.warning("auth.getSession failed: %s", getattr(e, "code", type(e).__name__))
+    info["auth"] = "lastfm_failed"
+    return _redirect(failed, [clear_state])
+  if not name or not core.USERNAME_RE.match(name):
+    info["auth"] = "bad_name"
+    return _redirect(failed, [clear_state])
+  log.info("signed in %s", _tag(name))
+  info["auth"] = "signed_in"
+  signed = session.new_session(name, keys[0], int(deps.clock()))
+  return _redirect(landing, [clear_state, session.set_cookie(session.SESSION_COOKIE, signed, base,
+                                                             session.SESSION_TTL_S)])  # fmt: skip
+
+
+def get_me(deps, event, headers, _arg, base, info):
+  keys = _auth_keys(deps)
+  if not keys:  # not 401: an SSM outage mustn't tell the page the visitor signed out
+    info["auth"] = "unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  user = session_user(deps, event, keys)
+  if not user:
+    had_cookie = session.SESSION_COOKIE in session.parse_cookies(event.get("cookies"))
+    info["auth"] = "bad_session" if had_cookie else "anonymous"
+    clear = [session.clear_cookie(session.SESSION_COOKIE, base)] if had_cookie else None
+    return _response(401, {"error": "signed_out"}, clear)
+  info["auth"] = "me"
+  return _response(200, {"username": user})
+
+
+def post_signout(deps, event, headers, _arg, base, info):
+  if not headers.get("content-type", "").lower().startswith("application/json"):
+    info["auth"] = "not_json"
+    return _response(415, {"error": "send content-type: application/json"})
+  info["auth"] = "signed_out"
+  return _response(200, {"signed_out": True}, [session.clear_cookie(session.SESSION_COOKIE, base)])
+
+
+_AUTH_HANDLERS = {"auth_start": auth_start, "auth_callback": auth_callback, "me": get_me,
+                  "auth_signout": post_signout}  # fmt: skip
 
 
 # ---- users table --------------------------------------------------------------------------
