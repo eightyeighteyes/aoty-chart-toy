@@ -637,7 +637,7 @@ def test_the_full_sign_in_sets_a_session_and_me_names_the_user(h):
   cookie, attrs = got[session.SESSION_COOKIE]
   assert f"Path={BASE};" in attrs and "SameSite=Lax" in attrs and "Max-Age=2592000" in attrs
   me = auth_call(h, d, "GET", "me", cookies={session.SESSION_COOKIE: cookie})
-  assert me["statusCode"] == 200 and json.loads(me["body"]) == {"username": "alice"}
+  assert me["statusCode"] == 200 and json.loads(me["body"]) == {"username": "alice", "group_writes": False}
 
 
 @pytest.mark.parametrize("case", ["no_cookie", "wrong_nonce", "expired", "session_as_state", "other_key"])
@@ -724,7 +724,20 @@ def test_a_session_signed_with_the_previous_key_still_works(h):
   out = auth_call(
     h, d, "GET", "me", cookies={session.SESSION_COOKIE: session.new_session("bob", OLD_KEY, NOW)}
   )
-  assert json.loads(out["body"]) == {"username": "bob"}
+  assert json.loads(out["body"])["username"] == "bob"
+
+
+@pytest.mark.parametrize("value, offered", [("true", True), ("false", False), (None, False)])
+def test_me_says_whether_group_writes_are_on(h, value, offered):
+  d = auth_deps(h)
+  d.env.pop("GROUP_WRITES", None)
+  if value is not None:
+    d.env["GROUP_WRITES"] = value
+  out = auth_call(h, d, "GET", "me", cookies={session.SESSION_COOKIE: session.new_session("alice", KEY, NOW)})
+  assert json.loads(out["body"]) == {"username": "alice", "group_writes": offered}
+  out = auth_call(h, d, "GET", "me")  # signed out too, so prod can hide "sign in" until AOTY-57
+  assert out["statusCode"] == 401
+  assert json.loads(out["body"]) == {"error": "signed_out", "group_writes": offered}
 
 
 def test_me_is_503_not_401_when_the_keys_cant_be_read(h):

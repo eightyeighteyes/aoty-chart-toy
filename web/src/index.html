@@ -15,6 +15,7 @@
 <script src="{{INTRO}}" defer></script>
 <script src="{{FIRSTVISIT}}" defer></script>
 <script src="{{GROUP}}" defer></script>
+<script src="{{GROUPEDIT}}" defer></script>
 <script src="{{JS}}" defer></script>
 </head>
 <body>
@@ -38,6 +39,13 @@
   </nav>
   <p class="inspired">inspired by the community of <a href="https://www.newbandsforoldheads.com/">New Bands for Old Heads</a></p>
 </div>
+<!-- Sign-in state (AOTY-52): its own quiet row under the bar, never between the endorsements
+     (user decision 2026-11-24). app.js fills it from api/me, and leaves it hidden where group
+     writes are off. -->
+<div class="account" id="account" hidden>
+  <p class="account-row" id="account-row"></p>
+  <p class="account-msg" id="account-msg" role="status" aria-live="polite"></p>
+</div>
 
 <!-- The front door (AOTY-23): shown only on the bare base path; app.js reveals it. -->
 <section class="intro" id="intro" hidden>
@@ -54,7 +62,8 @@
     </div>
     <p class="lookup-msg" id="intro-msg" role="status" aria-live="polite"></p>
   </form>
-  <p class="privacy">we read your public last.fm plays. no login, nothing sold.</p>
+  <p class="intro-groups" id="intro-groups" hidden>listening with friends? <button type="button" class="link-button" id="intro-start">start a group</button> and see the albums you all played.</p>
+  <p class="privacy">we read your public last.fm plays. no login needed, nothing sold.</p>
 </section>
 
 <main class="poster" id="poster" data-view="poster" data-rank="track">
@@ -79,6 +88,36 @@
         <select id="who"><option value="">everyone</option></select>
       </label>
     </div>
+    <!-- Group pages (AOTY-52): share for everyone, edit for the owner only. -->
+    <div class="group-tools" id="group-tools" hidden>
+      <button type="button" class="pill" id="share">copy link</button>
+      <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
+      <span class="share-url" id="share-url" hidden></span>
+      <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>
+    </div>
+    <section class="edit" id="edit" aria-labelledby="edit-title" hidden>
+      <h2 class="edit-title" id="edit-title" tabindex="-1">edit group</h2>
+      <form class="lookup" id="rename-form" novalidate>
+        <label class="lookup-label" for="rename-name">name</label>
+        <div class="lookup-row">
+          <input id="rename-name" name="name" type="text" autocomplete="off" aria-describedby="rename-msg">
+          <button type="submit">rename</button>
+        </div>
+        <p class="lookup-msg" id="rename-msg" role="status" aria-live="polite"></p>
+      </form>
+      <h3 class="members-title" id="members-title" tabindex="-1">members</h3>
+      <ul class="members" id="members"></ul>
+      <form class="lookup" id="add-form" novalidate>
+        <label class="lookup-label" for="add-name">add someone by last.fm username</label>
+        <div class="lookup-row">
+          <input id="add-name" name="user" type="text" maxlength="128" autocomplete="off"
+                 autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="add-msg">
+          <button type="submit">add</button>
+        </div>
+        <p class="lookup-msg" id="add-msg" role="status" aria-live="polite"></p>
+      </form>
+      <p class="edit-danger"><button type="button" class="quiet danger" id="delete-group">delete this group</button></p>
+    </section>
   </header>
   <div id="ranking"></div>
 </main>
@@ -91,5 +130,31 @@
   <p>data from last.fm, <a href="https://www.last.fm/">powered by audioscrobbler</a> · release years from <a href="https://musicbrainz.org/">musicbrainz</a> · covers from <a href="https://www.last.fm/">last.fm</a> and the <a href="https://coverartarchive.org/">cover art archive</a></p>
   <p>not affiliated with last.fm or musicbrainz.</p>
 </footer>
+
+<!-- Your groups (AOTY-52), opened from the account row or the intro's "start a group". -->
+<dialog class="sheet" id="mygroups" aria-labelledby="mygroups-title">
+  <h2 class="sheet-title" id="mygroups-title">your groups</h2>
+  <ul class="mygroups-list" id="mygroups-list"></ul>
+  <p class="sheet-text" id="mygroups-empty" hidden>no groups yet.</p>
+  <form class="lookup" id="create-form" novalidate hidden>
+    <label class="lookup-label" for="create-name">start a group</label>
+    <div class="lookup-row">
+      <input id="create-name" name="name" type="text" autocomplete="off" placeholder="what's it called?"
+             aria-describedby="create-msg">
+      <button type="submit">start it</button>
+    </div>
+    <p class="lookup-msg" id="create-msg" role="status" aria-live="polite"></p>
+  </form>
+  <div class="sheet-actions"><button type="button" class="quiet" id="mygroups-close">close</button></div>
+</dialog>
+<!-- Confirmations (remove a member, delete the group): never window.confirm. -->
+<dialog class="sheet" id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+  <h2 class="sheet-title" id="confirm-title"></h2>
+  <p class="sheet-text" id="confirm-text"></p>
+  <div class="sheet-actions">
+    <button type="button" class="quiet" id="confirm-no">cancel</button>
+    <button type="button" class="solid" id="confirm-yes"></button>
+  </div>
+</dialog>
 </body>
 </html>

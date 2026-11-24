@@ -31,6 +31,7 @@ ASSETS = {
   "intro.js": "INTRO",
   "firstvisit.js": "FIRSTVISIT",
   "group.js": "GROUP",
+  "groupedit.js": "GROUPEDIT",
   "favicon.svg": "ICON",
   "apple-touch-icon.png": "TOUCH",
 }

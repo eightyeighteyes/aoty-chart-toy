@@ -423,7 +423,15 @@ owner-only; at most 25 members, enforced in the same transaction as each add.
 
 **Prod is read-only until AOTY-57.** `group_writes` (Terraform, `envs/*/main.tf`) is on in staging and
 sandbox. Off, every write answers 503 `groups_unavailable`; reads and group pages work. Turn it
-on in prod only once sessions can be revoked.
+on in prod only once sessions can be revoked. `api/me` reports it (`group_writes`, signed in or
+not), and the page hides the sign-in row, "start a group" and the edit controls while it's off
+(AOTY-52), so prod shows none of them yet.
+
+**The page (AOTY-52):** the owner edits on the group page itself ("edit group": add, remove,
+rename, delete, copy link); `?edit=1` opens the panel, which is where a new group lands. Preview
+every state with `tools/serve_shell.py` (fake groups and special names: `tools/preview_groups.py`),
+or against sandbox's real API with `--proxy sandbox --sign-in-as <name>`, which mints a session
+from sandbox's `session_key` (admin credentials) because Last.fm's callback can't reach localhost.
 
 **By hand:** `tools/beta_group.py` (admin credentials) writes the same items the api does.
 `create --env <env> --name ... --owner <lastfm name>` makes a group from `.env`'s `LASTFM_USERS`
