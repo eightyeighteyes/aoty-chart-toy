@@ -169,6 +169,25 @@ def test_not_found_private_and_success_emit_nothing(monkeypatch, capsys):
   assert _emf_lines(capsys) == []
 
 
+@pytest.mark.parametrize("code", [4, 14, 15])
+def test_a_bad_sign_in_token_is_an_answer_not_a_lastfm_error(monkeypatch, capsys, code):
+  # Anyone can send the callback a made-up token: that mustn't trip the lastfm-errors alarm.
+  monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "kamp-aoty-staging-api")
+  with pytest.raises(lastfm.LastfmError) as e:
+    client(FakeHTTP((403, {"error": code, "message": "token"}))).auth_get_session("T", "S")
+  assert e.value.code == code
+  assert _emf_lines(capsys) == []
+
+
+def test_a_bad_signature_still_counts_and_token_codes_count_elsewhere(monkeypatch, capsys):
+  monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "kamp-aoty-staging-api")
+  with pytest.raises(lastfm.LastfmError):  # 13: our shared secret is wrong
+    client(FakeHTTP((403, {"error": 13, "message": "Invalid method signature"}))).auth_get_session("T", "S")
+  with pytest.raises(lastfm.LastfmError):  # code 4 from any other method is still a failure
+    client(FakeHTTP((403, {"error": 4, "message": "auth"}))).user_info("x")
+  assert [x["code"] for x in _emf_lines(capsys)] == ["13", "4"]
+
+
 def test_no_metric_lines_outside_a_lambda(monkeypatch, capsys):
   monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
   with pytest.raises(lastfm.LastfmError):
