@@ -65,7 +65,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `infra/modules/stack/dashboard.tf`, `lambdas/common/emf.py` | AOTY-41: the per-env CloudWatch dashboard (at most 50 metrics, checked by a precondition) and the shared EMF line builder. |
 | `infra/modules/stack/alarms.tf`, `infra/global/alerts.tf` | AOTY-27: the alarms (one table, `alarms` = full/basic/none per env), and the global `kamp-aoty-alerts` topic and $40 budget. Runbook: `infra/README.md`, "Alarms". |
 | `lambdas/chart/group_core.py`, `tools/beta_group.py` | AOTY-50: a group's members' stores → `data/groups/<slug>/chart.json` with M0's rules (`tests/test_ranking.py` checks parity with `score_rankings`). Groups are addressed by a readable slug, not a random id (user decision 2026-11-23: guessable is fine, it's public Last.fm data). The tool creates a group in the groups table by hand (members from `.env`), queues its syncs, rebuilds, shows and deletes it, and `migrate`s the pre-AOTY-48 S3 beta files. |
-| `lambdas/common/groups.py`, `lambdas/api/groups_store.py` | AOTY-48 owned groups: the table layout and pure rules (slugs, names, `member_state`), and the api's transactional writes (cap of 25, owner checks). Routes in `api/handler.py` ("groups"); tests in `tests/test_api_groups.py`. |
+| `lambdas/common/groups.py`, `lambdas/api/groups_store.py` | AOTY-48 owned groups: the table layout and pure rules (slugs, names, `member_state`), and the api's transactional writes (cap of 25, owner checks), plus a visit's sync claim (AOTY-55). Routes in `api/handler.py` ("groups"); tests in `tests/test_api_groups.py`. |
 | `tools/prewarm.py` | AOTY-42: pre-warms the shared `albums` table. Candidates under Last.fm's names: `tag.getTopAlbums` for the year's tag (listeners tag albums by release year) and the top artists' `artist.getTopAlbums`. The undated ones go to **mb-cold** in sync's message format, so the lane stays the only writer and hot work is never delayed. No local index check: the lane does it, and old albums with a trusted index hit cost no MusicBrainz request. `--dry-run` sizes it. First prod run (2026-11-23): 2,315 candidates, 411 already dated, 1,904 queued, 214 Last.fm calls. Re-run weekly as the year fills. |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
@@ -538,6 +538,27 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   group". Ownership is `group.owner`, not membership: an owner who removed themselves still owns it.
 - Live regions: only the banner speaks on its own; the rest answer the visitor's own action
   (`tests/test_build_shell.py` lists them).
+
+## Group visit sync (AOTY-55, also AOTY-60, 2026-11-24)
+
+- **A group page's visit syncs its members:** `POST api/groups/<id>/sync`, once per page load. It's
+  **public and on in prod** (it's syncs, not edits), so it branches out in `_group_dispatch` before the
+  session check. Each member goes through `request_sync` (`lean=True`: no status re-read, so 25
+  members fit the api's 30 s). This is also how members who never visit stay fresh (AOTY-60).
+- **Group cooldown** `group_sync_cooldown_seconds` (SSM, 1 h): the meta's `sync_requested_at`,
+  claimed with a conditional update. It's given back only when nobody was queued because every send
+  failed, and only if it's still this visit's claim. A partial failure keeps it.
+- `pause_syncs`: 200 `paused`, nothing written. Skipped members: `not_found`, `private`,
+  `block_group_adds`.
+- **The per-user cooldown is the real abuse guard:** anyone can POST any (guessable) slug.
+- **Coalescing:** a group build stamps `chart_read_at` (ms) when it starts reading stores. A member's
+  build skips the group when `chart_read_at >= (sync_finished_at + 1) * 1000`. `sync_finished_at` is
+  whole seconds, so a read in the same second rebuilds. Sync saves the store before
+  `sync_finished_at`. `rename` doesn't copy `chart_read_at`.
+- The page re-reads quietly while `GET api/groups/<id>`'s `syncing` > 0 (`group.syncWatch`: 90 s
+  grace, 15 min cap). No banner: `member_state` keeps re-syncing members ready.
+- Preview: any seeded group's first load re-syncs it for 45 s; a reload is the cooldown;
+  `paused-crew` is `pause_syncs`.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

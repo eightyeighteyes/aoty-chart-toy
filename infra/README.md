@@ -482,6 +482,12 @@ default.
 | `sync_cooldown_seconds` | `600` | Per-user time between page-visit syncs. Raise to `3600` at scale. |
 | `new_users_per_ip_hour` | `10` | Distinct new usernames one IP may try per hour (429 `too_many_new`). |
 | `max_queue_for_new` | `500` | New users get 503 `busy` while the sync queue is deeper. |
+| `group_sync_cooldown_seconds` | `3600` | How often a group page's visit may sync its members (AOTY-55); within it, a visit queues nothing. |
+
+A group page's visit (`POST api/groups/<id>/sync`) needs no sign-in and anyone can send it for
+any slug, and slugs are guessable. What bounds the Last.fm calls it can cause is each member's own
+`sync_cooldown_seconds`: a member is synced at most once per cooldown however many groups or
+visits ask. The group cooldown only saves the api work. `pause_syncs` stops these too.
 
 ```sh
 aws ssm put-parameter --name /kamp-aoty/prod/pause_new_users --type String --value true --overwrite
