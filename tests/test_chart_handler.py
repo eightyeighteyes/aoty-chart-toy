@@ -18,6 +18,7 @@ ENV = {
   "AOTY_ENV": "test",
   "USERS_TABLE": "users",
   "ALBUMS_TABLE": "albums",
+  "GROUPS_TABLE": "groups",
   "STORE_BUCKET": "store",
   "SITE_BUCKET": "site",
   "SITE_PREFIX": "toys/aoty-test/",
@@ -60,6 +61,9 @@ class FakeS3:
     self.objects[(Bucket, Key)] = Body
     self.meta[(Bucket, Key)] = kw
 
+  def delete_object(self, Bucket, Key):
+    self.objects.pop((Bucket, Key), None)
+
   def put_store(self, plays, username="alice"):
     store = sync_core.new_store(2026)
     store["weeks"]["1767225600"] = {
@@ -80,10 +84,34 @@ class FakeS3:
     return {"Contents": [{"Key": k} for b, k in sorted(self.objects) if b == Bucket and k.startswith(Prefix)]}
 
 
+class ConditionFailed(Exception):
+  response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+
+
 class FakeDDB:
   def __init__(self, unprocessed_once=False):
     self.users, self.albums = {}, {}
+    self.groups = {}  # (pk, sk) -> plain item (AOTY-48)
     self.unprocessed_once, self.batch_gets, self.projections = unprocessed_once, 0, []
+
+  def add_group(self, slug, members, name=None, **meta):
+    pk = f"group#{slug}"
+    self.groups[(pk, "meta")] = {"pk": pk, "sk": "meta", "name": name or slug, "owner": members[0] if members else "x",
+                                 "member_count": len(members), **meta}  # fmt: skip
+    for m in members:
+      self.groups[(pk, f"member#{m}")] = {"pk": pk, "sk": f"member#{m}", "username": m}
+
+  def query(self, TableName, KeyConditionExpression, ExpressionAttributeValues, IndexName=None, **kw):
+    assert TableName == "groups"
+    v = dynamo.from_item(ExpressionAttributeValues)
+    if IndexName == "by_member":
+      assert KeyConditionExpression == "username = :u"
+      rows = [{"pk": it["pk"], "sk": it["sk"], "username": it["username"]}
+              for it in self.groups.values() if it.get("username") == v[":u"]]  # fmt: skip
+    else:
+      assert IndexName is None and KeyConditionExpression == "pk = :pk" and kw.get("ConsistentRead")
+      rows = [it for (p, _), it in sorted(self.groups.items()) if p == v[":pk"]]
+    return {"Items": [dynamo.to_item(r) for r in rows]}
 
   def add_album(self, artist, album, **fields):
     a, t = album_key(artist, album)
@@ -95,8 +123,16 @@ class FakeDDB:
     return {"Item": dynamo.to_item(row)} if row else {}
 
   def update_item(
-    self, TableName, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues
-  ):
+    self, TableName, Key, UpdateExpression, ExpressionAttributeValues, ExpressionAttributeNames=None,
+    ConditionExpression=None,
+  ):  # fmt: skip
+    if TableName == "groups":
+      assert (UpdateExpression, ConditionExpression) == ("SET chart_built_at = :t", "attribute_exists(pk)")
+      key = (Key["pk"]["S"], Key["sk"]["S"])
+      if key not in self.groups:
+        raise ConditionFailed()
+      self.groups[key]["chart_built_at"] = int(ExpressionAttributeValues[":t"]["N"])
+      return
     row = self.users.setdefault(Key["username"]["S"], {"username": Key["username"]["S"]})
     sets, _, removes = UpdateExpression.removeprefix("SET ").partition(" REMOVE ")
     for part in sets.split(", "):
@@ -398,17 +434,15 @@ def test_chart_plays_is_the_same_sum_sync_reports(h, world):
   assert ddb.users["alice"]["chart_plays"] == sum(sync_core.year_plays(store).values())
 
 
-# ---- groups (AOTY-50, beta) -------------------------------------------------------------
+# ---- groups (AOTY-50; in the groups table since AOTY-48) ---------------------------------
 
-GROUP = "the-server"  # a slug, as tools/beta_group.py makes
+GROUP = "the-server"  # a slug, as common/groups.py makes
 GROUP_CHART = ("site", f"toys/aoty-test/data/groups/{GROUP}/chart.json")
 
 
-def group_world():
+def group_world(**meta):
   s3, ddb = FakeS3(), FakeDDB()
-  s3.objects[("store", f"groups/{GROUP}/group.json")] = json.dumps(
-    {"name": "the server", "members": ["Alice", "bob", "carol", "dave", "eve"]}
-  ).encode()
+  ddb.add_group(GROUP, ["alice", "bob", "carol", "dave", "eve"], name="the server", **meta)
   s3.put_store({("A", "Shared"): 5, ("B", "Mine"): 50}, username="alice")
   s3.put_store({("A", "Shared"): 1}, username="bob")
   s3.put_store({("A", "Shared"): 2}, username="carol")
@@ -466,3 +500,60 @@ def test_the_pending_pass_rebuilds_each_group_of_a_rebuilt_member_once(h):
   assert puts.count(GROUP_CHART[1]) == 1  # both members rebuilt, the group once
   chart = s3.json(GROUP_CHART)
   assert "Later" in [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]]
+
+
+def test_a_group_build_is_skipped_once_its_chart_covers_the_request(h):
+  s3, ddb = group_world(chart_requested_at=NOW - 10, chart_built_at=NOW - 10)
+  out = h.handler({"group": GROUP, "requested_at": NOW - 10}, None, Deps(s3, ddb))
+  assert out["skipped"] == 1 and GROUP_CHART not in s3.objects
+  out = h.handler({"group": GROUP, "requested_at": NOW}, None, Deps(s3, ddb))
+  assert out["built"] == 1 and GROUP_CHART in s3.objects
+
+
+def test_a_group_build_stamps_the_request_it_read_not_its_end(h):
+  s3, ddb = group_world(chart_requested_at=NOW - 30)
+  meta = ddb.groups[(f"group#{GROUP}", "meta")]
+  real_put = s3.put_object
+
+  def change_mid_build(**kw):  # a member change lands while the build runs
+    meta["chart_requested_at"] = NOW - 5
+    return real_put(**kw)
+
+  s3.put_object = change_mid_build
+  h.handler({"group": GROUP, "requested_at": NOW - 30}, None, Deps(s3, ddb))
+  assert meta["chart_built_at"] == NOW - 30
+  s3.put_object = real_put
+  assert h.handler({"group": GROUP, "requested_at": NOW - 5}, None, Deps(s3, ddb))["built"] == 1
+
+
+def test_a_removed_member_drops_out_of_the_group_chart(h):
+  s3, ddb = group_world()
+  del ddb.groups[(f"group#{GROUP}", "member#alice")]
+  h.handler({"group": GROUP}, None, Deps(s3, ddb))
+  chart = s3.json(GROUP_CHART)
+  assert chart["members"] == ["bob", "carol"]
+  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]] == ["Shared"]
+
+
+def test_a_deleted_groups_chart_is_removed_unless_the_slug_is_back(h):
+  s3, ddb = group_world()
+  h.handler({"group": GROUP}, None, Deps(s3, ddb))
+  ddb.groups.clear()
+  assert h.handler({"group": GROUP, "deleted": True}, None, Deps(s3, ddb))["built"] == 1
+  assert GROUP_CHART not in s3.objects
+  ddb.add_group(GROUP, ["bob"], name="again")  # re-created before the delete event ran
+  h.handler({"group": GROUP, "deleted": True}, None, Deps(s3, ddb))
+  assert s3.json(GROUP_CHART)["name"] == "again"
+
+
+def test_a_build_for_a_group_deleted_mid_build_doesnt_recreate_its_meta(h):
+  s3, ddb = group_world(chart_requested_at=NOW)
+  real_put = s3.put_object
+
+  def delete_mid_build(**kw):
+    ddb.groups.clear()
+    return real_put(**kw)
+
+  s3.put_object = delete_mid_build
+  assert h.handler({"group": GROUP}, None, Deps(s3, ddb))["failed"] == 0
+  assert ddb.groups == {}

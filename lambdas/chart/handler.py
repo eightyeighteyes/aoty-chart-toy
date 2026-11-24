@@ -11,6 +11,13 @@ read older data can never overwrite a newer chart. Two events:
       last chart had pending albums, if at least one of those now has an albums item. An album
       the lane can never answer doesn't cause a rebuild loop. Corrections to an album that was
       already on a chart (index re-checks) show up at the user's next sync.
+  {"group": "<slug>", "requested_at": uts?}
+      From the api after a group change (AOTY-48). Skipped when the group's chart_built_at is at
+      or after requested_at. A group is also rebuilt after each member's own build.
+  {"group": "<slug>", "deleted": true}
+      From the api after a group was deleted or moved to a new slug: removes its chart, unless a
+      group with that slug exists again by now (then it's rebuilt). Coming through here orders the
+      delete after any build that was in flight.
 
 A build:
   1. Loads s3://$STORE_BUCKET/users/<u>/<year>/weeks.json.gz (no store: nothing to build).
@@ -39,6 +46,7 @@ import chart_core as core
 import group_core
 
 from common import dynamo, lastfm
+from common import groups as grp
 from common.albumkey import join_key, split_key
 from common.config import TARGET_YEAR
 
@@ -49,8 +57,6 @@ NAMESPACE = "kamp-aoty"
 BATCH_GET = 100  # DynamoDB BatchGetItem limit
 RETRIES = 4
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
-# A group's slug, its URL (tools/beta_group.py): lowercase letters, digits and inner dashes.
-GROUP_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$")
 # album.getInfo cover lookups per build: at Last.fm's 0.5 s pacing, ~60 s at most. A heavy
 # user's first chart needed ~50; the next build continues where this one stopped.
 COVER_LOOKUPS = 120
@@ -92,13 +98,19 @@ def handler(event, context, deps=None):
   totals = {"built": 0, "skipped": 0, "failed": 0, "checked": 0}
   if event.get("group"):
     group_id = str(event["group"])
-    _guarded(deps, group_id, totals, lambda: _count(totals, build_group(deps, group_id)))
+    if event.get("deleted"):
+      _guarded(deps, group_id, totals, lambda: _count(totals, delete_group_chart(deps, group_id)))
+    else:
+      requested_at = int(event.get("requested_at") or 0)
+      _guarded(
+        deps, group_id, totals, lambda: _count(totals, build_group(deps, group_id, requested_at=requested_at))
+      )
   elif event.get("pending"):
     rebuilt = []
     for row in _pending_users(deps):
       totals["checked"] += 1
       _guarded(deps, row["username"], totals, lambda r=row: _rebuild_if_resolved(deps, r, totals, rebuilt))
-    # Albums the mb lane just dated reach the groups too, each group once per run (AOTY-50 beta).
+    # Albums the mb lane just dated reach the groups too, each group once per run (AOTY-50).
     for group_id in _groups_with(deps, *rebuilt):
       _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
   else:
@@ -135,7 +147,7 @@ def _build_requested(deps, username, year, requested_at, totals):
     totals["skipped"] += 1
     return
   _count(totals, build(deps, username, row, year, totals))
-  # A sync's build: the groups this user is in get their new plays too (AOTY-50 beta).
+  # A sync's build: the groups this user is in get their new plays too (AOTY-50).
   for group_id in _groups_with(deps, username):
     _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
 
@@ -214,31 +226,35 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   return True
 
 
-def build_group(deps, group_id, year=TARGET_YEAR):
-  """One group's chart from its ready members' stores (group_core). False for no such group.
+def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0):
+  """One group's chart from its ready members' stores (group_core). False for no such group, or
+  when its chart already covers requested_at.
 
-  Beta (AOTY-50): groups are defined by hand with tools/beta_group.py, as
-  s3://$STORE_BUCKET/groups/<id>/group.json {"name", "members": [usernames]}. Members whose
-  sync hasn't finished are counted as waiting; not_found or private ones as unavailable.
+  The group is the groups table's partition (common/groups.py, AOTY-48). Members whose sync
+  hasn't finished are counted as waiting; not_found or private ones as unavailable
+  (groups.member_state, which the api's ready count shares).
+
+  chart_built_at is stamped with the chart_requested_at read before the build, not the time it
+  ends: a member change made while a 25-member build runs must not count as built.
   """
-  if not GROUP_ID_RE.match(group_id):
+  if not grp.SLUG_RE.match(group_id):
     log.warning("invalid group id in event; dropped")
     return False
-  body = _get_object(deps, deps.env["STORE_BUCKET"], group_key(group_id))
-  if body is None:
+  meta, members = _load_group(deps, group_id)
+  if meta is None:
     return False
-  group = json.loads(body)
+  if requested_at and (meta.get("chart_built_at") or 0) >= requested_at:
+    return False
   stores, waiting, unavailable, images = {}, 0, 0, {}
-  for member in dict.fromkeys(str(m).strip().lower() for m in group.get("members", [])):
+  for member in members:
     if not USERNAME_RE.match(member):
       continue
     row = _get_user(deps, member)
-    store = _load_store(deps, member, year) if row.get("sync_finished_at") else None
-    if row.get("state") in ("not_found", "private"):
+    state = grp.member_state(row)
+    store = _load_store(deps, member, year) if state == "ready" else None
+    if state == "unavailable":
       unavailable += 1
-    elif store is None or (
-      row.get("state") in ("queued", "syncing", "retrying") and not row.get("chart_built_at")
-    ):
+    elif store is None:
       waiting += 1  # a first sync still running; a re-sync of a ready member keeps them ranked
     else:
       stores[member] = store
@@ -246,37 +262,47 @@ def build_group(deps, group_id, year=TARGET_YEAR):
   keys = sorted({k for s in stores.values() for k in core.year_plays(s)})
   items = _get_items(deps, keys)
   chart, _ = group_core.build_group_chart(
-    stores, items, group_id=group_id, name=str(group.get("name") or ""), year=year,
+    stores, items, group_id=group_id, name=str(meta.get("name") or ""), year=year,
     waiting=waiting, unavailable=unavailable, now=int(deps.clock()), images=images,
   )  # fmt: skip
   _put_json(
     deps, deps.env["SITE_BUCKET"], group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id), chart,
     CacheControl="no-cache",
   )  # fmt: skip
+  if meta.get("chart_requested_at"):
+    _stamp_group(deps, group_id, meta["chart_requested_at"])
   log.info(
     "group %s: %d ready, %d waiting, %d albums shown", group_id, len(stores), waiting, len(chart["albums"])
   )
   return True
 
 
+def delete_group_chart(deps, group_id):
+  """A deleted or moved group's chart goes. If the slug is a group again by now, it's rebuilt
+  instead, so a quick delete-and-recreate doesn't lose the new group's chart."""
+  if not grp.SLUG_RE.match(group_id):
+    log.warning("invalid group id in event; dropped")
+    return False
+  meta, _ = _load_group(deps, group_id)
+  if meta is not None:
+    return build_group(deps, group_id)
+  deps.s3.delete_object(
+    Bucket=deps.env["SITE_BUCKET"], Key=group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id)
+  )
+  log.info("group %s: chart deleted", group_id)
+  return True
+
+
 def _groups_with(deps, *usernames):
-  """Ids of the groups that list any of these users. Beta: a few groups, so list and read them all."""
-  out, wanted = [], set(usernames)
-  if not wanted:
-    return out
-  try:
-    pages = deps.s3.list_objects_v2(Bucket=deps.env["STORE_BUCKET"], Prefix="groups/")
-  except Exception:
-    log.exception("could not list groups")
-    return out
-  for obj in pages.get("Contents") or []:
-    if not obj["Key"].endswith("/group.json"):
-      continue
-    body = _get_object(deps, deps.env["STORE_BUCKET"], obj["Key"])
-    members = {str(m).strip().lower() for m in (json.loads(body).get("members") or [])} if body else set()
-    if wanted & members:
-      out.append(obj["Key"].split("/")[1])
-  return out
+  """Slugs of the groups any of these users is in (the by_member index), in a stable order. A
+  lookup that fails is logged and skipped: the user's own chart is already built."""
+  out = set()
+  for username in dict.fromkeys(usernames):
+    try:
+      out.update(_member_groups(deps, username))
+    except Exception:
+      log.exception("could not look up the groups of %s", _tag(username))
+  return sorted(out)
 
 
 # ---- storage --------------------------------------------------------------------------
@@ -284,10 +310,6 @@ def _groups_with(deps, *usernames):
 
 def chart_key(site_prefix, username):
   return f"{site_prefix}data/users/{username}/chart.json"
-
-
-def group_key(group_id):
-  return f"groups/{group_id}/group.json"
 
 
 def group_chart_key(site_prefix, group_id):
@@ -376,6 +398,47 @@ def _get_items(deps, keys, keys_only=False):
         raise RuntimeError("BatchGetItem left unprocessed keys after retries")
       deps.sleep(0.2 * 2**attempt)
   return found
+
+
+# ---- groups table (AOTY-48) -------------------------------------------------------------
+
+
+def _query_all(deps, **kwargs):
+  items = []
+  while True:
+    out = deps.ddb.query(TableName=deps.env["GROUPS_TABLE"], **kwargs)
+    items += [dynamo.from_item(it) for it in out.get("Items", [])]
+    if not out.get("LastEvaluatedKey"):
+      return items
+    kwargs["ExclusiveStartKey"] = out["LastEvaluatedKey"]
+
+
+def _load_group(deps, group_id):
+  """(meta, [members]) from the group's partition, consistent; (None, []) for no such group."""
+  items = _query_all(deps, KeyConditionExpression="pk = :pk", ConsistentRead=True,
+                     ExpressionAttributeValues={":pk": {"S": grp.pk(group_id)}})  # fmt: skip
+  meta, members = grp.split_items(items)
+  return (meta, members) if meta else (None, [])
+
+
+def _member_groups(deps, username):
+  items = _query_all(deps, IndexName=grp.BY_MEMBER, KeyConditionExpression="username = :u",
+                     ExpressionAttributeValues={":u": {"S": username}})  # fmt: skip
+  return [s for s in (grp.slug_of(it.get("pk")) for it in items) if s]
+
+
+def _stamp_group(deps, group_id, built):
+  """chart_built_at on the meta, only while the group still exists: an update would otherwise
+  create a bare meta item for a group deleted mid-build."""
+  try:
+    deps.ddb.update_item(
+      TableName=deps.env["GROUPS_TABLE"], Key={"pk": {"S": grp.pk(group_id)}, "sk": {"S": grp.META}},
+      UpdateExpression="SET chart_built_at = :t", ConditionExpression="attribute_exists(pk)",
+      ExpressionAttributeValues={":t": {"N": str(built)}},
+    )  # fmt: skip
+  except Exception as e:
+    if _error_code(e) != "ConditionalCheckFailedException":
+      raise
 
 
 # ---- users table ------------------------------------------------------------------------
