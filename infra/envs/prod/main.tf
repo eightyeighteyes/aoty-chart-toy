@@ -45,7 +45,8 @@ module "stack" {
   # The execute-api lock (AOTY-26): user routes need kamp.fm's origin secret. Turned on after
   # staging's lock checked out on 2026-11-24 (infra/README.md, "Guardrails").
   enforce_origin = true
-  # group_writes stays off (the default) until sessions can be revoked (AOTY-57, AOTY-48).
+  # Group writes (AOTY-48), on once sessions could be revoked (AOTY-57, AOTY-62).
+  group_writes = true
 }
 
 # Same shape as staging; kamp-site reads data.terraform_remote_state.<x>.outputs.stack.<name>.

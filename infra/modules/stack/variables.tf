@@ -75,8 +75,8 @@ variable "enforce_origin" {
 variable "group_writes" {
   description = <<-EOT
     Allow the group write routes (AOTY-48): create, rename, delete, add and remove members. Off,
-    they answer 503 groups_unavailable and reads still work. Off in prod until sessions can be
-    revoked (AOTY-57). Terraform rather than SSM, like enforce_origin, so an SSM outage can't open it.
+    they answer 503 groups_unavailable and reads still work. The kill switch for writes. Terraform
+    rather than SSM, like enforce_origin, so an SSM outage can't open it.
   EOT
   type        = bool
   default     = false

@@ -45,7 +45,7 @@ module "stack" {
   # The execute-api lock (AOTY-26): user routes need kamp.fm's origin secret. Turned on 2026-11-23
   # after the api logged origin_ok=True for requests through kamp.fm (infra/README.md).
   enforce_origin = true
-  # Group writes (AOTY-48). Prod waits for revocable sessions (AOTY-57).
+  # Group writes (AOTY-48).
   group_writes = true
 }
 
