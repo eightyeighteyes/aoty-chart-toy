@@ -196,7 +196,8 @@ sequenceDiagram
 
 ## Sign-in (AOTY-47)
 
-Built: the api half. The page's sign-in state and buttons are AOTY-52. Nothing is stored: the
+Built: both halves. The page (AOTY-52) reads `api/me` on every load and shows the sign-in row
+under the top bar only where group writes are on. Nothing is stored: the
 session is a signed cookie, and Last.fm's session key is dropped. The secrets are SSM
 SecureStrings only the api can read (`session_key`, `session_key_previous`, `lastfm_api_secret`).
 Runbook: `infra/README.md`, "Sign-in".
@@ -223,14 +224,18 @@ sequenceDiagram
     API-->>V: 302 to next, session cookie {u, iat, exp} (30 days, Path=<base>, HttpOnly, Secure, SameSite=Lax)
   end
   V->>API: GET api/me (session cookie)
-  API-->>V: 200 {username} | 401 signed out | 503 keys unreadable
+  API-->>V: 200 {username, group_writes} | 401 {signed_out, group_writes} | 503 keys unreadable
   V->>API: POST api/auth/signout (JSON only)
   API-->>V: 200, cookie cleared
 ```
 
 ## Groups (AOTY-48)
 
-Built: the api and the table. The editing UI is AOTY-52, opting out is AOTY-49. A group is
+Built: the api, the table and the editing UI (AOTY-52: the group page's owner-only edit panel,
+"your groups" and create in a dialog). Opting out is AOTY-49. After each write the page re-reads
+`GET api/groups/<id>` and polls the group's chart.json every 5 s until the chart is rebuilt and
+every member is ready (`groupedit.rebuild`), with one poller per page so a rename's old slug is
+never read again. A group is
 addressed by a slug made from its name; renaming it moves it to the new name's slug. Writes need a
 session and are off in prod (`group_writes`) until sessions can be revoked (AOTY-57). Layout and
 rules: `lambdas/common/groups.py`; runbook: `infra/README.md`, "Groups".
