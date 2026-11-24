@@ -14,7 +14,7 @@ Steps:
   1. Disable the sync queue's event source mapping, so no new sync starts mid-reset.
   2. Purge the queues and their DLQs (SQS allows one purge per queue per 60 s).
   3. Delete every object version and delete marker in the store and site buckets.
-  4. Delete every item in the users table, and the albums table unless --keep-albums.
+  4. Delete every item in the users, guard and groups tables, and the albums table unless --keep-albums.
   5. Re-enable the mapping, even if a step failed.
 A sync that was already running when the mapping was disabled can still write afterwards
 (the sync timeout is 15 min). If that matters, run the reset again after it finishes.

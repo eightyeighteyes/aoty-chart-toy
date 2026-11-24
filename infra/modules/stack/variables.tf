@@ -72,6 +72,16 @@ variable "enforce_origin" {
   default     = false
 }
 
+variable "group_writes" {
+  description = <<-EOT
+    Allow the group write routes (AOTY-48): create, rename, delete, add and remove members. Off,
+    they answer 503 groups_unavailable and reads still work. Off in prod until sessions can be
+    revoked (AOTY-57). Terraform rather than SSM, like enforce_origin, so an SSM outage can't open it.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "sync_concurrency" {
   description = <<-EOT
     Syncs that run at once (AOTY-26): the sync mapping's maximum_concurrency. It caps the sync

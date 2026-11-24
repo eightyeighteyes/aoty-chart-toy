@@ -28,6 +28,8 @@ locals {
     USERS_TABLE    = aws_dynamodb_table.users.name
     ALBUMS_TABLE   = aws_dynamodb_table.albums.name
     GUARD_TABLE    = aws_dynamodb_table.guard.name
+    GROUPS_TABLE   = aws_dynamodb_table.groups.name
+    GROUP_WRITES   = tostring(var.group_writes)
     SITE_BUCKET    = aws_s3_bucket.site.bucket
     STORE_BUCKET   = aws_s3_bucket.store.bucket
     SYNC_QUEUE_URL = aws_sqs_queue.main["sync"].url
@@ -58,8 +60,23 @@ locals {
         resources = [aws_sqs_queue.main["sync"].arn]
       },
       {
-        actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+        # BatchGetItem: a group's members' rows, for its ready count (AOTY-48).
+        actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchGetItem"]
         resources = [aws_dynamodb_table.users.arn]
+      },
+      {
+        # Groups (AOTY-48). TransactWriteItems has no IAM action of its own: it authorizes as the
+        # Put, Update, Delete and ConditionCheck it carries.
+        actions = [
+          "dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem",
+        ]
+        resources = [aws_dynamodb_table.groups.arn, "${aws_dynamodb_table.groups.arn}/index/*"]
+      },
+      {
+        # A group change asks the chart builder for a rebuild, or to delete the chart (AOTY-48).
+        actions   = ["lambda:InvokeFunction"]
+        resources = ["arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-chart"]
       },
       {
         # The per-IP new-name limit, queue tickets and the measured wait (AOTY-26).
@@ -136,8 +153,9 @@ locals {
     ]
     chart = [
       {
-        # The sync worker's stores and the builder's own files beside them; the beta's group
-        # definitions (AOTY-50, tools/beta_group.py).
+        # The sync worker's stores and the builder's own files beside them. groups/* is the beta's
+        # S3 group files (AOTY-50), which the code no longer reads (AOTY-48 moved groups to the
+        # table); kept so a rollback still works until every env's beta groups are migrated.
         actions   = ["s3:GetObject"]
         resources = ["${aws_s3_bucket.store.arn}/users/*", "${aws_s3_bucket.store.arn}/groups/*"]
       },
@@ -162,8 +180,19 @@ locals {
         ]
       },
       {
+        # A deleted or renamed group's chart (AOTY-48): the builder removes it, so its single
+        # concurrency orders the delete after any build that was in flight.
+        actions   = ["s3:DeleteObject"]
+        resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/groups/*"]
+      },
+      {
         actions   = ["dynamodb:BatchGetItem"]
         resources = [aws_dynamodb_table.albums.arn]
+      },
+      {
+        # Groups (AOTY-48): a group's items, a member's groups (by_member), the build stamp.
+        actions   = ["dynamodb:Query", "dynamodb:UpdateItem"]
+        resources = [aws_dynamodb_table.groups.arn, "${aws_dynamodb_table.groups.arn}/index/*"]
       },
       {
         actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"]

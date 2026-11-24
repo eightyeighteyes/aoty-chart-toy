@@ -41,6 +41,65 @@ resource "aws_dynamodb_table" "guard" {
   }
 }
 
+# Owned groups (AOTY-48). Layout and rules: lambdas/common/groups.py. One partition per group:
+#   pk group#<slug>, sk meta               {name, owner, member_count, created_at, updated_at,
+#                                           chart_requested_at, chart_built_at}
+#   pk group#<slug>, sk member#<username>  {username, added_at}
+# Members are items, not a list, so by_member can answer "which groups is alice in?" (the chart
+# builder after a sync; AOTY-49's opt-out). by_owner is sparse: only meta items carry owner.
+resource "aws_dynamodb_table" "groups" {
+  name         = "${local.prefix}-groups"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+  attribute {
+    name = "username"
+    type = "S"
+  }
+  attribute {
+    name = "owner"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "by_member"
+    projection_type = "KEYS_ONLY"
+    key_schema {
+      attribute_name = "username"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "pk"
+      key_type       = "RANGE"
+    }
+  }
+
+  global_secondary_index {
+    name               = "by_owner"
+    projection_type    = "INCLUDE"
+    non_key_attributes = ["name", "member_count", "updated_at"]
+    key_schema {
+      attribute_name = "owner"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "pk"
+      key_type       = "RANGE"
+    }
+  }
+
+  deletion_protection_enabled = var.environment == "prod"
+}
+
 # The shared release-year cache. Keyed like M0's identity (aoty.py): a match needs title AND
 # artist credit, so "1989" by two artists can't collide, and one Query returns an artist's
 # albums. artist_key = norm(album artist); title_key = norm(base_title(album)), so edition

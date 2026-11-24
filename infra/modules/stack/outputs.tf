@@ -64,6 +64,7 @@ output "table_names" {
     users  = aws_dynamodb_table.users.name
     albums = aws_dynamodb_table.albums.name
     guard  = aws_dynamodb_table.guard.name
+    groups = aws_dynamodb_table.groups.name # AOTY-48
   }
 }
 
