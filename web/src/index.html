@@ -6,12 +6,14 @@
 <meta name="aoty-base" content="{{BASE}}">
 <meta name="aoty-name" content="{{NAME}}">
 <meta name="aoty-year" content="{{YEAR}}">
+<meta name="aoty-ga" content="{{GA}}">
 <title>{{TITLE}}</title>
 <link rel="icon" type="image/svg+xml" href="{{ICON}}">
 <link rel="apple-touch-icon" href="{{TOUCH}}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Sans:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{CSS}}">
+<script src="{{STATS}}" defer></script>
 <script src="{{INTRO}}" defer></script>
 <script src="{{FIRSTVISIT}}" defer></script>
 <script src="{{GROUP}}" defer></script>
@@ -25,7 +27,9 @@
      reads as a co-brand. -->
 <div class="topbar">
   <nav class="kampbar" aria-label="kamp">
-    <a class="kampbar-link" href="https://kamp.fm/">
+    <!-- referrerpolicy: kamp.fm's own page view would otherwise carry this page's full path,
+         username included, as its referrer (AOTY-38). -->
+    <a class="kampbar-link" id="kamp-link" href="https://kamp.fm/" referrerpolicy="origin">
       <svg class="kamp-mark" viewBox="0 0 200 200" aria-hidden="true" focusable="false">
         <circle cx="100" cy="100" r="86" fill="#1c1a16" stroke="#c4aa78" stroke-width="3"/>
         <circle cx="100" cy="100" r="70" fill="none" stroke="#2a2620" stroke-width="2"/>
