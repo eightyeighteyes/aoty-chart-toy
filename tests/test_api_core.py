@@ -97,7 +97,9 @@ def test_safe_next(raw, expected):
 
 def test_with_query_adds_or_replaces_a_param():
   assert core.with_query(BASE, signin="failed") == f"{BASE}?signin=failed"
-  assert core.with_query(f"{BASE}group/x?user=bob", signin="failed") == f"{BASE}group/x?user=bob&signin=failed"
+  assert (
+    core.with_query(f"{BASE}group/x?user=bob", signin="failed") == f"{BASE}group/x?user=bob&signin=failed"
+  )
   assert core.with_query(f"{BASE}?signin=ok&a=1", signin="failed") == f"{BASE}?a=1&signin=failed"
 
 

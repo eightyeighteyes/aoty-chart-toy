@@ -122,4 +122,6 @@ def set_cookie(name, value, path, max_age):
 
 def clear_cookie(name, path):
   """Clears only the cookie set with exactly this path."""
-  return f"{name}=; Path={path}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax"
+  return (
+    f"{name}=; Path={path}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax"
+  )

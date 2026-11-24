@@ -87,7 +87,9 @@ def test_parse_cookies():
 
 def test_cookie_attributes():
   c = s.set_cookie(s.SESSION_COOKIE, "tok", "/toys/aoty/", s.SESSION_TTL_S)
-  assert c == "__Secure-kamp_aoty_session=tok; Path=/toys/aoty/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax"
+  assert (
+    c == "__Secure-kamp_aoty_session=tok; Path=/toys/aoty/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax"
+  )
   cleared = s.clear_cookie(s.STATE_COOKIE, "/toys/aoty/api/auth/")
   assert cleared.startswith("__Secure-kamp_aoty_state=; Path=/toys/aoty/api/auth/; Max-Age=0;")
   assert "Secure" in cleared and "HttpOnly" in cleared

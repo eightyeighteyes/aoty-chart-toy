@@ -618,7 +618,9 @@ def test_start_sets_a_state_cookie_and_sends_the_visitor_to_lastfm(h):
   q = dict(parse_qsl(loc.query))
   assert q == {"api_key": "APIKEY", "cb": f"https://kamp.fm{BASE}api/auth/callback/{nonce}"}
   attrs = set_cookies(out)[session.STATE_COOKIE][1]
-  assert f"Path={STATE_PATH}" in attrs and "HttpOnly" in attrs and "Secure" in attrs and "Max-Age=600" in attrs
+  assert (
+    f"Path={STATE_PATH}" in attrs and "HttpOnly" in attrs and "Secure" in attrs and "Max-Age=600" in attrs
+  )
   assert out["headers"]["referrer-policy"] == "no-referrer"
 
 
@@ -686,7 +688,9 @@ def test_start_ignores_a_next_off_this_site(h):
     assert out["headers"]["location"] == BASE
 
 
-@pytest.mark.parametrize("auth", [{}, {"session_key": "short", "lastfm_api_secret": "S"}, {"session_key": KEY}])
+@pytest.mark.parametrize(
+  "auth", [{}, {"session_key": "short", "lastfm_api_secret": "S"}, {"session_key": KEY}]
+)
 def test_unreadable_or_weak_secrets_make_start_503(h, auth):
   out = auth_call(h, auth_deps(h, auth=auth), "GET", "auth/start")
   assert out["statusCode"] == 503 and "cookies" not in out
@@ -717,7 +721,9 @@ def test_an_expired_session_is_401(h):
 
 def test_a_session_signed_with_the_previous_key_still_works(h):
   d = auth_deps(h, auth={**AUTH, "session_key_previous": OLD_KEY})
-  out = auth_call(h, d, "GET", "me", cookies={session.SESSION_COOKIE: session.new_session("bob", OLD_KEY, NOW)})
+  out = auth_call(
+    h, d, "GET", "me", cookies={session.SESSION_COOKIE: session.new_session("bob", OLD_KEY, NOW)}
+  )
   assert json.loads(out["body"]) == {"username": "bob"}
 
 
@@ -734,10 +740,14 @@ def test_signout_clears_the_session_cookie(h):
   assert value == "" and f"Path={BASE};" in attrs and "Max-Age=0" in attrs
 
 
-@pytest.mark.parametrize("ctype", [None, "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"])
+@pytest.mark.parametrize(
+  "ctype", [None, "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"]
+)
 def test_a_cross_site_form_cant_sign_anyone_out(h, ctype):
   cookie = session.new_session("alice", KEY, NOW)
-  out = auth_call(h, auth_deps(h), "POST", "auth/signout", cookies={session.SESSION_COOKIE: cookie}, ctype=ctype)
+  out = auth_call(
+    h, auth_deps(h), "POST", "auth/signout", cookies={session.SESSION_COOKIE: cookie}, ctype=ctype
+  )
   assert out["statusCode"] == 415 and "cookies" not in out
 
 
@@ -771,9 +781,13 @@ def test_sign_in_logs_and_metric_lines_carry_no_token_nonce_or_name(h, caplog, c
 def test_each_sign_in_request_emits_one_line_with_its_outcome(h, capsys):
   d = auth_deps(h)
   state, nonce, _ = start(h, d)
-  auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state}, query={"token": "T"})
+  auth_call(
+    h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state}, query={"token": "T"}
+  )
   auth_call(h, d, "GET", "me")
   lines = _emf(capsys)
   assert [x["auth"] for x in lines] == ["started", "signed_in", "anonymous"]
   assert [x["LastfmCalls"] for x in lines] == [0, 1, 0]
-  assert all(set(m["Name"] for m in x["_aws"]["CloudWatchMetrics"][0]["Metrics"]) == {"LastfmCalls"} for x in lines)
+  assert all(
+    set(m["Name"] for m in x["_aws"]["CloudWatchMetrics"][0]["Metrics"]) == {"LastfmCalls"} for x in lines
+  )
