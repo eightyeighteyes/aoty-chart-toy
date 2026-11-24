@@ -209,6 +209,7 @@ sequenceDiagram
   participant API as api Lambda (via kamp.fm CloudFront)
   participant SSM as SSM
   participant L as Last.fm
+  participant G as groups table
 
   V->>API: GET api/auth/start?next=<path under base>
   API->>SSM: session keys + shared secret (cached 5 min; none: 503)
@@ -224,10 +225,17 @@ sequenceDiagram
     API-->>V: 302 to next, session cookie {u, iat, exp} (30 days, Path=<base>, HttpOnly, Secure, SameSite=Lax)
   end
   V->>API: GET api/me (session cookie)
-  API-->>V: 200 {username, group_writes} | 401 {signed_out, group_writes} | 503 keys unreadable
+  API->>G: GetItem session#<name> revoked_at (eventually consistent; writes read it consistently)
+  API-->>V: 200 {username, group_writes} | 401 {signed_out, group_writes}, also when iat <= revoked_at | 503 keys or cutoff unreadable
   V->>API: POST api/auth/signout (JSON only)
-  API-->>V: 200, cookie cleared
+  API-->>V: 200, cookie cleared (this browser only)
+  V->>API: POST api/auth/signout?everywhere=1 (JSON only, valid unrevoked session)
+  API->>G: UpdateItem session#<name> SET revoked_at = now (only forward)
+  API-->>V: 200, cookie cleared: every session signed before now is revoked | 503, cookie kept
 ```
+
+`G` is the groups table, which holds the cutoffs (AOTY-57). They're there rather than in the guard table,
+because losing one revives that user's revoked sessions.
 
 ## Groups (AOTY-48)
 

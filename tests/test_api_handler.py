@@ -13,7 +13,7 @@ from common import dynamo, guardrails, lastfm, session
 HANDLER = Path(__file__).resolve().parent.parent / "lambdas" / "api" / "handler.py"
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
-ENV = {"USERS_TABLE": "users", "GUARD_TABLE": "guard", "SYNC_QUEUE_URL": "q/sync"}
+ENV = {"USERS_TABLE": "users", "GUARD_TABLE": "guard", "GROUPS_TABLE": "groups", "SYNC_QUEUE_URL": "q/sync"}
 
 
 @pytest.fixture
@@ -35,6 +35,7 @@ class FakeDDB:
   def __init__(self, race=None):
     self.rows, self.race = {}, race  # race(rows) runs just before a conditional update
     self.guard = {}  # the guard table: id -> item (plain values)
+    self.groups = {}  # the groups table: (pk, sk) -> item (plain values); here only session# cutoffs
 
   def _guard_update(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
                     ConditionExpression=None, **kw):  # fmt: skip
@@ -54,6 +55,9 @@ class FakeDDB:
     return {}
 
   def get_item(self, TableName, Key, **kw):
+    if TableName == "groups":
+      item = self.groups.get((Key["pk"]["S"], Key["sk"]["S"]))
+      return {"Item": dynamo.to_item(item)} if item else {}
     if TableName == "guard":
       item = self.guard.get(Key["id"]["S"])
       return {"Item": {k: {"N": str(v)} for k, v in item.items()}} if item else {}

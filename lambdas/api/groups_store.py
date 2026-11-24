@@ -323,3 +323,38 @@ def release_sync(deps, slug, now, previous):
       raise
     return False
   return True
+
+
+# ---- sign-in revocation (AOTY-57): session#<username> items, layout in common/groups.py ----------
+
+REVOKE = "attribute_not_exists(revoked_at) OR revoked_at < :now"
+
+
+def _session_key(username):
+  return {"pk": {"S": g.session_pk(username)}, "sk": {"S": g.META}}
+
+
+def revoked_at(deps, username, consistent=True):
+  """username's revocation cutoff: None if they never revoked, a number, or the raw attribute when
+  it isn't a number (session.is_revoked counts that as revoked). Raises when it can't be read."""
+  out = deps.ddb.get_item(TableName=_table(deps), Key=_session_key(username), ConsistentRead=consistent)
+  attr = (out.get("Item") or {}).get("revoked_at")
+  if attr is None:
+    return None
+  try:
+    return float(attr["N"])
+  except (KeyError, TypeError, ValueError):
+    return attr
+
+
+def revoke(deps, username, now):
+  """Revoke every session username signed in at or before now. The cutoff only moves forward."""
+  try:
+    deps.ddb.update_item(
+      TableName=_table(deps), Key=_session_key(username),
+      UpdateExpression="SET revoked_at = :now", ConditionExpression=REVOKE,
+      ExpressionAttributeValues={":now": {"N": str(int(now))}},
+    )  # fmt: skip
+  except Exception as e:
+    if _code(e) != "ConditionalCheckFailedException":  # already revoked at or after now: done
+      raise

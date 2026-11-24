@@ -334,9 +334,12 @@ class SandboxProxy:
         self.cookie = session.new_session(self.session_name, self._key, time.time())
         landing = dict(urllib.parse.parse_qsl(query)).get("next") or self.base
         return 302, b"", "text/plain", [("Location", landing if landing.startswith(self.base) else self.base)]
-      if path == "api/auth/signout":
+      if path == "api/auth/signout" and dict(urllib.parse.parse_qsl(query)).get("everywhere") != "1":
         self.cookie = None
         return 200, b'{"signed_out": true}', "application/json", []
+      if path == "api/auth/signout":  # everywhere (AOTY-57): sandbox really revokes, then we drop ours
+        cookie, self.cookie = f"{session.SESSION_COOKIE}={self.cookie}" if self.cookie else None, None
+        return (*forward(self.api_base, method, rest, body, ctype, query, cookie), [])
     cookie = f"{session.SESSION_COOKIE}={self.cookie}" if self.cookie else None
     return (*forward(self.api_base, method, rest, body, ctype, query, cookie), [])
 

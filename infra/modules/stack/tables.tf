@@ -45,6 +45,8 @@ resource "aws_dynamodb_table" "guard" {
 #   pk group#<slug>, sk meta               {name, owner, member_count, created_at, updated_at,
 #                                           chart_requested_at, chart_built_at}
 #   pk group#<slug>, sk member#<username>  {username, added_at}
+#   pk session#<username>, sk meta         {revoked_at}  sign out everywhere's cutoff (AOTY-57):
+#                                          never owner or username, so it stays out of the GSIs
 # Members are items, not a list, so by_member can answer "which groups is alice in?" (the chart
 # builder after a sync; AOTY-49's opt-out). by_owner is sparse: only meta items carry owner.
 resource "aws_dynamodb_table" "groups" {
