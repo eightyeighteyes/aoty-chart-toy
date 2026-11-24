@@ -42,6 +42,9 @@ module "stack" {
   cloudfront_distribution_arn   = "arn:aws:cloudfront::424416271636:distribution/EU1A3HSUCEQS9" # kamp.fm
   albums_point_in_time_recovery = true
   alarms                        = "full" # AOTY-27
+  # The execute-api lock (AOTY-26): user routes need kamp.fm's origin secret. Turned on after
+  # staging's lock checked out on 2026-11-24 (infra/README.md, "Guardrails").
+  enforce_origin = true
 }
 
 # Same shape as staging; kamp-site reads data.terraform_remote_state.<x>.outputs.stack.<name>.
