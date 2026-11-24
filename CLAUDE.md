@@ -11,13 +11,13 @@ detail, so read them rather than restating it here.
 
 | Epic | Milestone |
 |------|-----------|
-| AOTY-1 | M0: Discord server AOTY page (this repo's scraper + page) <-- WE ARE HERE |
+| AOTY-1 | M0: Discord server AOTY page (this repo's scraper + page) |
 | AOTY-2 | M1: Single-user web app |
-| AOTY-3 | M2: Group charts with per-person filter |
+| AOTY-3 | M2: Group charts with per-person filter (owned groups, Last.fm sign-in) <-- WE ARE HERE |
 | AOTY-4 | M3: Sharing graphics (4:3, 1:1) |
 | AOTY-5 | M4: Albums of any year |
 | AOTY-6 | M5: Monetization (Supporter tier) |
-| AOTY-7 | M6: Persistence (saved groups, chart over time) |
+| AOTY-7 | M6: Persistence (chart over time; saved groups moved to M2) |
 
 Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commits (releases will be cut from history).
 
