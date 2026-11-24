@@ -17,6 +17,10 @@
   const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
   const grp = globalThis.aotyGroup;  // web/src/group.js, loaded first (AOTY-51)
   const ge = globalThis.aotyGroupEdit;  // web/src/groupedit.js, loaded first (AOTY-52)
+  // Analytics (web/src/kampstats.js, AOTY-38). An ad blocker may drop that file, and nothing it
+  // does may ever break the page, so every call goes through here.
+  const kampStats = globalThis.aotyStats;
+  const track = (method, ...args) => { try { if (kampStats) kampStats[method](...args); } catch (_) {} };
   const GROUP_REFRESH_MS = 60000;  // a group page re-reads its chart while members load
   const GROUP_WATCH_MS = 5000;  // and every 5 s after an edit, or while its first chart is pressed
   const API_TIMEOUT_MS = 10000;
@@ -165,7 +169,11 @@
       buttons.forEach(b => b.setAttribute("aria-pressed", String(b.dataset[attr] === value)));
       try { localStorage.setItem(storageKey, value); } catch (_) {}
     }
-    buttons.forEach(b => b.addEventListener("click", () => { set(b.dataset[attr]); if (onChange) onChange(); }));
+    buttons.forEach(b => b.addEventListener("click", () => {
+      set(b.dataset[attr]);
+      track("event", "control_change", {control: attr, value: b.dataset[attr]});
+      if (onChange) onChange();
+    }));
     let saved = null;
     try { saved = localStorage.getItem(storageKey); } catch (_) {}
     if (values.includes(saved)) set(saved);
@@ -261,7 +269,10 @@
       e.preventDefault();
       if (busy) return;
       const clean = intro.cleanName(input.value);
-      if (clean.error) return fail(intro.MESSAGES[clean.error]);
+      if (clean.error) {
+        track("introSubmit", {message: intro.MESSAGES[clean.error]}, intro.MESSAGES);
+        return fail(intro.MESSAGES[clean.error]);
+      }
       setBusy(true);
       msg.textContent = "";
       const ctl = new AbortController();
@@ -280,6 +291,7 @@
         clearTimeout(timer);
       }
       const result = intro.outcome(status, body, clean.name);
+      track("introSubmit", result, intro.MESSAGES);
       if (result.go) {
         location.assign(`${BASE}user/${encodeURIComponent(result.go)}`);
         return;
@@ -338,8 +350,10 @@
     chart.display_name = display;
     if (display !== raw) {
       try { history.replaceState(null, "", `${BASE}user/${encodeURIComponent(display)}${location.search}`); } catch (_) {}
+      track("setPage");
     }
     const repaint = current !== null;
+    if (!repaint && firstView) track("event", "first_visit_end", {result: "painted"});
     current = chart;
     heading(display, chart.year);
     $("controls").hidden = false;
@@ -445,7 +459,10 @@
     copy.type = "button";
     copy.className = "fv-copy";
     copy.textContent = "copy link";
-    copy.addEventListener("click", () => copyLink(copy, block.querySelector(".fv-url")));
+    copy.addEventListener("click", () => {
+      track("event", "share_copy");
+      copyLink(copy, block.querySelector(".fv-url"));
+    });
     return block;
   }
 
@@ -565,6 +582,7 @@
       updateFirstVisit(s, position);
       const end = fv.firstVisitEnd(s, timedOut());
       if (end) {
+        track("event", "first_visit_end", {result: end});
         const [title, text] = fv.endMessage(end, YEAR, s);
         state(title, text, false);
         stop("");
@@ -583,6 +601,7 @@
     // The sync is over but there's still no chart to show (first visit): say so, don't wait on.
     function gaveUp(reason) {
       if (current) return;
+      if (firstView) track("event", "first_visit_end", {result: reason === "private" ? "private" : "error"});
       if (reason === "private") {
         state("this profile is private", "its last.fm listening isn't public, so there's nothing for us to read.", false);
       } else {
@@ -838,11 +857,15 @@
     line.replaceChildren(...parts, " on last.fm");
     line.hidden = false;
     if (first) {
+      track("event", "group_loaded",
+            {group_size: chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0)});
       setupSwitchesOnce();
       $("who").addEventListener("change", () => {
         const url = new URL(location.href);
         if ($("who").value) url.searchParams.set("user", $("who").value); else url.searchParams.delete("user");
         try { history.replaceState(null, "", url); } catch (_) {}
+        // Never the member's name: whether someone was picked is all that's counted.
+        track("event", "control_change", {control: "filter", value: $("who").value ? "member" : "everyone"});
         renderChart(current);
       });
       renderChart(chart);
@@ -933,6 +956,7 @@
       here.searchParams.delete("signin");
       a.href = `${BASE}api/auth/start?next=${encodeURIComponent(here.pathname + here.search)}`;
       a.textContent = "sign in with last.fm";
+      a.addEventListener("click", () => track("markSignIn"));  // counted when api/me says so
       return row.replaceChildren(a);
     }
     const name = document.createElement("a");
@@ -982,13 +1006,15 @@
     $("account-row").querySelector("a").focus();
   }
 
-  // Back from Last.fm with ?signin=failed: say so quietly, and take it out of the address.
+  // Back from Last.fm with ?signin=failed: say so quietly, and take it out of the address. True
+  // when it failed.
   function signinResult() {
     const url = new URL(location.href);
-    if (url.searchParams.get("signin") !== "failed") return;
+    if (url.searchParams.get("signin") !== "failed") return false;
     url.searchParams.delete("signin");
     try { history.replaceState(null, "", url); } catch (_) {}
     $("account-msg").textContent = "sign-in didn't go through. try again?";
+    return true;
   }
 
   // ---- dialogs ----------------------------------------------------------------------------------
@@ -1065,6 +1091,7 @@
       const r = await apiCall("POST", "groups", {name: clean.name});
       const out = ge.answer("create", r.status, r.body);
       if (out.ok && out.id) {
+        track("event", "group_create");
         location.assign(`${BASE}group/${encodeURIComponent(out.id)}?edit=1`);
         return;
       }
@@ -1121,6 +1148,7 @@
   });
 
   $("share").addEventListener("click", () => {
+    track("event", "share_copy");
     const url = ge.shareUrl(location.origin, BASE, groupId);
     const span = $("share-url");
     span.textContent = url.replace(/^https?:\/\//, "");
@@ -1204,6 +1232,7 @@
         if (!out.signedOut && !out.gone) formError(input, msg, out.message);
         return;
       }
+      track("event", "member_add");
       input.value = "";
       msg.textContent = out.note || `added ${clean.name}.`;
       input.focus();
@@ -1224,6 +1253,7 @@
       if (!out.signedOut && !out.gone) $("add-msg").textContent = out.message;
       return;
     }
+    track("event", "member_remove");
     groupInfo = {...groupInfo, members: groupInfo.members.filter(m => m !== name)};
     renderMembers();
     $("members-title").focus();  // the row and its button are gone
@@ -1259,6 +1289,7 @@
         const url = new URL(location.href);
         url.pathname = `${BASE}group/${encodeURIComponent(out.id)}`;
         try { history.replaceState(null, "", url); } catch (_) {}
+        track("setPage");  // later hits carry the new slug
       }
       groupInfo = {...groupInfo, id: groupId, name: clean.name};
       groupHeading(clean.name, current ? current.year : YEAR);
@@ -1289,8 +1320,11 @@
 
   // ---- routing ---------------------------------------------------------------------------------
 
-  signinResult();
+  $("kamp-link").addEventListener("click", () => track("event", "kamp_click"));
+
+  const signinFailed = signinResult();
   const meReady = loadMe();
+  meReady.then(() => track("checkSignIn", me, signinFailed));
   const routedGroup = routeGroup();
   const name = routedGroup === null ? routeName() : null;
   if (routedGroup !== null) {
@@ -1300,4 +1334,7 @@
   } else {
     showUser(name);
   }
+  // One page view per load (AOTY-38), once routing has settled the path: showIntro has already
+  // sent any other path to the base. Later replaceStates call setPage(), never a new page view.
+  track("pageView");
 })();

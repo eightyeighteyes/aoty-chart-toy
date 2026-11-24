@@ -115,6 +115,50 @@ def test_placeholders_name_year_title_and_icon_are_filled(tmp_path):
   assert f'<meta name="aoty-year" content="{bs.TARGET_YEAR}">' in html
 
 
+def test_analytics_is_off_unless_a_measurement_id_is_given(tmp_path):
+  # AOTY-38: only prod's deploy passes --ga-id, so staging and previews send nothing.
+  published = bs.build(BASE, out=tmp_path / "a")
+  html = (tmp_path / "a" / "index.html").read_text()
+  assert '<meta name="aoty-ga" content="">' in html
+  # kampstats.js loads before app.js, which reads globalThis.aotyStats.
+  assert html.index(published["kampstats.js"]) < html.index(published["app.js"])
+  bs.build(BASE, out=tmp_path / "b", ga_id="G-QNJVBYWDYN")
+  html = (tmp_path / "b" / "index.html").read_text()
+  assert '<meta name="aoty-ga" content="G-QNJVBYWDYN">' in html
+  bs.check_csp(html)  # gtag.js is injected by kampstats.js, never inline
+
+
+@pytest.mark.parametrize("ga_id", ["UA-1234-5", 'G-X"><script>', "g-abcdef", "G-"])
+def test_a_malformed_measurement_id_fails_the_build(tmp_path, ga_id):
+  with pytest.raises(SystemExit, match="ga-id"):
+    bs.build(BASE, out=tmp_path / "web", ga_id=ga_id)
+
+
+def test_the_kamp_link_sends_only_the_origin_as_referrer(tmp_path):
+  bs.build(BASE, out=tmp_path / "web")
+  html = (tmp_path / "web" / "index.html").read_text()
+  assert re.search(r'<a [^>]*href="https://kamp\.fm/"[^>]*referrerpolicy="origin"', html)
+
+
+def test_app_js_never_needs_the_analytics_script():
+  # An ad blocker can drop kampstats.js: app.js falls back to a no-op, never a TypeError.
+  js = (bs.SRC / "app.js").read_text()
+  assert "const kampStats = globalThis.aotyStats;" in js
+  assert "try { if (kampStats) kampStats[method](...args); } catch (_) {}" in js
+  assert js.count("aotyStats") == 1 and js.count("kampStats[") == 1  # every call goes through track()
+
+
+def test_app_js_parses(tmp_path):
+  # A redeclared name is a SyntaxError that kills the whole page, and no JS unit test loads app.js.
+  import shutil
+  import subprocess
+
+  node = shutil.which("node")
+  if not node:
+    pytest.skip("node isn't installed")
+  subprocess.run([node, "--check", str(bs.SRC / "app.js")], check=True)
+
+
 def test_the_year_matches_the_lambdas():
   from common.config import TARGET_YEAR
 
