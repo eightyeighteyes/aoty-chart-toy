@@ -12,6 +12,11 @@ The groups table (kamp-aoty-<env>-groups), one partition per group:
   GSI by_owner:  owner -> pk (sparse: only meta items have owner), with name, member_count and
                  updated_at: a person's own groups
 
+It also holds sign-in's revocation cutoffs (AOTY-57), here rather than in the guard table because
+losing one would revive revoked sessions:
+  pk = session#<username>, sk = meta       {revoked_at}  (epoch seconds, N; common/session.py)
+These must never carry owner or username, or they'd show up in the GSIs above.
+
 Members are their own items, not a list on the meta item, because DynamoDB can't index into a
 list: the reverse lookup ("which groups is alice in?") needs one item per membership. The meta's
 member_count is kept in the same transaction as each member write, and its condition enforces
@@ -60,6 +65,10 @@ def slug_for(name, requested=None):
 
 def pk(slug):
   return f"group#{slug}"
+
+
+def session_pk(username):
+  return f"session#{username}"
 
 
 def member_sk(username):

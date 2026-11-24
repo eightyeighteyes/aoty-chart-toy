@@ -55,6 +55,8 @@ CONDITIONS = {
   groups_store.CLAIM_SYNC:
     lambda it, v: _has(it) and ("sync_requested_at" not in it or it["sync_requested_at"] <= v[":cool"]),
   groups_store.RELEASE_SYNC: lambda it, v: _has(it) and it.get("sync_requested_at") == v[":now"],
+  # sign out everywhere (AOTY-57)
+  groups_store.REVOKE: lambda it, v: it is None or "revoked_at" not in it or it["revoked_at"] < v[":now"],
 }  # fmt: skip
 
 
@@ -162,6 +164,7 @@ class FakeGroupsDDB(FakeDDB):
       e = ConditionFailed()
       e.response = {**e.response, **({"Item": dynamo.to_item(current)} if current else {})}
       raise e
+    current = self.groups.setdefault(key, {"pk": key[0], "sk": key[1]}) if current is None else current
     before = dict(current)
     self._apply_update(current, UpdateExpression, ExpressionAttributeNames, values)
     if kw.get("ReturnValues") == "UPDATED_OLD":
@@ -698,3 +701,200 @@ def test_rename_leaves_the_build_read_stamp_behind(h):
   assert call(h, d, "PATCH", "groups/a", {"name": "B"}) == (200, {"id": "b"})
   meta = d.ddb.meta("b")
   assert "chart_read_at" not in meta and meta["sync_requested_at"] == NOW - 10
+
+
+# ---- sign out everywhere (AOTY-57) ----------------------------------------------------------
+
+
+def raw(h, d, method, path, cookie=None, body=None, query=None, ctype="application/json"):
+  """call() with a given session cookie (or none), returning the whole response."""
+  event = {"rawPath": f"{BASE}api/{path}", "requestContext": {"http": {"method": method, "sourceIp": "1.2.3.4"}},
+           "headers": {"content-type": ctype} if ctype else {}}  # fmt: skip
+  if cookie:
+    event["cookies"] = [f"{session.SESSION_COOKIE}={cookie}"]
+  if body is not None:
+    event["body"] = json.dumps(body)
+  if query:
+    event["queryStringParameters"] = query
+  return h.handler(event, None, d)
+
+
+def everywhere(h, d, cookie, **kw):
+  return raw(h, d, "POST", "auth/signout", cookie, query={"everywhere": "1"}, **kw)
+
+
+def cleared(out):
+  return any(c.startswith(f"{session.SESSION_COOKIE}=;") for c in out.get("cookies", []))
+
+
+def cutoff(d, user="alice"):
+  return (d.ddb.groups.get((grp.session_pk(user), "meta")) or {}).get("revoked_at")
+
+
+def group_with_members(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  known(d.ddb, "alice", "bob", "carol")
+  return d
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [*WRITES, ("GET", "me/groups", None)])
+def test_after_sign_out_everywhere_a_copied_cookie_is_401_on_every_write(h, method, path, body):
+  d = group_with_members(h)
+  copied = session.new_session("alice", KEY, NOW - 3600)
+  out = everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  assert out["statusCode"] == 200 and json.loads(out["body"]) == {"signed_out": True, "everywhere": True}
+  assert cleared(out) and cutoff(d) == NOW
+  before = dict(d.ddb.groups)
+  out = raw(h, d, method, path, copied, body, ctype=None if method == "GET" else "application/json")
+  assert out["statusCode"] == 401 and json.loads(out["body"]) == {"error": "signed_out"}
+  assert d.ddb.groups == before and d.lam.events == []
+
+
+def test_a_revoked_cookie_reads_as_signed_out_on_me_and_is_cleared(h):
+  d = group_with_members(h)
+  copied = session.new_session("alice", KEY, NOW - 3600)
+  assert raw(h, d, "GET", "me", copied, ctype=None)["statusCode"] == 200
+  everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  out = raw(h, d, "GET", "me", copied, ctype=None)
+  assert out["statusCode"] == 401 and cleared(out)
+
+
+def test_signing_in_again_after_the_revoke_works(h):
+  d = group_with_members(h)
+  everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  d.clock = lambda: NOW + 30
+  fresh = session.new_session("alice", KEY, NOW + 20)
+  assert raw(h, d, "GET", "me", fresh, ctype=None)["statusCode"] == 200
+  assert raw(h, d, "PATCH", "groups/g", fresh, {"name": "renamed"})["statusCode"] == 200
+
+
+def test_revoking_one_user_leaves_everyone_else_signed_in(h):
+  d = group_with_members(h)
+  d.ddb.seed("b", "bob", ["bob"])
+  everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  bob = session.new_session("bob", KEY, NOW - 3600)
+  assert raw(h, d, "PATCH", "groups/b", bob, {"name": "bobs"})["statusCode"] == 200
+
+
+def test_a_plain_sign_out_revokes_nothing(h):
+  d = group_with_members(h)
+  copied = session.new_session("alice", KEY, NOW - 3600)
+  out = raw(h, d, "POST", "auth/signout", copied)
+  assert out["statusCode"] == 200 and json.loads(out["body"]) == {"signed_out": True} and cleared(out)
+  assert cutoff(d) is None
+  assert raw(h, d, "PATCH", "groups/g", copied, {"name": "still mine"})["statusCode"] == 200
+
+
+def test_a_revoked_cookie_cant_move_the_cutoff_again(h):
+  d = group_with_members(h)
+  copied = session.new_session("alice", KEY, NOW - 3600)
+  everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  d.clock = lambda: NOW + 500
+  out = everywhere(h, d, copied)
+  assert out["statusCode"] == 401 and cutoff(d) == NOW
+
+
+def test_sign_out_everywhere_needs_a_session_and_json(h):
+  d = group_with_members(h)
+  out = everywhere(h, d, None)
+  assert out["statusCode"] == 401 and cutoff(d) is None
+  out = everywhere(h, d, session.new_session("alice", KEY, NOW - 60), ctype="text/plain")
+  assert out["statusCode"] == 415 and cutoff(d) is None and "cookies" not in out
+
+
+def test_the_cutoff_only_moves_forward(h):
+  d = group_with_members(h)
+  d.ddb.groups[(grp.session_pk("alice"), "meta")] = {
+    "pk": grp.session_pk("alice"),
+    "sk": "meta",
+    "revoked_at": NOW + 100,
+  }
+  out = everywhere(h, d, session.new_session("alice", KEY, NOW + 200))  # signed in after that cutoff
+  assert out["statusCode"] == 200 and cutoff(d) == NOW + 100
+
+
+def test_a_cutoff_that_isnt_a_number_fails_closed(h):
+  d = group_with_members(h)
+  d.ddb.groups[(grp.session_pk("alice"), "meta")] = {
+    "pk": grp.session_pk("alice"),
+    "sk": "meta",
+    "revoked_at": "soon",
+  }
+  assert (
+    raw(h, d, "PATCH", "groups/g", session.new_session("alice", KEY, NOW), {"name": "x"})["statusCode"] == 401
+  )
+
+
+def test_writes_read_the_cutoff_strongly_and_me_doesnt(h):
+  d = group_with_members(h)
+  reads, get = [], d.ddb.get_item
+
+  def spy(TableName, Key, **kw):
+    if TableName == "groups" and Key["pk"]["S"].startswith("session#"):
+      reads.append(kw.get("ConsistentRead"))
+    return get(TableName, Key, **kw)
+
+  d.ddb.get_item = spy
+  cookie = session.new_session("alice", KEY, NOW)
+  raw(h, d, "GET", "me", cookie, ctype=None)
+  raw(h, d, "PATCH", "groups/g", cookie, {"name": "y"})
+  assert reads == [False, True]
+
+
+def test_an_unreadable_cutoff_is_503_never_401_and_keeps_the_cookie(h):
+  d = group_with_members(h)
+  get = d.ddb.get_item
+
+  def broken(TableName, Key, **kw):
+    if TableName == "groups" and Key["pk"]["S"].startswith("session#"):
+      raise RuntimeError("DynamoDB down")
+    return get(TableName, Key, **kw)
+
+  d.ddb.get_item = broken
+  cookie = session.new_session("alice", KEY, NOW)
+  for method, path, body in [
+    ("GET", "me", None),
+    ("PATCH", "groups/g", {"name": "y"}),
+    ("GET", "me/groups", None),
+  ]:
+    out = raw(h, d, method, path, cookie, body, ctype="application/json" if body else None)
+    assert out["statusCode"] == 503 and json.loads(out["body"]) == {"error": "signin_unavailable"}
+    assert not cleared(out)
+  out = everywhere(h, d, cookie)
+  assert out["statusCode"] == 503 and not cleared(out)
+  assert raw(h, d, "GET", "groups/g", ctype=None)["statusCode"] == 200  # public reads don't look
+
+
+def test_a_failed_revoke_is_503_and_keeps_the_cookie(h):
+  d = group_with_members(h)
+  update = d.ddb.update_item
+
+  def broken(TableName, Key, *a, **kw):
+    if TableName == "groups" and Key["pk"]["S"].startswith("session#"):
+      raise RuntimeError("DynamoDB down")
+    return update(TableName, Key, *a, **kw)
+
+  d.ddb.update_item = broken
+  out = everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  assert out["statusCode"] == 503 and not cleared(out) and cutoff(d) is None
+  out = everywhere(h, deps(h, auth={}), session.new_session("alice", KEY, NOW - 60))
+  assert out["statusCode"] == 503 and not cleared(out)
+
+
+def test_revocation_items_stay_out_of_the_gsis(h):
+  d = group_with_members(h)
+  everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  item = d.ddb.groups[(grp.session_pk("alice"), "meta")]
+  assert set(item) == {"pk", "sk", "revoked_at"}
+
+
+def test_revoked_requests_are_named_in_the_metric_line(h, capsys):
+  d = group_with_members(h)
+  copied = session.new_session("alice", KEY, NOW - 3600)
+  everywhere(h, d, session.new_session("alice", KEY, NOW - 60))
+  capsys.readouterr()
+  raw(h, d, "GET", "me", copied, ctype=None)
+  raw(h, d, "PATCH", "groups/g", copied, {"name": "y"})
+  lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+  assert [x.get("auth") or x.get("outcome") for x in lines] == ["revoked", "revoked"]

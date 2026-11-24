@@ -402,12 +402,17 @@ def request_sync(deps, name, row, display, now, info=None, lean=False):
 #                               match the state cookie's (else no Last.fm call at all), then
 #                               auth.getSession names the user: session cookie set, 302 to next.
 #                               Every failure is a 302 to the landing path with ?signin=failed.
-# GET  me                       200 {username} | 401 signed out | 503 keys unreadable
+# GET  me                       200 {username} | 401 signed out or revoked | 503 keys or the
+#                               revocation cutoff unreadable
 # POST auth/signout             JSON only (415 otherwise): clears the session cookie
+# POST auth/signout?everywhere=1  also revokes every session of the signed-in user (AOTY-57):
+#                               401 without a valid, unrevoked session (so a revoked copy can't keep
+#                               pushing the cutoff), 503 keeping the cookie when it can't be stored
 #
 # The session cookie is scoped to <base> and is sent with every request to it, from any kamp.fm
-# page: the whole kamp.fm origin is the trust boundary. Signing out clears this browser's cookie
-# only; a copied cookie stays valid until it expires.
+# page: the whole kamp.fm origin is the trust boundary. A plain sign-out clears this browser's
+# cookie only; "everywhere" stores a cutoff (groups table, session#<name>) that session_user checks
+# on every use, so copied cookies stop working too.
 
 
 def _state_path(base):
@@ -418,12 +423,33 @@ def _auth_keys(deps):
   return session.usable_keys(deps.auth_secrets())
 
 
-def session_user(deps, event, keys):
-  """The signed-in username, or None. keys: _auth_keys(deps), non-empty (the caller has already
-  answered 503 when it's empty)."""
+class SessionUnavailable(Exception):
+  """The revocation cutoff couldn't be read: answer 503, never 401 (a DynamoDB blip mustn't sign
+  anyone out)."""
+
+
+def session_user(deps, event, keys, consistent=True):
+  """(username, "ok"), or (None, "signed_out" | "revoked"). keys: _auth_keys(deps), non-empty (the
+  caller has already answered 503 when it's empty).
+
+  Every caller gets the revocation check (AOTY-57), so a new route can't forget it. consistent=False
+  is for api/me alone, which only decides what the page offers; writes read the cutoff strongly.
+  Raises SessionUnavailable when the cutoff can't be read.
+  """
   token = session.parse_cookies(event.get("cookies")).get(session.SESSION_COOKIE)
   claims = session.verify(session.SESSION, token, keys, int(deps.clock()))
-  return core.session_username(claims)
+  user = core.session_username(claims)
+  if not user:
+    return None, "signed_out"
+  try:
+    cutoff = groups_store.revoked_at(deps, user, consistent)
+  except Exception as e:
+    log.warning("revocation cutoff unreadable: %s", _error_code(e) or type(e).__name__)
+    raise SessionUnavailable() from e
+  if session.is_revoked(claims, cutoff):
+    log.info("revoked session for %s", _tag(user))
+    return None, "revoked"
+  return user, "ok"
 
 
 def auth_start(deps, event, headers, _arg, base, info):
@@ -484,10 +510,14 @@ def get_me(deps, event, headers, _arg, base, info):
   # group_writes tells the page whether to offer sign-in, create and edit at all (off in prod until
   # AOTY-57), so it hides them rather than showing controls that answer 503.
   writes = deps.env.get("GROUP_WRITES") == "true"
-  user = session_user(deps, event, keys)
+  try:
+    user, word = session_user(deps, event, keys, consistent=False)
+  except SessionUnavailable:
+    info["auth"] = "unavailable"
+    return _response(503, {"error": "signin_unavailable"})
   if not user:
     had_cookie = session.SESSION_COOKIE in session.parse_cookies(event.get("cookies"))
-    info["auth"] = "bad_session" if had_cookie else "anonymous"
+    info["auth"] = "revoked" if word == "revoked" else "bad_session" if had_cookie else "anonymous"
     clear = [session.clear_cookie(session.SESSION_COOKIE, base)] if had_cookie else None
     return _response(401, {"error": "signed_out", "group_writes": writes}, clear)
   info["auth"] = "me"
@@ -498,8 +528,32 @@ def post_signout(deps, event, headers, _arg, base, info):
   if not headers.get("content-type", "").lower().startswith("application/json"):
     info["auth"] = "not_json"
     return _response(415, {"error": "send content-type: application/json"})
-  info["auth"] = "signed_out"
-  return _response(200, {"signed_out": True}, [session.clear_cookie(session.SESSION_COOKIE, base)])
+  clear = [session.clear_cookie(session.SESSION_COOKIE, base)]
+  if (event.get("queryStringParameters") or {}).get("everywhere") != "1":
+    info["auth"] = "signed_out"
+    return _response(200, {"signed_out": True}, clear)
+  # Everywhere: the cookie stays when this fails, so the visitor can try again.
+  keys = _auth_keys(deps)
+  if not keys:
+    info["auth"] = "unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  try:
+    user, word = session_user(deps, event, keys)
+  except SessionUnavailable:
+    info["auth"] = "unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  if not user:
+    info["auth"] = word
+    return _response(401, {"error": "signed_out"}, clear)
+  try:
+    groups_store.revoke(deps, user, int(deps.clock()))
+  except Exception as e:
+    log.warning("could not revoke sessions: %s", _error_code(e) or type(e).__name__)
+    info["auth"] = "unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  log.info("revoked every session of %s", _tag(user))
+  info["auth"] = "signed_out_everywhere"
+  return _response(200, {"signed_out": True, "everywhere": True}, clear)
 
 
 _AUTH_HANDLERS = {"auth_start": auth_start, "auth_callback": auth_callback, "me": get_me,
@@ -576,9 +630,13 @@ def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
   if not keys:  # not 401: an SSM outage mustn't read as signed out
     info["group"] = "signin_unavailable"
     return _response(503, {"error": "signin_unavailable"})
-  user = session_user(deps, event, keys)
+  try:
+    user, word = session_user(deps, event, keys)
+  except SessionUnavailable:
+    info["group"] = "signin_unavailable"
+    return _response(503, {"error": "signin_unavailable"})
   if not user:
-    info["group"] = "signed_out"
+    info["group"] = word
     return _response(401, {"error": "signed_out"})
   if action == "my_groups":
     return _response(200, {"groups": groups_store.owned_by(deps, user)})
