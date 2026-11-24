@@ -172,8 +172,10 @@ def handler(event, context, deps=None):
   out = _dispatch(event or {}, context, deps, info)
   if info.get("action") == "sync":
     _emit(info, out, time.time() - started)
-  elif info.get("action") in core.GROUP_WRITES:
-    # One line per group write (AOTY-48): outcome as a plain field, no new metric names (AOTY-53).
+  elif info.get("action") in core.GROUP_WRITES or info.get("action") == "group_sync":
+    # One line per group write (AOTY-48) or visit sync (AOTY-55): outcome as a plain field, no new
+    # metric names (AOTY-53). A visit sync's member count queued is a plain field too.
+    extra = {"queued": info.get("queued", 0)} if info["action"] == "group_sync" else {}
     emf.emit(
       os.environ.get("AOTY_ENV", ""),
       {"LastfmCalls": (info.get("lastfm_calls", 0), "Count")},
@@ -182,6 +184,7 @@ def handler(event, context, deps=None):
       action=info["action"],
       status=out.get("statusCode"),
       seconds=round(time.time() - started, 3),
+      **extra,
     )
   elif info.get("action") in AUTH_ACTIONS:
     emf.emit(
@@ -336,22 +339,28 @@ def check_new_user(deps, name, row, headers, ip, trusted, now, settings):
   return {"username": name}, display, None  # a new user (or one Last.fm knows again)
 
 
-def request_sync(deps, name, row, display, now, info=None):
+def request_sync(deps, name, row, display, now, info=None, lean=False):
   """Steps 2-5 of POST sync (the module docstring), for a name check_new_user accepted, shared
-  with a group's member add (AOTY-48). (status, body). info gets "new" (a first sync)."""
+  with a group's member add (AOTY-48) and a group visit (AOTY-55). (status, body). info gets
+  "new" (a first sync). lean: no "status" in the body (it costs a re-read and the queue's
+  counters), for a group visit that asks for up to 25 members in one request."""
   info = {} if info is None else info
   cooldown, settings = _cooldown(deps), deps.settings()
+
+  def status_of(r):
+    return None if lean else _status(deps, r, now, cooldown)
+
   # A queued row needs the queue's depth to tell a long wait from a dead mark (api_core._running).
   depth = _queue_depth(deps) if row.get("state") == "queued" else None
   decision = core.decide_sync(row, now, cooldown, depth)
   if decision != "queue":
-    return 200, {"queued": False, "reason": decision, "status": _status(deps, row, now, cooldown)}
+    return 200, {"queued": False, "reason": decision, "status": status_of(row)}
   new = not row.get("last_synced_at")
   info["new"] = new
   if new and settings.new_users_paused:
     return 503, {"error": "paused"}
   if settings.pause_syncs:  # an existing user: their chart still serves; the banner stays quiet
-    return 200, {"queued": False, "reason": "paused", "status": _status(deps, row, now, cooldown)}
+    return 200, {"queued": False, "reason": "paused", "status": status_of(row)}
   if new and _queue_depth(deps) > settings.max_queue_for_new:
     return 503, {"error": "busy"}
 
@@ -359,6 +368,8 @@ def request_sync(deps, name, row, display, now, info=None):
   ticket = _take_ticket(deps)
   if not _mark_queued(deps, name, now, cooldown, display, ticket):
     _burn_tickets(deps, ticket)
+    if lean:
+      return 200, {"queued": False, "reason": "in_progress", "status": None}
     row = _get_user(deps, name)
     return 200, {"queued": False, "reason": "in_progress", "status": _status(deps, row, now, cooldown)}
   try:
@@ -377,6 +388,8 @@ def request_sync(deps, name, row, display, now, info=None):
   # A stale mark being replaced held a ticket no sync will use up: burn it, or everyone behind
   # it would read one place further back for good.
   _burn_tickets(deps, previous["queue_ticket"])
+  if lean:
+    return 202, {"queued": True, "status": None}
   row = _get_user(deps, name)
   return 202, {"queued": True, "status": _status(deps, row, now, cooldown)}
 
@@ -504,6 +517,11 @@ _AUTH_HANDLERS = {"auth_start": auth_start, "auth_callback": auth_callback, "me"
 # POST   groups/<id>/members {username} 201 {member, added: true, sync, status} | 200 {added: false}
 #                                       | 404 unknown user | 409 full, cannot_add | 429 | 503
 # DELETE groups/<id>/members/<name>     204, also when they weren't a member
+# POST   groups/<id>/sync               200 {queued: n, members: {word: count}} | 200 {queued: 0,
+#                                       reason: cooldown | paused} | 404 | 415. Public, on even where
+#                                       writes are off: a visit to the group page (AOTY-55, group_sync)
+#
+# GET groups/<id> also counts members syncing now (queued or running, not stuck), for the page.
 #
 # Writes: 503 groups_unavailable unless GROUP_WRITES=true (Terraform; off in prod until AOTY-57),
 # 415 unless JSON, 503 signin_unavailable when the session keys can't be read, 401 without a
@@ -539,6 +557,14 @@ def _json_body(event):
 def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
   if action == "group_get":
     return group_get(deps, arg) if grp.SLUG_RE.match(arg) else _response(404, {"error": "no such group"})
+  if action == "group_sync":  # public, and on where group writes are off: it's syncs, not edits
+    if not headers.get("content-type", "").lower().startswith("application/json"):
+      info["group"] = "not_json"
+      return _response(415, {"error": "send content-type: application/json"})
+    if not grp.SLUG_RE.match(arg):
+      info["group"] = "missing"
+      return _response(404, {"error": "no such group"})
+    return group_sync(deps, arg, info)
   if action in core.GROUP_WRITES:
     if deps.env.get("GROUP_WRITES") != "true":
       info["group"] = "disabled"
@@ -593,10 +619,62 @@ def group_get(deps, slug):
   meta, members = groups_store.load(deps, slug)
   if meta is None:
     return _response(404, {"error": "no such group"})
-  rows = _get_users(deps, members)
+  rows, now = _get_users(deps, members), int(deps.clock())
   ready = sum(1 for m in members if grp.member_state(rows.get(m, {})) == "ready")
+  # syncing (AOTY-55): members with a sync queued or running, so the page knows to look again.
+  syncing = sum(1 for m in members if core.decide_sync(rows.get(m, {}), now, 0) == "in_progress")
   return _response(200, {"id": slug, "name": meta.get("name", ""), "owner": meta.get("owner"),
-                         "members": members, "ready": ready, "total": len(members)})  # fmt: skip
+                         "members": members, "ready": ready, "total": len(members),
+                         "syncing": syncing})  # fmt: skip
+
+
+def group_sync(deps, slug, info):
+  """POST groups/<id>/sync (AOTY-55): a visit to the group's page queues its members' syncs.
+
+  At most once per group_sync_cooldown_seconds (the meta's sync_requested_at, claimed atomically),
+  and through request_sync for each member, so their own cooldown, pause_syncs, the new-user pause
+  and the queue limit all hold. This is also how members who never visit stay fresh (AOTY-60).
+  Members who are not_found, private or blocking group adds are skipped. Nothing is written while
+  pause_syncs is on. If nobody was queued because every send failed, the claim is given back.
+  Anyone may call it: the per-user cooldown is what bounds the Last.fm calls it can cause.
+  """
+  now, settings = int(deps.clock()), deps.settings()
+  if settings.pause_syncs:
+    info["group"] = "paused"
+    return _response(200, {"queued": 0, "reason": "paused"})
+  meta, members = groups_store.load(deps, slug)
+  if meta is None:
+    return _refused("missing", info)
+  claimed, previous = groups_store.claim_sync(deps, slug, now, settings.group_sync_cooldown_seconds)
+  if not claimed:
+    if previous == "missing":  # deleted since the read
+      return _refused("missing", info)
+    info["group"] = "cooldown"
+    return _response(200, {"queued": 0, "reason": "cooldown"})
+  rows = _get_users(deps, members, full=True)
+  words = []
+  for name in members:
+    row = rows.get(name) or {"username": name}
+    # Left alone (AOTY-60): Last.fm doesn't know them, their listening is hidden, or they opted out
+    # of group adds (AOTY-49). Their own page visit still syncs them.
+    skip = row.get("state") if row.get("state") in ("not_found", "private") else None
+    skip = skip or ("blocked" if row.get("block_group_adds") else None)
+    if skip:
+      words.append(skip)
+      continue
+    try:
+      words.append(core.sync_word(*request_sync(deps, name, row, None, now, lean=True)))
+    except Exception:  # one member's failure mustn't keep the rest from syncing
+      log.exception("group %s visit: sync request failed for %s", slug, _tag(name))
+      words.append("unavailable")
+  counts = core.tally(words)
+  queued = counts.get("queued", 0)
+  if not queued and counts.get("not_queued"):
+    groups_store.release_sync(deps, slug, now, previous)
+  info["group"] = "synced"
+  info["queued"] = queued
+  log.info("group %s visit: %s", slug, counts)
+  return _response(200, {"queued": queued, "members": counts})
 
 
 def _name_and_slug(body, info):
@@ -737,22 +815,26 @@ def _get_user(deps, name):
   return _from_item(out.get("Item") or {})
 
 
-USERS_BATCH_FIELDS = "username, #s, sync_finished_at, chart_built_at"
+USERS_BATCH_FIELDS = "username, #s, sync_finished_at, chart_built_at, sync_requested_at, sync_started_at"
 RETRIES = 4
 
 
-def _get_users(deps, names):
-  """{name: row} for the users rows that exist, with the fields groups.member_state reads.
-  BatchGetItem (at most 25 names, under its 100), retrying unprocessed keys."""
+def _get_users(deps, names, full=False):
+  """{name: row} for the users rows that exist, with the fields groups.member_state reads (whole
+  rows when full, for request_sync). BatchGetItem (at most 25 names, under its 100), retrying
+  unprocessed keys. Eventually consistent: a group visit's rows may be a moment old, and
+  _mark_queued's condition is what stops a double queue."""
   table, found = deps.env["USERS_TABLE"], {}
   if not names:
     return found
-  pending = {table: {"Keys": [{"username": {"S": n}} for n in names], "ProjectionExpression": USERS_BATCH_FIELDS,
-                     "ExpressionAttributeNames": {"#s": "state"}}}  # fmt: skip
+  request = {"Keys": [{"username": {"S": n}} for n in names]}
+  if not full:
+    request |= {"ProjectionExpression": USERS_BATCH_FIELDS, "ExpressionAttributeNames": {"#s": "state"}}
+  pending = {table: request}
   for attempt in range(RETRIES + 1):
     out = deps.ddb.batch_get_item(RequestItems=pending)
     for raw in out.get("Responses", {}).get(table, []):
-      row = dynamo.from_item(raw)
+      row = _from_item(raw)
       found[row["username"]] = row
     pending = out.get("UnprocessedKeys") or {}
     if not pending:

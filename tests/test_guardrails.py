@@ -41,9 +41,10 @@ def test_no_parameters_means_the_defaults_and_new_users_welcome():
 
 def test_values_are_parsed():
   s = reader(FakeSSM({"pause_new_users": "True", "sync_cooldown_seconds": " 3600 ",
-                      "max_queue_for_new": "50"})).get()  # fmt: skip
+                      "max_queue_for_new": "50", "group_sync_cooldown_seconds": "7200"})).get()  # fmt: skip
   assert s.pause_new_users and s.new_users_paused and not s.pause_syncs
   assert s.sync_cooldown_seconds == 3600 and s.max_queue_for_new == 50
+  assert s.group_sync_cooldown_seconds == 7200
 
 
 def test_pausing_syncs_pauses_new_users_too():
@@ -52,7 +53,8 @@ def test_pausing_syncs_pauses_new_users_too():
 
 @pytest.mark.parametrize("name,raw", [("pause_new_users", "yes"), ("pause_syncs", "1"),
                                       ("sync_cooldown_seconds", "0"), ("new_users_per_ip_hour", "-3"),
-                                      ("max_queue_for_new", "10.5")])  # fmt: skip
+                                      ("max_queue_for_new", "10.5"),
+                                      ("group_sync_cooldown_seconds", "0")])  # fmt: skip
 def test_malformed_values_are_rejected(name, raw):
   with pytest.raises(ValueError):
     g.parse(name, raw)

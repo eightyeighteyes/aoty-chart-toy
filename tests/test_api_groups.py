@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import api_core
+import groups_store
 import pytest
 from test_api_handler import NOW, ConditionFailed, FakeDDB, FakeLastfm, FakeSQS
 
@@ -50,6 +51,10 @@ CONDITIONS = {
     lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count", 0) < v[":max"],
   "#o = :me AND member_count = :n":
     lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count") == v[":n"],
+  # a group visit's sync claim and release (AOTY-55)
+  groups_store.CLAIM_SYNC:
+    lambda it, v: _has(it) and ("sync_requested_at" not in it or it["sync_requested_at"] <= v[":cool"]),
+  groups_store.RELEASE_SYNC: lambda it, v: _has(it) and it.get("sync_requested_at") == v[":now"],
 }  # fmt: skip
 
 
@@ -157,7 +162,12 @@ class FakeGroupsDDB(FakeDDB):
       e = ConditionFailed()
       e.response = {**e.response, **({"Item": dynamo.to_item(current)} if current else {})}
       raise e
+    before = dict(current)
     self._apply_update(current, UpdateExpression, ExpressionAttributeNames, values)
+    if kw.get("ReturnValues") == "UPDATED_OLD":
+      changed = {k: v for k, v in before.items() if current.get(k) != v}
+      return {"Attributes": dynamo.to_item(changed)}
+    return {}
 
   def batch_get_item(self, RequestItems):
     ((table, req),) = RequestItems.items()
@@ -242,12 +252,13 @@ def test_get_is_public_and_counts_ready_members(h):
   d = deps(h)
   d.ddb.seed("the-server", "alice", ["alice", "bob", "carol", "dave"], name="The Server")
   known(d.ddb, "alice", "bob")
-  d.ddb.rows["carol"] = {"username": "carol", "state": "syncing"}  # a first sync: waiting
+  d.ddb.rows["carol"] = {"username": "carol", "state": "syncing", "sync_started_at": NOW - 60}  # a first sync
   d.ddb.rows["dave"] = {"username": "dave", "state": "private", "sync_finished_at": NOW}
   status, body = call(h, d, "GET", "groups/the-server", user=None, ctype=None)
   assert status == 200
   assert body == {"id": "the-server", "name": "The Server", "owner": "alice",
-                  "members": ["alice", "bob", "carol", "dave"], "ready": 2, "total": 4}  # fmt: skip
+                  "members": ["alice", "bob", "carol", "dave"], "ready": 2, "total": 4,
+                  "syncing": 1}  # fmt: skip
   assert call(h, d, "GET", "groups/nope", user=None)[0] == 404
   assert call(h, d, "GET", "groups/..%2Fusers", user=None)[0] == 404
 
@@ -527,3 +538,163 @@ def test_group_writes_emit_one_line_with_the_outcome(h, capsys):
   call(h, d, "POST", "groups", {"name": "x"})
   lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
   assert [(line["action"], line["outcome"]) for line in lines] == [("group_create", "created")]
+
+
+# ---- a visit's member syncs (AOTY-55, AOTY-60) ----------------------------------------------
+
+
+def visit(h, d, slug="g", **kw):
+  kw.setdefault("user", None)  # anyone may visit: signed out is the usual case
+  return call(h, d, "POST", f"groups/{slug}/sync", {}, **kw)
+
+
+def queued_names(d):
+  return sorted(m["MessageGroupId"] for m in d.sqs.sent)
+
+
+def test_a_visit_queues_every_member_past_their_cooldown_signed_out(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob", "carol"])
+  known(d.ddb, "alice", "bob", "carol")
+  d.ddb.rows["carol"]["sync_requested_at"] = NOW - 60  # visited her own page a minute ago
+  status, body = visit(h, d)
+  assert status == 200 and body == {"queued": 2, "members": {"cooldown": 1, "queued": 2}}
+  assert queued_names(d) == ["alice", "bob"]
+  assert d.ddb.rows["bob"]["state"] == "queued"
+  assert d.ddb.meta("g")["sync_requested_at"] == NOW
+
+
+def test_a_second_visit_within_the_group_cooldown_queues_nothing(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice"], sync_requested_at=NOW - 3599)
+  known(d.ddb, "alice")
+  assert visit(h, d) == (200, {"queued": 0, "reason": "cooldown"})
+  assert d.sqs.sent == [] and d.ddb.meta("g")["sync_requested_at"] == NOW - 3599
+  d2 = deps(h, ddb=d.ddb, group_sync_cooldown_seconds=1800)  # a shorter knob: past it now
+  assert visit(h, d2)[1]["queued"] == 1
+
+
+def test_pause_syncs_writes_nothing(h):
+  d = deps(h, pause_syncs=True)
+  d.ddb.seed("g", "alice", ["alice"])
+  known(d.ddb, "alice")
+  assert visit(h, d) == (200, {"queued": 0, "reason": "paused"})
+  assert d.sqs.sent == [] and "sync_requested_at" not in d.ddb.meta("g")
+
+
+def test_it_works_where_group_writes_are_off_and_with_no_session_keys(h):
+  d = deps(h, env={"GROUP_WRITES": "false"}, auth={})
+  d.ddb.seed("g", "alice", ["alice"])
+  known(d.ddb, "alice")
+  assert visit(h, d)[1]["queued"] == 1
+
+
+def test_a_visit_must_be_json_and_name_a_real_group(h):
+  d = deps(h)
+  assert call(h, d, "POST", "groups/g/sync", {}, user=None, ctype="text/plain")[0] == 415
+  assert visit(h, d, slug="nope") == (404, {"error": "no such group"})
+  assert visit(h, d, slug="..%2Fx")[0] == 404
+  assert call(h, d, "GET", "groups/g/sync", user=None)[0] == 405
+
+
+def test_unknown_private_and_blocking_members_are_left_alone(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob", "carol", "dave", "erin"])
+  known(d.ddb, "alice", "bob", "carol", "dave")
+  d.ddb.rows["bob"]["state"] = "not_found"
+  d.ddb.rows["carol"]["state"] = "private"
+  d.ddb.rows["dave"]["block_group_adds"] = True
+  status, body = visit(h, d)  # erin has no row yet (her add's send failed): queued as new
+  assert body["members"] == {"blocked": 1, "not_found": 1, "private": 1, "queued": 2}
+  assert queued_names(d) == ["alice", "erin"]
+
+
+def test_members_all_in_their_own_cooldown_still_claim_the_group(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  known(d.ddb, "alice", "bob")
+  for n in ("alice", "bob"):
+    d.ddb.rows[n]["sync_requested_at"] = NOW - 10
+  assert visit(h, d) == (200, {"queued": 0, "members": {"cooldown": 2}})
+  assert d.ddb.meta("g")["sync_requested_at"] == NOW
+
+
+def test_a_visit_whose_sends_all_failed_gives_the_claim_back(h):
+  d = deps(h, sqs=FakeSQS(fail=True))
+  d.ddb.seed("g", "alice", ["alice", "bob"], sync_requested_at=NOW - 7200)
+  known(d.ddb, "alice", "bob")
+  assert visit(h, d)[1] == {"queued": 0, "members": {"not_queued": 2}}
+  assert d.ddb.meta("g")["sync_requested_at"] == NOW - 7200
+  assert d.ddb.rows["alice"]["sync_requested_at"] == NOW - 9000  # each member's mark undone too
+
+
+def test_the_release_never_undoes_a_later_visits_claim(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice"], sync_requested_at=NOW + 5)  # another visit, a moment later
+  assert not groups_store.release_sync(d, "g", NOW, NOW - 7200)
+  assert d.ddb.meta("g")["sync_requested_at"] == NOW + 5
+
+
+def test_a_partial_failure_keeps_the_claim(h):
+  class FlakySQS(FakeSQS):
+    def send_message(self, **kw):
+      if kw["MessageGroupId"] == "bob":
+        raise RuntimeError("SQS blip")
+      super().send_message(**kw)
+
+  d = deps(h, sqs=FlakySQS())
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  known(d.ddb, "alice", "bob")
+  assert visit(h, d)[1] == {"queued": 1, "members": {"not_queued": 1, "queued": 1}}
+  assert d.ddb.meta("g")["sync_requested_at"] == NOW
+
+
+def test_one_members_error_doesnt_stop_the_rest(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  known(d.ddb, "alice", "bob")
+  real = d.ddb.update_item
+
+  def update_item(TableName, Key, *a, **kw):
+    if TableName == "users" and Key["username"]["S"] == "alice":
+      raise RuntimeError("throttled")
+    return real(TableName, Key, *a, **kw)
+
+  d.ddb.update_item = update_item
+  assert visit(h, d)[1] == {"queued": 1, "members": {"queued": 1, "unavailable": 1}}
+
+
+def test_a_full_group_visit_stays_lean(h):
+  """25 members in one request: one batch read of the rows, no per-member re-read or status."""
+  d = deps(h)
+  names = [f"m{i:02d}" for i in range(grp.MAX_MEMBERS)]
+  d.ddb.seed("g", "m00", names)
+  known(d.ddb, *names)
+  reads = []
+  real = d.ddb.get_item
+
+  def get_item(TableName, Key, **kw):
+    reads.append(TableName)
+    return real(TableName, Key, **kw)
+
+  d.ddb.get_item = get_item
+  assert visit(h, d)[1]["queued"] == grp.MAX_MEMBERS
+  assert "users" not in reads
+
+
+def test_a_visit_emits_one_line_with_the_count(h, capsys):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice"])
+  known(d.ddb, "alice")
+  visit(h, d)
+  lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+  assert [(x["action"], x["outcome"], x["queued"]) for x in lines] == [("group_sync", "synced", 1)]
+  assert "SyncRequests" not in lines[0]
+
+
+def test_rename_leaves_the_build_read_stamp_behind(h):
+  d = deps(h)
+  d.ddb.seed("a", "alice", ["alice"], chart_read_at=NOW * 1000, sync_requested_at=NOW - 10)
+  assert call(h, d, "PATCH", "groups/a", {"name": "B"}) == (200, {"id": "b"})
+  meta = d.ddb.meta("b")
+  assert "chart_read_at" not in meta and meta["sync_requested_at"] == NOW - 10
