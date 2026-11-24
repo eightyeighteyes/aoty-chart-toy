@@ -272,7 +272,43 @@ sequenceDiagram
 ```
 
 A member's own sync still rebuilds every group they're in: after the user's chart, the chart
-builder looks them up in `by_member`.
+builder looks them up in `by_member`. It skips a group whose last build started reading after that
+member's sync finished (`chart_read_at`, AOTY-55), so a burst of member syncs costs a few group
+builds, not one per member.
+
+### A visit syncs the members (AOTY-55)
+
+Opening a group page syncs its members, so the chart stays fresh, including for members who never
+visit (AOTY-60). It's public, and on in prod where group writes are off.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor V as Visitor
+  participant API as api Lambda
+  participant G as groups table
+  participant U as users table
+  participant Q as sync queue
+  participant CB as chart Lambda
+
+  V->>API: POST api/groups/<id>/sync (JSON, no session needed)
+  Note over API: pause_syncs on: 200 {queued: 0, reason: paused}, nothing written
+  API->>G: Query the group (404 for none)
+  API->>G: claim: meta sync_requested_at = now, if older than group_sync_cooldown_seconds
+  Note over API: lost: 200 {queued: 0, reason: cooldown}
+  API->>U: BatchGetItem the members' rows
+  loop each member, not not_found / private / blocking adds
+    API->>U: POST sync's own path (their cooldown, in_progress, new-user pause, queue limit)
+    API->>Q: their sync
+  end
+  opt nobody queued because every send failed
+    API->>G: give the claim back (only if it's still ours)
+  end
+  API-->>V: 200 {queued, members: {word: count}}
+  Note over V: re-reads GET api/groups/<id> (syncing) and the chart once a minute while they sync
+  Q-)CB: each member's sync finishes, then their build
+  CB->>G: rebuild their groups unless chart_read_at already covers their sync
+```
 
 ## Background flow: sync, then the mb lane
 
@@ -386,7 +422,7 @@ and the next day's run starts over.
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
 | `guard` table | api (`ip#` new-name sets, the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
 | `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
-| `groups` table (AOTY-48) | api (meta and member items, in transactions), chart builder (`chart_built_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
+| `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
 | site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
 | site bucket `data/groups/*/chart.json` | chart builder (writes and deletes) | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |

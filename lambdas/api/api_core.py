@@ -39,9 +39,11 @@ USER_ACTIONS = frozenset({"sync", "status"})
 _GROUP_ROUTE = re.compile(r"api/groups/([^/]+)/?")
 _MEMBERS_ROUTE = re.compile(r"api/groups/([^/]+)/members/?")
 _MEMBER_ROUTE = re.compile(r"api/groups/([^/]+)/members/([^/]+)/?")
+_GROUP_SYNC_ROUTE = re.compile(r"api/groups/([^/]+)/sync/?")
 _GROUP_METHODS = {"GET": "group_get", "PATCH": "group_rename", "DELETE": "group_delete"}
 GROUP_WRITES = frozenset({"group_create", "group_rename", "group_delete", "member_add", "member_remove"})
-GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups"}
+# group_sync (AOTY-55) is public like group_get: a visit to a group page syncs its members.
+GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups", "group_sync"}
 # Sign-in (AOTY-47): path -> (action, method). Only the callback changes anything on a GET, and
 # only after its state check; signout is a JSON-only POST like sync.
 _AUTH_ROUTES = {
@@ -97,6 +99,9 @@ def _group_route(method, rest):
     return (
       ("member_remove", (_part(m.group(1)), _part(m.group(2)))) if method == "DELETE" else ("method", None)
     )
+  m = _GROUP_SYNC_ROUTE.fullmatch(rest)
+  if m:
+    return ("group_sync", _part(m.group(1))) if method == "POST" else ("method", None)
   m = _MEMBERS_ROUTE.fullmatch(rest)
   if m:
     return ("member_add", _part(m.group(1))) if method == "POST" else ("method", None)
@@ -116,6 +121,14 @@ def sync_word(status, body):
   if body.get("error") == "queue_unavailable":
     return "not_queued"
   return str(body.get("reason") or body.get("error") or "unavailable")
+
+
+def tally(words):
+  """{word: count} of a group sync's per-member sync_words (AOTY-55), in a stable order."""
+  out = {}
+  for w in sorted(words):
+    out[w] = out.get(w, 0) + 1
+  return out
 
 
 # ---- sign-in (AOTY-47) ----------------------------------------------------------------------

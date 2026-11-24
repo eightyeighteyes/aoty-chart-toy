@@ -261,7 +261,9 @@ def rename(deps, slug, new_slug, name, owner, now):
     if why:
       return why, slug
     meta, members = found
-    fields = {k: v for k, v in meta.items() if k not in ("pk", "sk", "chart_built_at")}
+    # chart_read_at (AOTY-55) goes too: the new slug has no chart yet, so nothing may skip its build.
+    # sync_requested_at stays: it's the same members, synced just as recently.
+    fields = {k: v for k, v in meta.items() if k not in ("pk", "sk", "chart_built_at", "chart_read_at")}
     fields |= {"name": name, "updated_at": now, "chart_requested_at": now}
     items = [_meta_put(new_slug, fields), _meta_delete(slug, owner, meta.get("member_count", 0))]
     for m in members:
@@ -273,3 +275,51 @@ def rename(deps, slug, new_slug, name, owner, now):
     if _failed(reasons, 0):
       return "taken", slug
   raise Changed(slug)
+
+
+# ---- a visit's member syncs (AOTY-55) -------------------------------------------------------
+#
+# The meta's sync_requested_at is the group's cooldown: claimed atomically, so a burst of visits
+# to a shared link queues the members once.
+
+CLAIM_SYNC = (
+  "attribute_exists(pk) AND (attribute_not_exists(sync_requested_at) OR sync_requested_at <= :cool)"
+)
+RELEASE_SYNC = "sync_requested_at = :now"
+
+
+def claim_sync(deps, slug, now, cooldown):
+  """(True, previous sync_requested_at or 0) when this visit may sync the members, else
+  (False, "cooldown") or (False, "missing") for no such group."""
+  try:
+    out = deps.ddb.update_item(
+      TableName=_table(deps), Key=_key(slug, g.META),
+      UpdateExpression="SET sync_requested_at = :now",
+      ConditionExpression=CLAIM_SYNC,
+      ExpressionAttributeValues=dynamo.to_item({":now": now, ":cool": now - cooldown}),
+      ReturnValues="UPDATED_OLD", ReturnValuesOnConditionCheckFailure="ALL_OLD",
+    )  # fmt: skip
+  except Exception as e:
+    if _code(e) != "ConditionalCheckFailedException":
+      raise
+    old = (getattr(e, "response", None) or {}).get("Item")
+    return False, ("cooldown" if old else "missing")
+  old = dynamo.from_item((out or {}).get("Attributes") or {})
+  return True, old.get("sync_requested_at") or 0
+
+
+def release_sync(deps, slug, now, previous):
+  """Give the claim back after a visit that queued nobody because the sends failed, so the next
+  visit tries again. Only our own claim: a later visit's is left alone. True if released."""
+  try:
+    deps.ddb.update_item(
+      TableName=_table(deps), Key=_key(slug, g.META),
+      UpdateExpression="SET sync_requested_at = :prev",
+      ConditionExpression=RELEASE_SYNC,
+      ExpressionAttributeValues=dynamo.to_item({":now": now, ":prev": previous or 0}),
+    )  # fmt: skip
+  except Exception as e:
+    if _code(e) != "ConditionalCheckFailedException":
+      raise
+    return False
+  return True

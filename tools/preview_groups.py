@@ -11,9 +11,11 @@ Member names with special answers on add:
   too-many     429 too_many_new          paused*     503 paused (new users paused)
   busy-busy    503 busy                  lastfm-down 503 lastfm_unavailable
   later*       added, but its sync wasn't queued ("their chart will start loading later")
-Seeded groups: full-house (alice's, 25 members, so any add is "full") and bobs-crew (bob's, with
-alice in it: no edit controls for alice). A member is "loading" for MEMBER_READY_S after being
-added, and each change shows up in the chart CHART_DELAY_S later, as the chart builder would.
+Seeded groups: full-house (alice's, 25 members, so any add is "full"), bobs-crew (bob's, with
+alice in it: no edit controls for alice) and paused-crew (its visits answer as pause_syncs would).
+A member is "loading" for MEMBER_READY_S after being added, and each change shows up in the chart
+CHART_DELAY_S later, as the chart builder would. A group page's visit (AOTY-55) re-syncs every
+member for RESYNC_S, then the chart rebuilds; reloading within the hour is the group cooldown.
 """
 
 import time
@@ -28,6 +30,8 @@ from common.albumkey import album_key, join_key
 COOKIE = "aoty_preview_session"
 MEMBER_READY_S = 20
 CHART_DELAY_S = 4
+RESYNC_S = 45  # a visit's member re-syncs (AOTY-55)
+GROUP_COOLDOWN_S = 3600
 YEAR = 2026
 ADD_REFUSALS = [
   ("nobody", (404, {"error": "unknown user"})),
@@ -75,6 +79,8 @@ class FakeGroups:
                                  "members": {"alice": t, **{f"member{i:02d}": t for i in range(24)}}}  # fmt: skip
     self.groups["bobs-crew"] = {"name": "Bob's Crew", "owner": "bob", "changed_at": t,
                                 "members": {"bob": t, "alice": t, "carol": t}}  # fmt: skip
+    self.groups["paused-crew"] = {"name": "Paused Crew", "owner": "bob", "changed_at": t,
+                                  "members": {"bob": t, "carol": t}}  # fmt: skip
     self.items = _items()
 
   # ---- the API -------------------------------------------------------------------------------
@@ -110,6 +116,10 @@ class FakeGroups:
     parts = path.split("/")[2:]  # after api/groups
     if method == "GET" and len(parts) == 1:
       return (*self.get(parts[0]), [])
+    if method == "POST" and parts[1:] == ["sync"]:  # public, like the real one (AOTY-55)
+      if not (ctype or "").lower().startswith("application/json"):
+        return 415, {"error": "send content-type: application/json"}, []
+      return (*self.visit(parts[0]), [])
     if method not in ("POST", "PATCH", "DELETE"):
       return 405, {"error": "method not allowed"}, []
     if not (ctype or "").lower().startswith("application/json"):
@@ -146,8 +156,26 @@ class FakeGroups:
     if not g:
       return 404, {"error": "no such group"}
     members = sorted(g["members"], key=str.casefold)
+    now = self.clock()
+    syncing = len(members) if now < g.get("resync_until", 0) else 0
     return 200, {"id": slug, "name": g["name"], "owner": g["owner"], "members": members,
-                 "ready": len(self._ready(g, self.clock())), "total": len(members)}  # fmt: skip
+                 "ready": len(self._ready(g, now)), "total": len(members), "syncing": syncing}  # fmt: skip
+
+  def visit(self, slug):
+    """POST groups/<slug>/sync: every member re-syncs for RESYNC_S (ready members stay ready),
+    then the chart rebuilds. A second visit within GROUP_COOLDOWN_S is a cooldown; paused-* groups
+    answer as pause_syncs would."""
+    g = self.groups.get(slug)
+    if not g:
+      return 404, {"error": "no such group"}
+    if slug.startswith("paused"):
+      return 200, {"queued": 0, "reason": "paused"}
+    now = self.clock()
+    if now - g.get("synced_at", 0) < GROUP_COOLDOWN_S:
+      return 200, {"queued": 0, "reason": "cooldown"}
+    g["synced_at"], g["resync_until"] = now, now + RESYNC_S
+    n = len(g["members"])
+    return 200, {"queued": n, "members": {"queued": n}}
 
   def create(self, user, body, now):
     name = grp.clean_name(body.get("name"))
@@ -201,6 +229,8 @@ class FakeGroups:
     now = self.clock()
     # The builder's last run: the latest change or member becoming ready that it has caught up with.
     events = [g["changed_at"] + CHART_DELAY_S] + [at + MEMBER_READY_S for at in g["members"].values()]
+    if g.get("resync_until"):
+      events.append(g["resync_until"] + CHART_DELAY_S)  # the rebuild after a visit's re-syncs
     built = max((e for e in events if e <= now), default=None)
     if built is None:
       return None

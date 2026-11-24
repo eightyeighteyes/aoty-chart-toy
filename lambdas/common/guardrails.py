@@ -5,6 +5,8 @@
   /kamp-aoty/<env>/sync_cooldown_seconds  int > 0     per-user cooldown between page-visit syncs
   /kamp-aoty/<env>/new_users_per_ip_hour  int > 0     distinct new usernames one IP may try per hour
   /kamp-aoty/<env>/max_queue_for_new      int > 0     new users are refused while the sync queue is deeper
+  /kamp-aoty/<env>/group_sync_cooldown_seconds
+                                          int > 0     a group page's visit syncs its members at most this often
 
 Values are set by hand (`aws ssm put-parameter --type String --overwrite`); Terraform only knows the
 names, as for the other parameters (infra/modules/stack/ssm.tf). A missing parameter means its
@@ -40,6 +42,7 @@ class Settings:
   sync_cooldown_seconds: int = 600
   new_users_per_ip_hour: int = 10
   max_queue_for_new: int = 500
+  group_sync_cooldown_seconds: int = 3600  # AOTY-55
   loaded: bool = True  # False until a read of SSM has succeeded once
 
   @property
@@ -54,6 +57,7 @@ NAMES = (
   "sync_cooldown_seconds",
   "new_users_per_ip_hour",
   "max_queue_for_new",
+  "group_sync_cooldown_seconds",
 )
 
 

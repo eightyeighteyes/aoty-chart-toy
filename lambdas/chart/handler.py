@@ -13,7 +13,8 @@ read older data can never overwrite a newer chart. Two events:
       already on a chart (index re-checks) show up at the user's next sync.
   {"group": "<slug>", "requested_at": uts?}
       From the api after a group change (AOTY-48). Skipped when the group's chart_built_at is at
-      or after requested_at. A group is also rebuilt after each member's own build.
+      or after requested_at. A group is also rebuilt after each member's own build, unless a group
+      build since that member's sync finished already read them (chart_read_at, AOTY-55).
   {"group": "<slug>", "deleted": true}
       From the api after a group was deleted or moved to a new slug: removes its chart, unless a
       group with that slug exists again by now (then it's rebuilt). Coming through here orders the
@@ -147,9 +148,12 @@ def _build_requested(deps, username, year, requested_at, totals):
     totals["skipped"] += 1
     return
   _count(totals, build(deps, username, row, year, totals))
-  # A sync's build: the groups this user is in get their new plays too (AOTY-50).
+  # A sync's build: the groups this user is in get their new plays too (AOTY-50), unless a group
+  # build since their sync finished already read them (AOTY-55).
+  finished = int(row.get("sync_finished_at") or 0)
   for group_id in _groups_with(deps, username):
-    _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
+    _guarded(deps, group_id, totals,
+             lambda g=group_id: _count(totals, build_group(deps, g, member_finished_at=finished)))  # fmt: skip
 
 
 def _rebuild_if_resolved(deps, row, totals, rebuilt=None):
@@ -226,9 +230,15 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   return True
 
 
-def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0):
+def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finished_at=0):
   """One group's chart from its ready members' stores (group_core). False for no such group, or
-  when its chart already covers requested_at.
+  when its chart already covers requested_at, or (for a member's build) member_finished_at.
+
+  member_finished_at (AOTY-55): the sync_finished_at of the member whose build asked for this one.
+  The meta's chart_read_at is when the last build started reading stores, in ms; the sync worker
+  saves the store before it writes sync_finished_at, so a build that started reading in a later
+  second already has the member's plays. A visit that syncs 25 members then costs a few group
+  builds, not 25. A build that started in the same second may have read the old store: it rebuilds.
 
   The group is the groups table's partition (common/groups.py, AOTY-48). Members whose sync
   hasn't finished are counted as waiting; not_found or private ones as unavailable
@@ -245,6 +255,12 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0):
     return False
   if requested_at and (meta.get("chart_built_at") or 0) >= requested_at:
     return False
+  # sync_finished_at is whole seconds: the finish was somewhere in that second, so only a read from
+  # the next second on is sure to be after it.
+  if member_finished_at and (meta.get("chart_read_at") or 0) >= (member_finished_at + 1) * 1000:
+    log.info("group %s: already has this member's sync", group_id)
+    return False
+  read_at = int(deps.clock() * 1000)
   stores, waiting, unavailable, images = {}, 0, 0, {}
   for member in members:
     if not USERNAME_RE.match(member):
@@ -269,8 +285,7 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0):
     deps, deps.env["SITE_BUCKET"], group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id), chart,
     CacheControl="no-cache",
   )  # fmt: skip
-  if meta.get("chart_requested_at"):
-    _stamp_group(deps, group_id, meta["chart_requested_at"])
+  _stamp_group(deps, group_id, meta.get("chart_requested_at"), read_at)
   log.info(
     "group %s: %d ready, %d waiting, %d albums shown", group_id, len(stores), waiting, len(chart["albums"])
   )
@@ -427,14 +442,19 @@ def _member_groups(deps, username):
   return [s for s in (grp.slug_of(it.get("pk")) for it in items) if s]
 
 
-def _stamp_group(deps, group_id, built):
-  """chart_built_at on the meta, only while the group still exists: an update would otherwise
-  create a bare meta item for a group deleted mid-build."""
+def _stamp_group(deps, group_id, built, read_at):
+  """chart_built_at (when the meta had a chart_requested_at) and chart_read_at on the meta, only
+  while the group still exists: an update would otherwise create a bare meta item for a group
+  deleted mid-build."""
+  sets, values = ["chart_read_at = :r"], {":r": {"N": str(read_at)}}
+  if built:
+    sets.append("chart_built_at = :t")
+    values[":t"] = {"N": str(built)}
   try:
     deps.ddb.update_item(
       TableName=deps.env["GROUPS_TABLE"], Key={"pk": {"S": grp.pk(group_id)}, "sk": {"S": grp.META}},
-      UpdateExpression="SET chart_built_at = :t", ConditionExpression="attribute_exists(pk)",
-      ExpressionAttributeValues={":t": {"N": str(built)}},
+      UpdateExpression="SET " + ", ".join(sets), ConditionExpression="attribute_exists(pk)",
+      ExpressionAttributeValues=values,
     )  # fmt: skip
   except Exception as e:
     if _error_code(e) != "ConditionalCheckFailedException":

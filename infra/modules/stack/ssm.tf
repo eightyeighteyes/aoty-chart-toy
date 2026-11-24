@@ -10,7 +10,7 @@ locals {
   # hand when needed. A missing one means its default, so none has to exist.
   guardrail_names = [
     "pause_new_users", "pause_syncs", "sync_cooldown_seconds", "new_users_per_ip_hour",
-    "max_queue_for_new",
+    "max_queue_for_new", "group_sync_cooldown_seconds",
   ]
 
   ssm_params = merge(

@@ -716,6 +716,7 @@
   // groupInfo: GET api/groups/<id>'s answer; null once it said there's no such group; undefined
   // until it has been read.
   let groupId = null, groupInfo, groupGen = 0, groupTimer = null, groupWake = false, watch = null;
+  let syncW = null;  // grp.syncWatch's state after this visit queued its members' syncs (AOTY-55)
 
   function groupHeading(name, year) {
     heading(name, year);
@@ -734,6 +735,19 @@
     });
     await meReady;
     await refreshGroup({first: true});
+    if (groupInfo !== null) visitSync();
+  }
+
+  // A visit syncs the group's members (AOTY-55): once per page load, quietly. The api decides
+  // who's due (each member's cooldown, the group's own, pause_syncs); a refusal or a failure
+  // changes nothing on the page. When it queued someone, keep re-reading while they sync.
+  async function visitSync() {
+    const gen = groupGen;
+    const r = await apiCall("POST", `groups/${groupId}/sync`);
+    if (gen !== groupGen) return;  // renamed or deleted meanwhile: that page's poller is in charge
+    if (r.status !== 200 || !r.body || !(r.body.queued > 0)) return;
+    syncW = grp.syncWatch(null, undefined, Date.now());
+    if (!watch) scheduleGroup(GROUP_REFRESH_MS);  // an edit's watch already looks every 5 s
   }
 
   function scheduleGroup(ms) {
@@ -762,7 +776,7 @@
     try { chart = await loadGroup(id); } catch (_) { failed = true; }
     // The group's record: for the owner's edit controls, while watching an edit, and to tell a
     // group whose first chart isn't written yet from no group at all.
-    const needInfo = !chart || watch || canWrite();
+    const needInfo = !chart || watch || syncW || canWrite();
     const info = needInfo ? await loadGroupInfo(id) : groupInfo;
     if (gen !== groupGen) return;
     if (info !== undefined) groupInfo = info;
@@ -791,6 +805,10 @@
       if (r.state === "done" || r.state === "timeout") { watch = null; say(""); } else { say(r.line); next = GROUP_WATCH_MS; }
     }
     if (next === null && chart && (chart.waiting || chart.pending)) next = GROUP_REFRESH_MS;
+    if (syncW) {  // members re-syncing after this visit: no banner, the chart just repaints
+      syncW = grp.syncWatch(syncW, info === undefined ? undefined : groupInfo, Date.now());
+      if (syncW && next === null) next = GROUP_REFRESH_MS;
+    }
     if (next !== null) scheduleGroup(next);
   }
 

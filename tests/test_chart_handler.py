@@ -127,11 +127,14 @@ class FakeDDB:
     ConditionExpression=None,
   ):  # fmt: skip
     if TableName == "groups":
-      assert (UpdateExpression, ConditionExpression) == ("SET chart_built_at = :t", "attribute_exists(pk)")
+      assert ConditionExpression == "attribute_exists(pk)"
+      assert UpdateExpression in ("SET chart_read_at = :r", "SET chart_read_at = :r, chart_built_at = :t")
       key = (Key["pk"]["S"], Key["sk"]["S"])
       if key not in self.groups:
         raise ConditionFailed()
-      self.groups[key]["chart_built_at"] = int(ExpressionAttributeValues[":t"]["N"])
+      for part in UpdateExpression.removeprefix("SET ").split(", "):
+        field, value = part.split(" = ")
+        self.groups[key][field] = int(ExpressionAttributeValues[value]["N"])
       return
     row = self.users.setdefault(Key["username"]["S"], {"username": Key["username"]["S"]})
     sets, _, removes = UpdateExpression.removeprefix("SET ").partition(" REMOVE ")
@@ -524,6 +527,43 @@ def test_a_group_build_stamps_the_request_it_read_not_its_end(h):
   assert meta["chart_built_at"] == NOW - 30
   s3.put_object = real_put
   assert h.handler({"group": GROUP, "requested_at": NOW - 5}, None, Deps(s3, ddb))["built"] == 1
+
+
+def group_puts(s3, ddb):
+  """Record put keys; and make every member's chart older than their sync, so it builds."""
+  for row in ddb.users.values():
+    row["chart_built_at"] = NOW - 120
+  puts, real_put = [], s3.put_object
+  s3.put_object = lambda **kw: (puts.append(kw["Key"]), real_put(**kw))[1]
+  return puts
+
+
+def test_a_burst_of_member_syncs_builds_the_group_once_it_has_read_them(h):
+  """AOTY-55: a visit syncs every member; once a group build read their finished syncs, each
+  member's own build after it doesn't rebuild the group again."""
+  s3, ddb = group_world()
+  puts = group_puts(s3, ddb)
+  for u in ("alice", "bob", "carol"):  # every sync finished at NOW - 60; builds run at NOW
+    h.handler({"username": u, "requested_at": NOW - 60}, None, Deps(s3, ddb))
+  assert puts.count(GROUP_CHART[1]) == 1
+  assert ddb.groups[(f"group#{GROUP}", "meta")]["chart_read_at"] == NOW * 1000
+
+
+def test_a_group_read_in_the_same_second_as_a_sync_finished_rebuilds(h):
+  s3, ddb = group_world(chart_read_at=(NOW - 60) * 1000 + 999)  # read in bob's finishing second
+  puts = group_puts(s3, ddb)
+  h.handler({"username": "bob", "requested_at": NOW - 60}, None, Deps(s3, ddb))
+  assert puts.count(GROUP_CHART[1]) == 1
+  s3, ddb = group_world(chart_read_at=(NOW - 59) * 1000)  # the next second: already has it
+  puts = group_puts(s3, ddb)
+  h.handler({"username": "bob", "requested_at": NOW - 60}, None, Deps(s3, ddb))
+  assert GROUP_CHART[1] not in puts
+
+
+def test_api_and_pending_group_builds_ignore_the_read_stamp(h):
+  s3, ddb = group_world(chart_read_at=NOW * 1000, chart_requested_at=NOW, chart_built_at=NOW - 10)
+  assert h.handler({"group": GROUP, "requested_at": NOW}, None, Deps(s3, ddb))["built"] == 1
+  assert h.handler({"group": GROUP}, None, Deps(s3, ddb))["built"] == 1
 
 
 def test_a_removed_member_drops_out_of_the_group_chart(h):
