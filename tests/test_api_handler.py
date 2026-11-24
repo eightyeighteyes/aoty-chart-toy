@@ -653,7 +653,7 @@ def test_a_bad_state_never_reaches_lastfm(h, case):
   if case == "no_cookie":
     cookies = None
   elif case == "wrong_nonce":
-    nonce = "x" + nonce[1:]
+    nonce = ("y" if nonce[0] == "x" else "x") + nonce[1:]  # always a different nonce
   elif case == "expired":
     d.clock = lambda: NOW + session.STATE_TTL_S
   elif case == "session_as_state":
