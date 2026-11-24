@@ -54,8 +54,10 @@ flowchart LR
   lastfm(["Last.fm API"])
   mbapi(["MusicBrainz API<br/>1 req/s, ~50% 503s"])
   mbdump(["MusicBrainz JSON dump"])
+  ga(["Google Analytics<br/>kamp.fm's property, prod only"])
 
   visitor --> cf
+  visitor -- "templated page views,<br/>events (AOTY-38)" --> ga
   cf -- "/toys/aoty/*" --> siteb
   cf -- "/toys/aoty/api/*<br/>+ x-kamp-origin" --> apigw --> api
   api -- "queue a sync" --> syncq
@@ -437,6 +439,7 @@ and the next day's run starts over.
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 | SSM `session_key`, `session_key_previous`, `lastfm_api_secret` (AOTY-47) | the admin, by hand | api only |
 | `__Secure-kamp_aoty_session` / `_state` cookies | api | api (the browser holds them; nothing server-side) |
+| GA4 hits, kamp.fm's property (AOTY-38) | the prod shell's `kampstats.js`: templated paths, group slugs, allowlisted events, never a username | the admin, in GA |
 
 An album's year comes from the `albums` table if it has an item. If not, the mb lane tries the
 index, then a live search. The lane writes the item whichever of the two found the year, and

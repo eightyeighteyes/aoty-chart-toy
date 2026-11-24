@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51) and `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base>` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52) and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -581,6 +581,32 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   grace, 15 min cap). No banner: `member_state` keeps re-syncing members ready.
 - Preview: any seeded group's first load re-syncs it for 45 s; a reload is the cooldown;
   `paused-crew` is `pause_syncs`.
+
+## Analytics (AOTY-38, 2026-11-24)
+
+- User decisions: **kamp.fm's GA4 property** (`G-QNJVBYWDYN`, kamp-site's), content group `aoty`,
+  so the toy → kamp.fm → `file_download` funnel (kamp-site already sends that event) is one
+  property. Prod only: `deploy.yml` passes `build_shell.py --ga-id` for prod; staging builds with
+  none. **Group slugs are sent** (`group_id`, plus `group_size` on `group_loaded`); **usernames never
+  are**.
+- **The guarantee is in `kampstats.js`, not in GA settings.** Everything sent comes from templates
+  (`/toys/aoty/user/:name`, fixed titles, referrers cut to an origin or templated) and the `EVENTS`
+  allowlist. Every `replaceState` that changes the path is followed by `track("setPage")`. A new
+  event or param means adding it to `EVENTS`, and the sentinel test checks that no username leaks.
+- **One page view per load**, sent by hand after routing (`send_page_view: false`). GA's "page
+  changes based on browser history events" must stay off in the stream (shared with kamp.fm,
+  which makes no history calls): the member filter alone would be a page view per pick.
+- The file is called `kampstats.js` because filter lists block same-origin `analytics.` paths. app.js
+  reaches it only through `track()`, which does nothing when it's missing and swallows its errors.
+- Events that navigate away (`intro_submit` ok, `group_create`, `kamp_click`) rely on gtag's beacon
+  flush on page hide.
+- `sign_in` is counted from a sessionStorage mark set on the sign-in link, once `api/me` names
+  someone. `last.fm` is on the property's unwanted-referrals list, so the return trip doesn't start
+  a new session.
+- The kamp.fm link has `referrerpolicy="origin"`: same-origin referrers carry the full path, and
+  kamp.fm's own gtag doesn't template it.
+- Preview: `tools/serve_shell.py --ga-id G-QNJVBYWDYN`. Off kamp.fm every hit has `debug_mode`, so it
+  shows in DebugView and the property's developer-traffic filter keeps it out of reports.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
