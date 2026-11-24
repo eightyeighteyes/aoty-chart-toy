@@ -300,7 +300,7 @@ class SandboxProxy:
 
   def __init__(self, stack):
     self.api_base = f"{stack['api_endpoint']}{stack['base_path']}"
-    self.base = stack["base_path"]
+    self.base = None  # the preview's own base path (--base), set by sign_in_as
     self.bucket, self.prefix = stack["site_bucket_name"], stack["s3_key_prefix"]
     self.label = f"{self.api_base} and s3://{self.bucket}/{self.prefix}"
     self.session_name = None  # --sign-in-as: sign-in is simulated here (see SandboxSession)
@@ -314,7 +314,7 @@ class SandboxProxy:
       raise SystemExit(f"can't read sandbox's stack outputs (terraform init there first?):\n{out.stderr}")
     return cls(json.loads(out.stdout))
 
-  def sign_in_as(self, name):
+  def sign_in_as(self, name, base):
     """AOTY-52: Last.fm's sign-in would land on sandbox's own origin, not here, so with
     --sign-in-as the proxy mints a real session for name with sandbox's session_key (read from
     SSM with your admin credentials) and adds it to the api requests it forwards. auth/start
@@ -324,7 +324,8 @@ class SandboxProxy:
                          capture_output=True, text=True)  # fmt: skip
     if out.returncode != 0:
       raise SystemExit(f"can't read sandbox's session_key (admin credentials?):\n{out.stderr}")
-    self.session_name, self._key = name.lower(), out.stdout.strip()
+    # Sign-in lands back on this preview, whose base (--base) needn't be sandbox's own.
+    self.session_name, self._key, self.base = name.lower(), out.stdout.strip(), base
 
   def api(self, method, rest, body, ctype, query=""):
     if self.session_name:
@@ -538,7 +539,7 @@ def main():
     print(f"sample chart: {f}")
   proxy = make_proxy(args.proxy)
   if args.sign_in_as:
-    proxy.sign_in_as(args.sign_in_as)
+    proxy.sign_in_as(args.sign_in_as, args.base)
   if proxy:
     print(f"api/ and data/ go to {proxy.label}: syncs are real (the API's cooldown still applies)")
   server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data, proxy))
