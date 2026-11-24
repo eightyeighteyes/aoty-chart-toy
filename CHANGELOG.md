@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.6.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.5.0...v1.6.0) (2026-11-24)
+
+
+### Features
+
+* **web:** analytics on every page (AOTY-38) ([07a20dd](https://github.com/eightyeighteyes/aoty-chart-toy/commit/07a20dd6daf1685cf42a0a70843d4a873df2f80e))
+* **web:** build the shell with an optional GA measurement id ([fa8148d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/fa8148d9449eac0bb8f2e299a2e050bd28f3fb37))
+* **web:** kampstats analytics wrapper with templated paths ([a223f16](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a223f163ce6feada94323d1c8faf153cd6a1e673))
+* **web:** page views and events on every page ([4bc7f03](https://github.com/eightyeighteyes/aoty-chart-toy/commit/4bc7f035e65a4f4538694a661c4121cc1b881c87))
+
 ## [1.5.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.4.0...v1.5.0) (2026-11-24)
 
 
