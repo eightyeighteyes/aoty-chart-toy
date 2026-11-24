@@ -148,7 +148,11 @@ jobs:
         run: |
           set -euo pipefail
           # The shell (AOTY-21) is built per env: its asset URLs are absolute and include the base.
-          python scripts/build_shell.py --base "$BASE_PATH" --out dist/web
+          # Analytics (AOTY-38) is prod's alone: kamp.fm's GA4 property, whose measurement id is
+          # public (kamp.fm's own page carries it). Staging builds with none and sends nothing.
+          ga_id=""
+          if [ "$AOTY_ENV" = "prod" ]; then ga_id="G-QNJVBYWDYN"; fi
+          python scripts/build_shell.py --base "$BASE_PATH" --out dist/web --ga-id "$ga_id"
           dest="s3://$SITE_BUCKET/$S3_PREFIX"
           # 1. Content-hashed assets, cached for a year. Never --delete: an open tab, or an
           #    index.html still cached at the edge for a few seconds, asks for the previous build's
