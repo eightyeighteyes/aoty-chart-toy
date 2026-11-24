@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.4.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.3.0...v1.4.0) (2026-11-24)
+
+
+### Features
+
+* a visit to a group page syncs its members (AOTY-55, AOTY-60) ([a1f3566](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a1f3566d5609e9a4c0c2a0872fe6e16836421cb4))
+* **api:** a visit to a group page syncs its members ([f1cd5cc](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f1cd5cce85e8f4e0d3028de6bf5ec55512119b13))
+* **api:** api/me says whether group writes are on ([39975b2](https://github.com/eightyeighteyes/aoty-chart-toy/commit/39975b24c99ae3a7007495788d2d16e38d30d67a))
+* **api:** owned groups: create, rename, delete, add and remove members ([d2843a8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d2843a83f6273f239238a3b1c909afd0bbcf7b95))
+* **api:** sign in with Last.fm (AOTY-47) ([ee90909](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ee909099121dd0f8015d3c1ad64f1f7dd4d0ae3b))
+* **api:** sign in with Last.fm: auth/start, auth/callback, me and signout ([a0d6191](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a0d61915eedbc729168c341b5ca72cd93ae9cf28))
+* **api:** sign out everywhere revokes every session of the user ([bca5592](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bca5592f009d0e47b525333696260fcc30666639))
+* **api:** sign-in routes, the landing-path check and Last.fm's auth URL ([b908048](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b908048730a4fdb58e19a0d25288e160de76e2c9))
+* **api:** signed session and sign-in state tokens and cookies ([6f9cc25](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6f9cc25244b3cb3f0dd26dd1d15e07dafec9abac))
+* **chart:** build group charts from the groups table ([9b52166](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9b521665de5a51e1f7580cb063423ee2187238c1))
+* group editing UI: sign-in row, create, add and remove members, share (AOTY-52) ([1683384](https://github.com/eightyeighteyes/aoty-chart-toy/commit/16833843f86be57ac0561d65848b3659a9e42825))
+* **infra:** groups table with member items and a prod write gate ([0975474](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0975474dec19b7f6f262c76d19e1320e803ac83c))
+* **infra:** lock prod's api to kamp.fm's CloudFront ([500ba72](https://github.com/eightyeighteyes/aoty-chart-toy/commit/500ba726aebbf9af69170f397570f9a2755ff284))
+* **infra:** lock prod's api to kamp.fm's CloudFront ([2a36588](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2a365882ec655f13e0fc1eaad7aa0682cb71dfe7))
+* **infra:** lock staging's api to kamp.fm's CloudFront ([306b94a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/306b94ad6d4f62028c710e6690e8c36bc54cbbc9))
+* **infra:** lock staging's api to kamp.fm's CloudFront ([e9ccc74](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e9ccc74ae2a64775a232265e9f9c0ee4467a21bf))
+* **infra:** sign-in secrets readable by the api alone, and its callback origin ([88ed46e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/88ed46e0af99cdd1538d8ef605a56e8fab5ce72a))
+* **lastfm:** signed calls and auth.getSession for sign-in ([0a1042e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0a1042e656354b2ced90abbc2345346af1d84e8c))
+* owned groups table and API (AOTY-48) ([57989ab](https://github.com/eightyeighteyes/aoty-chart-toy/commit/57989abb3fbdc427d32f7e88957a1c08b884ab0a))
+* **session:** a revocation cutoff that a session's iat must be after ([693bdfd](https://github.com/eightyeighteyes/aoty-chart-toy/commit/693bdfd63d458d45caa4b0a8f337eb9fef8cabb5))
+* sign out everywhere (revocable sessions) ([1b93613](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1b936136e0bce54c8ba3f86608dfd3c09fa0e187))
+* **tools:** pre-warm the albums table (AOTY-42) ([ee4462d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ee4462d0c0c7d236763a040d69595c4c16bbfc30))
+* **tools:** pre-warm the albums table from Last.fm's year tag and top artists ([1a626b1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1a626b141658c095219bd48f7e7129c14237f47e))
+* **tools:** preview a group page visit's member syncs ([9226a7a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9226a7aa9e113a5f172315882a9c281e8e378d1b))
+* **tools:** preview sign-in and group editing in serve_shell ([961c6a4](https://github.com/eightyeighteyes/aoty-chart-toy/commit/961c6a4f91a8138e3971c997acda8dc456bcb1fe))
+* **web:** a group page visit syncs its members ([1084163](https://github.com/eightyeighteyes/aoty-chart-toy/commit/10841638ae124c35b9a6b05bd23f279405d99ae0))
+* **web:** a sign out everywhere button ([e2ff61b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e2ff61b8ae711664dda94c8948aa4a91fd4ad7f2))
+* **web:** sign-in row, your groups, and the owner's group editing ([c62eda7](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c62eda71337b04cee5a8c1c9fad7ea5544c1b34c))
+
+
+### Bug Fixes
+
+* **lastfm:** a made-up sign-in token no longer counts as a Last.fm error ([2f468a2](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2f468a22d01027b848dc8fe7d9548ac0f07c631e))
+* **lastfm:** a made-up sign-in token no longer counts as a Last.fm error ([7b4e03a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7b4e03a1ea5ec9c5bd22809e0ef1d76942b27679))
+* **tools:** --sign-in-as lands back under the preview's base, not sandbox's ([0d7cd11](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0d7cd118cda03a601640431c9179846239b32adb))
+
+
+### Performance Improvements
+
+* **chart:** a burst of member syncs rebuilds each group once ([a2b8fa2](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a2b8fa232c27b48ef6d5fdbabfd4896e23338bfa))
+
 ## [1.3.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.2.0...v1.3.0) (2026-11-23)
 
 
