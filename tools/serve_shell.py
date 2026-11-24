@@ -531,10 +531,13 @@ def main():
   p.add_argument("--sign-in-as", metavar="NAME",
                  help="with --proxy sandbox: 'sign in with last.fm' signs you in as NAME with a real "
                       "session minted from sandbox's session_key (admin credentials), AOTY-52")  # fmt: skip
+  p.add_argument("--ga-id", default="",
+                 help="send analytics to this GA4 property (AOTY-38). Off kamp.fm every hit has "
+                      "debug_mode, so it shows in DebugView and stays out of the reports")  # fmt: skip
   args = p.parse_args()
   if args.sign_in_as and args.proxy != "sandbox":
     p.error("--sign-in-as works only with --proxy sandbox")
-  build_shell.build(args.base, out=OUT)
+  build_shell.build(args.base, out=OUT, ga_id=args.ga_id)
   if args.sample:
     f = args.data / "users" / args.sample.lower() / "chart.json"
     f.parent.mkdir(parents=True, exist_ok=True)
