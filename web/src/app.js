@@ -16,7 +16,10 @@
   const intro = globalThis.aotyIntro;  // web/src/intro.js, loaded first
   const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
   const grp = globalThis.aotyGroup;  // web/src/group.js, loaded first (AOTY-51)
+  const ge = globalThis.aotyGroupEdit;  // web/src/groupedit.js, loaded first (AOTY-52)
   const GROUP_REFRESH_MS = 60000;  // a group page re-reads its chart while members load
+  const GROUP_WATCH_MS = 5000;  // and every 5 s after an edit, or while its first chart is pressed
+  const API_TIMEOUT_MS = 10000;
   const USERNAME_RE = intro.USERNAME_RE;
   const LOOKUP_TIMEOUT_MS = 10000;
   const CHART_VERSION = 1;
@@ -449,12 +452,15 @@
   // The page's own address, in the casing the address bar shows.
   const pageUrl = () => `${location.origin}${location.pathname}`;
 
-  async function copyLink(button, urlText) {
+  // Copy url; with no clipboard (an insecure context, or permission refused), select urlText
+  // instead. Says which happened through say(text) (default: the button's own label).
+  async function copyLink(button, urlText, url = pageUrl(), say = null) {
+    const label = button.textContent;
+    const tell = say || (t => { button.textContent = t; });
     try {
-      await navigator.clipboard.writeText(pageUrl());
-      button.textContent = "copied";
+      await navigator.clipboard.writeText(url);
+      tell(say ? "link copied." : "copied");
     } catch (_) {
-      // No clipboard (an insecure context, or permission refused): select the address instead.
       if (urlText) {
         const range = document.createRange();
         range.selectNodeContents(urlText);
@@ -462,9 +468,9 @@
         sel.removeAllRanges();
         sel.addRange(range);
       }
-      button.textContent = "selected: copy it";
+      tell(say ? "couldn't copy it, so the link is selected: copy it from there." : "selected: copy it");
     }
-    setTimeout(() => { button.textContent = "copy link"; }, 2500);
+    if (!say) setTimeout(() => { button.textContent = label; }, 2500);
   }
 
   function updateQueue(position, waitSeconds) {
@@ -704,27 +710,101 @@
     return chart;
   }
 
+  // The group page's state (AOTY-52). One poller per page: every scheduled read carries the
+  // generation it was made in, and a rename (which moves the group to a new id) or a delete bumps
+  // it, so a read for the old id can never paint over the page.
+  // groupInfo: GET api/groups/<id>'s answer; null once it said there's no such group; undefined
+  // until it has been read.
+  let groupId = null, groupInfo, groupGen = 0, groupTimer = null, groupWake = false, watch = null;
+
+  function groupHeading(name, year) {
+    heading(name, year);
+    document.title = `${name} · ${NAME} ${year} · a kamp toy`;
+  }
+
   async function showGroup(id) {
     heading(NAME, "");
     if (!grp.ID_RE.test(id)) {
       state("there's no group here", "check the link you were given.", false);
       return;
     }
-    let chart;
-    try {
-      chart = await loadGroup(id);
-    } catch (_) {
-      state("we couldn't load this chart", "try again in a minute.", false);
-      return;
-    }
-    if (!chart) {
+    groupId = id;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && groupWake) { groupWake = false; refreshGroup(); }
+    });
+    await meReady;
+    await refreshGroup({first: true});
+  }
+
+  function scheduleGroup(ms) {
+    clearTimeout(groupTimer);
+    const gen = groupGen;
+    groupTimer = setTimeout(() => {
+      if (gen !== groupGen) return;
+      if (document.hidden) { groupWake = true; return; }  // visibilitychange resumes it
+      refreshGroup();
+    }, ms);
+  }
+
+  // GET api/groups/<id>: {id, name, owner, members, ready, total}, null for no such group, or
+  // undefined when it couldn't be read.
+  async function loadGroupInfo(id) {
+    const r = await apiCall("GET", `groups/${id}`);
+    if (r.status === 200 && r.body && Array.isArray(r.body.members)) return r.body;
+    return r.status === 404 ? null : undefined;
+  }
+
+  // Read the chart (and the group's own record when needed), paint, and decide when to look again.
+  async function refreshGroup({first = false} = {}) {
+    const gen = groupGen, id = groupId;
+    clearTimeout(groupTimer);
+    let chart, failed = false;
+    try { chart = await loadGroup(id); } catch (_) { failed = true; }
+    // The group's record: for the owner's edit controls, while watching an edit, and to tell a
+    // group whose first chart isn't written yet from no group at all.
+    const needInfo = !chart || watch || canWrite();
+    const info = needInfo ? await loadGroupInfo(id) : groupInfo;
+    if (gen !== groupGen) return;
+    if (info !== undefined) groupInfo = info;
+    if (groupInfo === null && !current) {
       state("there's no group here", "check the link you were given.", false);
-      return;
+      return hideGroupTools();
     }
+    if (chart) {
+      paintGroup(chart);
+    } else if (!current) {
+      // A chart is on screen through a rename (the new id's chart isn't written yet); otherwise
+      // say what's happening.
+      if (failed || !groupInfo) {
+        state("we couldn't load this chart", "try again in a minute.", false);
+      } else {
+        groupHeading(groupInfo.name, YEAR);
+        state("pressing this group's chart…", "it takes a few minutes for new members: we read each one's "
+            + "year of scrobbles, then check every album's release year.", false);
+        if (!watch) startWatch(false);
+      }
+    }
+    showGroupTools(first);
+    let next = null;
+    if (watch) {
+      const r = ge.rebuild(watch, groupInfo, chart || null, Date.now());
+      if (r.state === "done" || r.state === "timeout") { watch = null; say(""); } else { say(r.line); next = GROUP_WATCH_MS; }
+    }
+    if (next === null && chart && (chart.waiting || chart.pending)) next = GROUP_REFRESH_MS;
+    if (next !== null) scheduleGroup(next);
+  }
+
+  // Watch the chart rebuild after an edit (or a new group's first chart), in the banner.
+  function startWatch(soon = true) {
+    watch = {since: Date.now(), before: current ? current.generated_at : null};
+    say("rebuilding the chart…");
+    if (soon) scheduleGroup(GROUP_WATCH_MS);
+  }
+
+  function paintGroup(chart) {
     const first = current === null;
     current = chart;
-    heading(chart.name, chart.year);
-    document.title = `${chart.name} · ${NAME} ${chart.year} · a kamp toy`;
+    groupHeading(groupInfo && groupInfo.id === chart.id ? groupInfo.name : chart.name, chart.year);
     $("controls").hidden = false;
     $("rank-weighted").hidden = false;
     groupPicklist(chart);
@@ -754,16 +834,435 @@
       renderChart(chart);
       window.scrollTo(0, y);
     }
-    // While members load or albums are being dated, the chart keeps changing: re-read it.
-    if ((chart.waiting || chart.pending) && !document.hidden) {
-      setTimeout(() => showGroup(id), GROUP_REFRESH_MS);
+  }
+
+  // ---- the API, signed in (AOTY-52) ----------------------------------------------------------
+  //
+  // Writes are JSON with the session cookie; the JSON content type is what keeps other sites'
+  // forms out, so there's never a form-post fallback. {status, body}: status 0 when the request
+  // failed or timed out, body null when there was none (a 204, or a CloudFront error page).
+  async function apiCall(method, path, body) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
+    const opts = {method, cache: "no-store", credentials: "same-origin", signal: ctl.signal};
+    if (method !== "GET") {
+      opts.headers = {"content-type": "application/json"};
+      opts.body = JSON.stringify(body || {});
+    }
+    try {
+      const res = await fetch(`${BASE}api/${path}`, opts);
+      let parsed = null;
+      try { parsed = await res.json(); } catch (_) { parsed = null; }
+      return {status: res.status, body: parsed};
+    } catch (_) {
+      return {status: 0, body: null};
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  const groupId = routeGroup();
-  const name = groupId === null ? routeName() : null;
-  if (groupId !== null) {
-    showGroup(groupId);
+  // A button busy with a request: aria-busy, not disabled, so focus stays put (as bindLookup).
+  function busy(button, on, text) {
+    if (on) button.dataset.label = button.textContent;
+    button.setAttribute("aria-busy", String(on));
+    button.setAttribute("aria-disabled", String(on));
+    button.textContent = on ? text : button.dataset.label;
+  }
+  const isBusy = button => button.getAttribute("aria-busy") === "true";
+
+  function formError(input, msg, text) {
+    msg.textContent = text;
+    input.setAttribute("aria-invalid", "true");
+    input.focus();
+    input.select();
+  }
+  function clearOnInput(input, msg) {
+    input.addEventListener("input", () => { input.removeAttribute("aria-invalid"); msg.textContent = ""; });
+  }
+
+  // ---- who's signed in --------------------------------------------------------------------------
+  //   me: {username, group_writes} signed in; null signed out; undefined unknown (api/me failed,
+  //   or a 503 because the session keys can't be read: that is not "signed out").
+  //   writesOn: whether group writes are on in this env (api/me says so either way).
+  let me, writesOn = false;
+  const canWrite = () => !!me && writesOn;
+
+  async function loadMe() {
+    const r = await apiCall("GET", "me");
+    if (r.status === 200 && r.body && typeof r.body.username === "string") {
+      me = {username: r.body.username};
+      writesOn = !!r.body.group_writes;
+    } else if (r.status === 401) {
+      me = null;
+      writesOn = !!(r.body && r.body.group_writes);
+    } else {
+      me = undefined;
+    }
+    renderAccount();
+  }
+
+  // The row under the top bar. Hidden while api/me is unknown, and where group writes are off
+  // (prod until AOTY-57): signing in would offer nothing there yet.
+  function renderAccount() {
+    const row = $("account-row");
+    $("account").hidden = me === undefined || !writesOn;
+    $("intro-groups").hidden = !canWrite();
+    if (me === undefined) return row.replaceChildren();
+    if (!me) {
+      const a = document.createElement("a");
+      a.className = "account-link";
+      const here = new URL(location.href);
+      here.searchParams.delete("signin");
+      a.href = `${BASE}api/auth/start?next=${encodeURIComponent(here.pathname + here.search)}`;
+      a.textContent = "sign in with last.fm";
+      return row.replaceChildren(a);
+    }
+    const name = document.createElement("a");
+    name.className = "account-link";
+    name.href = `${BASE}user/${encodeURIComponent(me.username)}`;
+    name.textContent = me.username;
+    const groups = document.createElement("button");
+    groups.type = "button";
+    groups.className = "link-button";
+    groups.textContent = "your groups";
+    groups.addEventListener("click", () => openMyGroups(groups, false));
+    const out = document.createElement("button");
+    out.type = "button";
+    out.className = "link-button";
+    out.textContent = "sign out";
+    out.addEventListener("click", () => signOut(out));
+    row.replaceChildren(name, " · ", groups, " · ", out);
+  }
+
+  async function signOut(button) {
+    if (isBusy(button)) return;
+    busy(button, true, "signing out…");
+    const r = await apiCall("POST", "auth/signout");
+    if (r.status !== 200) {
+      busy(button, false);
+      $("account-msg").textContent = "couldn't sign out just now. try again?";
+      return;
+    }
+    me = null;
+    renderAccount();
+    showGroupTools(false);
+    $("account-msg").textContent = "signed out.";
+    $("account-row").querySelector("a").focus();
+  }
+
+  // Back from Last.fm with ?signin=failed: say so quietly, and take it out of the address.
+  function signinResult() {
+    const url = new URL(location.href);
+    if (url.searchParams.get("signin") !== "failed") return;
+    url.searchParams.delete("signin");
+    try { history.replaceState(null, "", url); } catch (_) {}
+    $("account-msg").textContent = "sign-in didn't go through. try again?";
+  }
+
+  // ---- dialogs ----------------------------------------------------------------------------------
+  //
+  // Native <dialog> with showModal: it traps focus and closes on Escape. Focus goes back to the
+  // button that opened it, unless that button is gone (then the caller decides).
+  function openDialog(dialog, opener, focusEl) {
+    dialog.addEventListener("close", () => {
+      if (opener && opener.isConnected && !opener.closest("[hidden]")) opener.focus();
+    }, {once: true});
+    dialog.showModal();
+    if (focusEl) focusEl.focus();
+  }
+
+  // Resolves true when the visitor confirms. Cancel is focused first: the safe default.
+  function confirmDialog(opener, title, text, yes) {
+    const d = $("confirm");
+    $("confirm-title").textContent = title;
+    $("confirm-text").textContent = text;
+    $("confirm-yes").textContent = yes;
+    d.returnValue = "";
+    return new Promise(resolve => {
+      d.addEventListener("close", () => resolve(d.returnValue === "yes"), {once: true});
+      openDialog(d, opener, $("confirm-no"));
+    });
+  }
+  $("confirm-yes").addEventListener("click", () => $("confirm").close("yes"));
+  $("confirm-no").addEventListener("click", () => $("confirm").close("no"));
+
+  // ---- your groups ------------------------------------------------------------------------------
+
+  async function openMyGroups(opener, toCreate) {
+    const d = $("mygroups");
+    const list = $("mygroups-list");
+    $("create-form").hidden = !canWrite();
+    list.replaceChildren();
+    $("mygroups-empty").hidden = true;
+    openDialog(d, opener, toCreate && canWrite() ? $("create-name") : $("mygroups-close"));
+    const r = await apiCall("GET", "me/groups");
+    if (r.status === 401) { me = null; renderAccount(); d.close(); return; }
+    const groups = r.status === 200 && r.body && Array.isArray(r.body.groups) ? r.body.groups : null;
+    if (!groups) {
+      $("mygroups-empty").textContent = "couldn't load your groups just now.";
+      $("mygroups-empty").hidden = false;
+      return;
+    }
+    list.replaceChildren(...groups.map(g => {
+      const li = document.createElement("li");
+      const a = li.appendChild(document.createElement("a"));
+      a.href = `${BASE}group/${encodeURIComponent(g.id)}`;
+      a.textContent = g.name;
+      const n = Number(g.member_count) || 0;
+      li.append(` · ${n} ${n === 1 ? "member" : "members"}`);
+      return li;
+    }));
+    $("mygroups-empty").textContent = "no groups yet.";
+    $("mygroups-empty").hidden = groups.length > 0;
+  }
+  $("mygroups-close").addEventListener("click", () => $("mygroups").close());
+  $("intro-start").addEventListener("click", () => openMyGroups($("intro-start"), true));
+
+  // Create, then go to the new group's page with its edit panel open.
+  (() => {
+    const form = $("create-form"), input = $("create-name"), msg = $("create-msg");
+    const button = form.querySelector("button");
+    clearOnInput(input, msg);
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      if (isBusy(button)) return;
+      const clean = ge.checkName(input.value);
+      if (clean.error) return formError(input, msg, ge.MESSAGES[clean.error]);
+      busy(button, true, "starting…");
+      msg.textContent = "";
+      const r = await apiCall("POST", "groups", {name: clean.name});
+      const out = ge.answer("create", r.status, r.body);
+      if (out.ok && out.id) {
+        location.assign(`${BASE}group/${encodeURIComponent(out.id)}?edit=1`);
+        return;
+      }
+      busy(button, false);
+      if (out.signedOut) { me = null; renderAccount(); }
+      formError(input, msg, out.message || ge.MESSAGES.generic);
+    });
+    window.addEventListener("pageshow", () => { if (isBusy(button)) busy(button, false); });
+  })();
+
+  // ---- the group page's share and edit controls -------------------------------------------------
+
+  function hideGroupTools() {
+    $("group-tools").hidden = true;
+    $("edit").hidden = true;
+  }
+
+  // Share for everyone once the group exists; edit for its owner only (the API refuses everyone
+  // else's writes anyway). first: open the panel if the address asks (?edit=1, after a create).
+  function showGroupTools(first) {
+    if (groupInfo === null || (!groupInfo && !current)) return hideGroupTools();
+    $("group-tools").hidden = false;
+    const owner = !!groupInfo && canWrite() && ge.isOwner(me.username, groupInfo);
+    const toggle = $("edit-toggle");
+    toggle.hidden = !owner;
+    if (!owner) {
+      $("edit").hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
+      return;
+    }
+    const url = new URL(location.href);
+    if (first && url.searchParams.has("edit")) {
+      url.searchParams.delete("edit");
+      try { history.replaceState(null, "", url); } catch (_) {}
+      setEditOpen(true);
+      $("add-name").focus();
+    }
+    renderMembers();
+  }
+
+  function setEditOpen(open) {
+    $("edit").hidden = !open;
+    $("edit-toggle").setAttribute("aria-expanded", String(open));
+    if (open) {
+      const input = $("rename-name");
+      if (document.activeElement !== input) input.value = groupInfo.name;
+      renderMembers();
+    }
+  }
+  $("edit-toggle").addEventListener("click", () => {
+    const open = $("edit").hidden;
+    setEditOpen(open);
+    if (open) $("edit-title").focus();
+  });
+
+  $("share").addEventListener("click", () => {
+    const url = ge.shareUrl(location.origin, BASE, groupId);
+    const span = $("share-url");
+    span.textContent = url.replace(/^https?:\/\//, "");
+    copyLink($("share"), span, url, text => {
+      $("share-msg").textContent = text;
+      span.hidden = !text.startsWith("couldn't");
+    });
+  });
+
+  function renderMembers() {
+    if (!groupInfo || $("edit").hidden) return;
+    const list = $("members");
+    const members = groupInfo.members;
+    // Polls re-read the group every few seconds: rebuild the list only when it changed, or a
+    // focused remove button would be replaced under the visitor.
+    const key = JSON.stringify([groupInfo.owner, members]);
+    if (list.dataset.key === key) return;
+    list.dataset.key = key;
+    $("members-title").textContent = `members · ${members.length} of ${ge.MAX_MEMBERS}`;
+    list.replaceChildren(...members.map(m => {
+      const li = document.createElement("li");
+      const name = li.appendChild(document.createElement("span"));
+      name.className = "member-name";
+      name.textContent = m;
+      if (m === groupInfo.owner) {
+        const tag = li.appendChild(document.createElement("span"));
+        tag.className = "member-tag";
+        tag.textContent = "owner";
+      }
+      const b = li.appendChild(document.createElement("button"));
+      b.type = "button";
+      b.className = "quiet";
+      b.textContent = "remove";
+      b.setAttribute("aria-label", m === me.username ? "remove yourself" : `remove ${m}`);
+      b.addEventListener("click", () => removeMember(b, m));
+      return li;
+    }));
+    if (!members.length) {
+      const li = list.appendChild(document.createElement("li"));
+      li.className = "members-empty";
+      li.textContent = "nobody yet. add someone below.";
+    }
+  }
+
+  // After any write: re-read the group's record, show it, and watch the chart rebuild.
+  async function afterWrite() {
+    const gen = groupGen;
+    const info = await loadGroupInfo(groupId);
+    if (gen !== groupGen) return;
+    if (info) groupInfo = info;
+    renderMembers();
+    startWatch();
+  }
+
+  // A write answered "signed out" or "gone": put the page right.
+  function writeFailed(out) {
+    if (out.signedOut) { me = null; renderAccount(); showGroupTools(false); }
+    if (out.gone) {
+      groupGen++;
+      hideGroupTools();
+      state("this group isn't here anymore", "it may have been renamed or deleted.", false);
+    }
+  }
+
+  (() => {
+    const form = $("add-form"), input = $("add-name"), msg = $("add-msg");
+    const button = form.querySelector("button");
+    clearOnInput(input, msg);
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      if (isBusy(button)) return;
+      const clean = intro.cleanName(input.value);
+      if (clean.error) return formError(input, msg, intro.MESSAGES[clean.error]);
+      busy(button, true, "adding…");
+      msg.textContent = "";
+      const r = await apiCall("POST", `groups/${groupId}/members`, {username: clean.name});
+      busy(button, false);
+      const out = ge.answer("add", r.status, r.body);
+      if (!out.ok) {
+        writeFailed(out);
+        if (!out.signedOut && !out.gone) formError(input, msg, out.message);
+        return;
+      }
+      input.value = "";
+      msg.textContent = out.note || `added ${clean.name}.`;
+      input.focus();
+      if (out.member) await afterWrite();
+    });
+  })();
+
+  async function removeMember(button, name) {
+    if (isBusy(button)) return;
+    const [title, text] = ge.removeText(name, me.username);
+    if (!await confirmDialog(button, title, text, name === me.username ? "take me out" : "remove")) return;
+    busy(button, true, "removing…");
+    const r = await apiCall("DELETE", `groups/${groupId}/members/${encodeURIComponent(name)}`);
+    const out = ge.answer("remove", r.status, r.body);
+    if (!out.ok) {
+      busy(button, false);
+      writeFailed(out);
+      if (!out.signedOut && !out.gone) $("add-msg").textContent = out.message;
+      return;
+    }
+    groupInfo = {...groupInfo, members: groupInfo.members.filter(m => m !== name)};
+    renderMembers();
+    $("members-title").focus();  // the row and its button are gone
+    $("add-msg").textContent = name === me.username ? "you're out of the chart." : `removed ${name}.`;
+    await afterWrite();
+  }
+
+  (() => {
+    const form = $("rename-form"), input = $("rename-name"), msg = $("rename-msg");
+    const button = form.querySelector("button");
+    clearOnInput(input, msg);
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      if (isBusy(button)) return;
+      const clean = ge.checkName(input.value);
+      if (clean.error) return formError(input, msg, ge.MESSAGES[clean.error]);
+      if (clean.name === groupInfo.name) { msg.textContent = "that's its name already."; return; }
+      busy(button, true, "renaming…");
+      msg.textContent = "";
+      const r = await apiCall("PATCH", `groups/${groupId}`, {name: clean.name});
+      busy(button, false);
+      const out = ge.answer("rename", r.status, r.body);
+      if (!out.ok) {
+        writeFailed(out);
+        if (!out.signedOut && !out.gone) formError(input, msg, out.message);
+        return;
+      }
+      const moved = !!out.id && out.id !== groupId;
+      if (moved) {
+        // The group moved: the old id's chart is deleted, so nothing may read it again.
+        groupGen++;
+        groupId = out.id;
+        const url = new URL(location.href);
+        url.pathname = `${BASE}group/${encodeURIComponent(out.id)}`;
+        try { history.replaceState(null, "", url); } catch (_) {}
+      }
+      groupInfo = {...groupInfo, id: groupId, name: clean.name};
+      groupHeading(clean.name, current ? current.year : YEAR);
+      input.value = clean.name;
+      msg.textContent = moved ? "renamed. its link changed too, so share the new one." : "renamed.";
+      await afterWrite();
+    });
+  })();
+
+  $("delete-group").addEventListener("click", async () => {
+    const button = $("delete-group");
+    if (isBusy(button)) return;
+    const ok = await confirmDialog(button, `delete ${groupInfo.name}?`,
+        "the group and its chart go for good. everyone's own charts stay as they are.", "delete it");
+    if (!ok) return;
+    busy(button, true, "deleting…");
+    const r = await apiCall("DELETE", `groups/${groupId}`);
+    const out = ge.answer("delete", r.status, r.body);
+    if (out.ok || out.gone) {
+      groupGen++;
+      location.assign(BASE);
+      return;
+    }
+    busy(button, false);
+    writeFailed(out);
+    if (!out.signedOut) $("rename-msg").textContent = out.message;
+  });
+
+  // ---- routing ---------------------------------------------------------------------------------
+
+  signinResult();
+  const meReady = loadMe();
+  const routedGroup = routeGroup();
+  const name = routedGroup === null ? routeName() : null;
+  if (routedGroup !== null) {
+    showGroup(routedGroup);
   } else if (name === null) {
     showIntro();
   } else {

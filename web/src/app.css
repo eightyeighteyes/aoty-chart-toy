@@ -287,6 +287,75 @@ ol {
 .inspired a:hover { text-decoration-color: currentColor; }
 .inspired a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px; }
 
+/* Sign-in state (AOTY-52): a quiet row of its own under the bar, right-aligned, in muted ink.
+   Never between the endorsements, and neither kamp's periwinkle nor New Bands' styling. */
+.account {
+  max-width: 1080px; margin: 0 auto; padding: 6px 40px 0; text-align: right;
+  font: 13px/1.4 "DM Sans", system-ui, sans-serif; color: var(--muted);
+}
+.account p { margin: 0; }
+.account-msg:empty { display: none; }
+.account-msg { color: var(--accent-2); margin-top: 2px; }
+.account-link, .link-button {
+  font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-color: rgba(244, 241, 234, .3); text-underline-offset: 3px;
+}
+.account-link:hover, .link-button:hover { text-decoration-color: currentColor; }
+.account-link:focus-visible, .link-button:focus-visible {
+  outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px;
+}
+
+/* Group pages (AOTY-52): share for everyone, the owner's edit panel. */
+.group-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+.pill, .quiet {
+  font: 600 13px "DM Sans", system-ui, sans-serif; color: var(--ink); cursor: pointer;
+  background: transparent; border: 1px solid #2c2937; border-radius: 999px; padding: 8px 16px;
+}
+.pill:hover, .quiet:hover { border-color: var(--muted); }
+.pill:focus-visible, .quiet:focus-visible, .solid:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.pill[aria-expanded="true"] { border-color: var(--accent-2); }
+.pill[aria-busy="true"], .quiet[aria-busy="true"], .solid[aria-busy="true"] { opacity: .7; cursor: progress; }
+.share-url { color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+.tool-msg { color: var(--muted); font-size: 13px; }
+.solid {
+  font: 600 14px "DM Sans", system-ui, sans-serif; color: #1a1014; cursor: pointer;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border: 0; border-radius: 999px; padding: 10px 20px;
+}
+.edit {
+  background: var(--panel); border-radius: 20px; padding: 24px; margin-top: 16px; max-width: 640px;
+}
+.edit .lookup + .members-title { margin-top: 18px; }
+.edit-title, .sheet-title {
+  font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
+  font-size: 24px; letter-spacing: -.015em; margin: 0 0 16px;
+}
+.edit-title:focus, .members-title:focus { outline: none; }
+.edit-title:focus-visible, .members-title:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 4px; border-radius: 4px; }
+.members-title { font: 600 14px "DM Sans", system-ui, sans-serif; color: var(--muted); margin: 0 0 10px; }
+.members { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 6px; }
+.members li { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+.member-name { font-weight: 500; overflow-wrap: anywhere; }
+.member-tag { color: var(--muted); font-size: 12px; }
+.members .quiet { margin-left: auto; padding: 6px 14px; }
+.members-empty { color: var(--muted); font-size: 14px; }
+.edit-danger { margin: 6px 0 0; }
+.quiet.danger { color: var(--accent); }
+
+/* Dialogs: your groups, and the confirmations. */
+.sheet {
+  width: min(480px, calc(100vw - 32px)); box-sizing: border-box;
+  background: var(--panel); color: var(--ink); border: 1px solid #2c2937; border-radius: 20px; padding: 24px;
+}
+.sheet::backdrop { background: rgba(13, 12, 18, .72); }
+.sheet-text { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 18px; }
+.sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.mygroups-list { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 8px; color: var(--muted); font-size: 14px; }
+.mygroups-list:empty { display: none; }
+.mygroups-list a { color: var(--ink); font-weight: 600; font-size: 15px; text-underline-offset: 3px; }
+.mygroups-list a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 3px; }
+.sheet .lookup { margin-bottom: 8px; }
+
 /* The intro (AOTY-23). */
 .intro { max-width: 720px; margin: 0 auto; padding: 64px 40px 72px; }
 .intro-title {
@@ -297,6 +366,7 @@ ol {
 .intro-sub { color: var(--muted); font-size: 17px; line-height: 1.55; max-width: 56ch; margin: 20px 0 0; }
 .intro-form { margin-top: 36px; }
 .privacy { font: 13px "DM Sans", system-ui, sans-serif; color: var(--muted); margin: 24px 0 0; }
+.intro-groups { font: 15px/1.5 "DM Sans", system-ui, sans-serif; color: var(--muted); margin: 28px 0 0; }
 
 .view-list { display: none; }
 .poster[data-view="list"] .view-poster { display: none; }
@@ -348,6 +418,8 @@ ol {
 @media (max-width: 820px) {
   .poster { padding: 24px 16px 24px; }
   .topbar { padding: 14px 16px 0; }
+  .account { padding: 6px 16px 0; }
+  .edit { padding: 20px 16px; }
   .credits { padding: 0 16px 24px; }
   .intro { padding: 36px 16px 48px; }
   .lookup-row button { flex: 1 1 100%; }
