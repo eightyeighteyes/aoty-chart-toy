@@ -493,8 +493,30 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   spellings of one signature decode to the same bytes (a test caught it).
 - `cb` overrides the registered callback, so each env keeps its own API key. No kamp-site change
   was needed: the `api/*` behaviours already forward cookies (`AllViewerExceptHostHeader`).
-- Sign-out clears one browser's cookie; revocation ("sign out everywhere") is a follow-up that
-  AOTY-48's writes need before prod.
+- Sign-out clears one browser's cookie; `signout?everywhere=1` revokes the rest (AOTY-57, below).
+
+## Sign out everywhere (AOTY-57, 2026-11-24)
+
+- **A cutoff, not a counter** (user-approved deviation from the ticket's `{u,iat,exp,e}`). The
+  stored `revoked_at` (epoch seconds) revokes any session with `iat <= revoked_at`
+  (`session.is_revoked`). The cookie format is unchanged, so pre-existing cookies are covered.
+  - A sign-in in the same second as the revoke is revoked too. That fails safe; it's documented,
+    not fixed with `iat_ms`.
+- **Stored in the groups table** (`pk session#<name>`, `sk meta`, `revoked_at` N), not guard, which
+  is "not precious": losing a cutoff revives revoked sessions.
+  - Never give these items `owner` or `username`, which would put them in the GSIs.
+  - `sandbox_reset.py` wipes them; that's accepted.
+- **`session_user` always checks**, so a new route can't forget the check. It returns
+  `(user, "ok" | "signed_out" | "revoked")`, with a consistent read by default; `api/me` alone
+  passes `consistent=False`.
+  - An unreadable cutoff raises `SessionUnavailable`, which callers answer with 503, never 401.
+  - A cutoff that isn't a number revokes everything.
+- **`everywhere` needs a valid, unrevoked session**, so a revoked copy can't keep pushing the cutoff
+  forward. Its write only moves the cutoff forward (`groups_store.REVOKE`). On failure it answers
+  503 and keeps the cookie.
+- Prod's `group_writes` flip is a separate PR, after the release carrying this is live in prod.
+  Flipping it in the same PR could turn writes on before the revocation code is deployed.
+- Runbook (revoking one user by hand): `infra/README.md`, "Revoking sessions".
 
 ## Groups (AOTY-48, 2026-11-24)
 

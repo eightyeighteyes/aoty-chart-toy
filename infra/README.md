@@ -552,7 +552,8 @@ Visitors sign in with Last.fm's web auth. `GET <base>api/auth/start` redirects t
 `cb=<PUBLIC_ORIGIN><base>api/auth/callback/<nonce>`. The callback checks the nonce against a
 signed state cookie, calls `auth.getSession`, keeps only the username (Last.fm's session key is
 dropped), and sets `__Secure-kamp_aoty_session` (HMAC-signed, 30 days, `Path=<base>`).
-`GET api/me` says who's signed in; `POST api/auth/signout` clears the cookie.
+`GET api/me` says who's signed in; `POST api/auth/signout` clears the cookie, and
+`POST api/auth/signout?everywhere=1` also revokes every session of that user (AOTY-57, below).
 
 **Secrets** (SecureStrings, set by hand, readable by the api alone: `auth_param_arns` in
 `modules/stack/ssm.tf`, never `ssm_params`, which every function gets):
@@ -579,8 +580,35 @@ signed with either verify meanwhile; new ones use the new key. To sign everyone 
 a new `session_key` without keeping `_previous`.
 
 **Trust boundary:** the cookie goes with every request under `<base>` on kamp.fm, so script on any
-kamp.fm page could call the api as the visitor. Signing out clears this browser's cookie only: a
-copied cookie stays valid until it expires (a per-user "sign out everywhere" is a follow-up).
+kamp.fm page could call the api as the visitor. A plain sign-out clears this browser's cookie only.
+"Sign out everywhere" revokes the rest, copied cookies included.
+
+**Revoking sessions (AOTY-57):** "sign out everywhere" stores a cutoff in the groups table, and a
+session signed at or before it (`iat <= revoked_at`) is refused. The item:
+
+| Key | Value |
+|-----|-------|
+| `pk` | `session#<lowercased name>` |
+| `sk` | `meta` |
+| `revoked_at` | epoch seconds, as `N` |
+
+- **Where the check runs:** every route that reads the session checks the cutoff. Writes and
+  `me/groups` read it consistently; `api/me` doesn't need to.
+- **If the cutoff can't be read**, those routes answer 503, never 401. A value that isn't a number
+  revokes everything (fail closed).
+- **A sign-in in the same second as the revoke** is revoked too. Signing in again fixes it.
+
+To revoke one user's sessions by hand (admin credentials):
+
+```sh
+aws dynamodb put-item --table-name kamp-aoty-<env>-groups \
+  --item '{"pk":{"S":"session#<lowercased name>"},"sk":{"S":"meta"},"revoked_at":{"N":"'"$(date +%s)"'"}}'
+```
+
+Never give these items `owner` or `username`: those attributes would put them in the `by_owner` and
+`by_member` indexes. Losing an item revives the revoked sessions, for up to 30 days (the session
+length). That happens on a table restore, and on `scripts/sandbox_reset.py` in sandbox, which wipes
+the table's items.
 CSRF: writes stay JSON-only POSTs and the cookie is `SameSite=Lax`; the only GET that changes
 anything is the callback, after its nonce check. Two tabs signing in at once: the second
 overwrites the state cookie, so the first lands on `?signin=failed`.
