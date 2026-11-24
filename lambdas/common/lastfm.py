@@ -29,6 +29,10 @@ NOT_FOUND = 6
 PRIVATE = 17
 # Answers about the user or album, not failures: they never count as LastfmErrors.
 EXPECTED_CODES = {NOT_FOUND, PRIVATE}
+# auth.getSession's answers about the token itself: invalid (4), not authorized (14), expired (15).
+# Anyone can send a callback a made-up token, so these must not count either, or they could trip
+# the lastfm-errors alarm at will. 13 (bad signature) still counts: that's our secret.
+TOKEN_CODES = {4, 14, 15}
 NAMESPACE = "kamp-aoty"
 
 
@@ -87,17 +91,18 @@ class Client:
       return None, status
 
   def call(self, method, **params):
-    return self._call_counted(method, params, None)
+    return self._call_counted(method, params, None, EXPECTED_CODES)
 
-  def signed_call(self, method, secret, **params):
-    """A call carrying api_sig, for the auth methods. Errors never include the params."""
-    return self._call_counted(method, params, secret)
+  def signed_call(self, method, secret, expected=EXPECTED_CODES, **params):
+    """A call carrying api_sig, for the auth methods. Errors never include the params.
+    expected: error codes that are answers, not failures (not counted as LastfmErrors)."""
+    return self._call_counted(method, params, secret, expected)
 
-  def _call_counted(self, method, params, secret):
+  def _call_counted(self, method, params, secret, expected):
     try:
       return self._call(method, params, secret)
     except LastfmError as e:
-      if e.code not in EXPECTED_CODES:
+      if e.code not in expected:
         _emit_error(method, e.code)
       raise
 
@@ -193,7 +198,7 @@ class Client:
     """The lowercased username a web-auth token belongs to (sign-in, AOTY-47), or None when
     Last.fm's answer has no name. Last.fm's session key is dropped here: nothing stores it.
     A bad, used or expired token raises LastfmError (codes 4, 14, 15)."""
-    data = self.signed_call("auth.getSession", secret, token=token)
+    data = self.signed_call("auth.getSession", secret, EXPECTED_CODES | TOKEN_CODES, token=token)
     name = (data.get("session") or {}).get("name")
     return name.lower() if isinstance(name, str) and name else None
 

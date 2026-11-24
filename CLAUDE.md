@@ -543,7 +543,9 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   (busy, paused) are deliberate. `status` is a string in the jsonencoded log, so the filter
   compares strings. The env is in the metric name (`ApiServerErrors-prod`), because a filter with a
   default value can't have dimensions.
-- `LastfmErrors` is one EMF line per failed `Client.call`, after retries, leaving out 6 and 17. It is
+- `LastfmErrors` is one EMF line per failed `Client.call`, after retries, leaving out 6 and 17
+  (and, for `auth.getSession`, the token answers 4, 14 and 15: anyone can send the callback a
+  made-up token, which would otherwise trip the alarm at will; 13, a bad signature, counts). It is
   printed only inside a Lambda (`AWS_LAMBDA_FUNCTION_NAME`).
 - **Lambda's `AsyncEventAge` is in milliseconds**, unlike SQS ages (seconds). The `chart-event-age`
   threshold was first written as 1800, meaning 1.8 s; it's 1,800,000 now (fixed in AOTY-41).
