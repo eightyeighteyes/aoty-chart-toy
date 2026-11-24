@@ -64,7 +64,8 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/uptime/` | Hourly uptime check (AOTY-27). `uptime_core.py` is pure (URLs, what counts as up); `handler.py` fetches `kamp.fm<base>`, `api/health` and the SSM `uptime_user`'s chart.json, and emits `UptimeChecks`/`UptimeFailures` even on a crash. |
 | `infra/modules/stack/dashboard.tf`, `lambdas/common/emf.py` | AOTY-41: the per-env CloudWatch dashboard (at most 50 metrics, checked by a precondition) and the shared EMF line builder. |
 | `infra/modules/stack/alarms.tf`, `infra/global/alerts.tf` | AOTY-27: the alarms (one table, `alarms` = full/basic/none per env), and the global `kamp-aoty-alerts` topic and $40 budget. Runbook: `infra/README.md`, "Alarms". |
-| `lambdas/chart/group_core.py`, `tools/beta_group.py` | AOTY-50 beta: a hand-made group (`groups/<slug>/group.json` in the store, members from `.env`) → `data/groups/<slug>/chart.json` with M0's rules. Groups are addressed by a readable slug, not a random id (user decision 2026-11-23: guessable is fine, it's public Last.fm data) (`tests/test_ranking.py` checks parity with `score_rankings`). The tool creates the group, queues its syncs, rebuilds and shows it. No sign-in or editing yet (AOTY-47/48). |
+| `lambdas/chart/group_core.py`, `tools/beta_group.py` | AOTY-50: a group's members' stores → `data/groups/<slug>/chart.json` with M0's rules (`tests/test_ranking.py` checks parity with `score_rankings`). Groups are addressed by a readable slug, not a random id (user decision 2026-11-23: guessable is fine, it's public Last.fm data). The tool creates a group in the groups table by hand (members from `.env`), queues its syncs, rebuilds, shows and deletes it, and `migrate`s the pre-AOTY-48 S3 beta files. |
+| `lambdas/common/groups.py`, `lambdas/api/groups_store.py` | AOTY-48 owned groups: the table layout and pure rules (slugs, names, `member_state`), and the api's transactional writes (cap of 25, owner checks). Routes in `api/handler.py` ("groups"); tests in `tests/test_api_groups.py`. |
 | `tools/prewarm.py` | AOTY-42: pre-warms the shared `albums` table. Candidates under Last.fm's names: `tag.getTopAlbums` for the year's tag (listeners tag albums by release year) and the top artists' `artist.getTopAlbums`. The undated ones go to **mb-cold** in sync's message format, so the lane stays the only writer and hot work is never delayed. No local index check: the lane does it, and old albums with a trusted index hit cost no MusicBrainz request. `--dry-run` sizes it. First prod run (2026-11-23): 2,315 candidates, 411 already dated, 1,904 queued, 214 Last.fm calls. Re-run weekly as the year fills. |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
@@ -494,6 +495,32 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   was needed: the `api/*` behaviours already forward cookies (`AllViewerExceptHostHeader`).
 - Sign-out clears one browser's cookie; revocation ("sign out everywhere") is a follow-up that
   AOTY-48's writes need before prod.
+
+## Groups (AOTY-48, 2026-11-24)
+
+- **Membership items, not a list:** `pk group#<slug>` with `sk meta` or `member#<username>`, so the
+  `by_member` GSI answers "which groups is X in?" (DynamoDB can't index into a list). The GSI key is
+  `username`, because `user` is a reserved word. `by_owner` is sparse, on meta items only, because
+  an owner may remove themselves and still owns the group.
+- **The cap holds under concurrency:** every membership change is one `TransactWriteItems` with the
+  meta (`member_count < 25`, owner check). Cancellation reasons (with `ALL_OLD`) say which condition
+  failed; `TransactionConflict` is retried.
+- **Renaming moves the slug** (user decision 2026-11-24): one transaction moves the meta and members
+  to the new pk (at most 52 items, under the 100 limit); the old URL then 404s, and its chart is
+  deleted.
+- **Chart deletes go through the chart Lambda** (`{"group", "deleted": true}`), not the api, so the
+  Lambda's single concurrency orders them after any build in flight; a delete on a slug that's a
+  group again by then rebuilds it instead.
+- **`chart_built_at` is the `chart_requested_at` read before the build**, not its end time;
+  otherwise a member change made during a 25-member build would be skipped.
+- **Member adds reuse POST sync**, split into `check_new_user` (the new-user pause, the per-IP
+  limit, `user.getInfo`) and `request_sync` (cooldown, `pause_syncs`, busy, queue). A new member is
+  refused before anything is written while new users are paused or the queue is busy. A failed SQS
+  send keeps the member (`sync: not_queued`): undoing it would be a second write that can fail too.
+- `block_group_adds` on the users row is read here (409 `cannot_add`, neutral); AOTY-49 sets it.
+- **Prod writes are off** (`group_writes`, Terraform) until revocable sessions land (AOTY-57).
+- **Migration:** the beta's S3 groups move with `tools/beta_group.py migrate` right after each
+  env's deploy; until then their charts serve but don't rebuild.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

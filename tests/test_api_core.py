@@ -27,6 +27,21 @@ def test_sync_outcome_names_every_answer(status, body, new, expected):
   assert core.sync_outcome(status, body, new) == expected
 
 
+@pytest.mark.parametrize(
+  "status, body, expected",
+  [
+    (202, {"queued": True}, "queued"),
+    (200, {"reason": "cooldown"}, "cooldown"),
+    (200, {"reason": "paused"}, "paused"),
+    (503, {"error": "queue_unavailable"}, "not_queued"),
+    (503, {"error": "busy"}, "busy"),
+    (500, None, "unavailable"),
+  ],
+)
+def test_sync_word_names_a_member_adds_sync(status, body, expected):
+  assert core.sync_word(status, body) == expected
+
+
 BASE = "/toys/aoty-test/"
 NOW = 1_795_400_000
 COOL = 600
@@ -63,6 +78,22 @@ COOL = 600
     ("GET", f"{BASE}api/auth/callback/", ("not_found", None)),
     ("GET", f"{BASE}api/auth/callback/a.b", ("not_found", None)),
     ("GET", f"{BASE}api/auth/callback/{'a' * 65}", ("not_found", None)),
+    # groups (AOTY-48)
+    ("POST", f"{BASE}api/groups", ("group_create", None)),
+    ("POST", f"{BASE}api/groups/", ("group_create", None)),
+    ("GET", f"{BASE}api/groups", ("method", None)),
+    ("GET", f"{BASE}api/groups/The-Server", ("group_get", "the-server")),
+    ("PATCH", f"{BASE}api/groups/g", ("group_rename", "g")),
+    ("DELETE", f"{BASE}api/groups/g/", ("group_delete", "g")),
+    ("POST", f"{BASE}api/groups/g", ("method", None)),
+    ("POST", f"{BASE}api/groups/g/members", ("member_add", "g")),
+    ("GET", f"{BASE}api/groups/g/members", ("method", None)),
+    ("DELETE", f"{BASE}api/groups/g/members/BoB", ("member_remove", ("g", "bob"))),
+    ("POST", f"{BASE}api/groups/g/members/bob", ("method", None)),
+    ("GET", f"{BASE}api/groups/g/members/bob/x", ("not_found", None)),
+    ("GET", f"{BASE}api/groupsx", ("not_found", None)),
+    ("GET", f"{BASE}api/me/groups", ("my_groups", None)),
+    ("POST", f"{BASE}api/me/groups", ("method", None)),
   ],
 )
 def test_route(method, path, expected):

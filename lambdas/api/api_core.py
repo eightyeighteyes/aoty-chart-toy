@@ -35,6 +35,13 @@ DATING_FRESH = 10 * 60  # charts rebuild about once a minute while albums resolv
 _USER_ROUTE = re.compile(r"api/users/([^/]+)/(sync|status)/?")
 _CALLBACK_ROUTE = re.compile(r"api/auth/callback/([A-Za-z0-9_-]{1,64})/?")
 USER_ACTIONS = frozenset({"sync", "status"})
+# Groups (AOTY-48): path -> {method: action}. <id> is the group's slug; <name> a member.
+_GROUP_ROUTE = re.compile(r"api/groups/([^/]+)/?")
+_MEMBERS_ROUTE = re.compile(r"api/groups/([^/]+)/members/?")
+_MEMBER_ROUTE = re.compile(r"api/groups/([^/]+)/members/([^/]+)/?")
+_GROUP_METHODS = {"GET": "group_get", "PATCH": "group_rename", "DELETE": "group_delete"}
+GROUP_WRITES = frozenset({"group_create", "group_rename", "group_delete", "member_add", "member_remove"})
+GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups"}
 # Sign-in (AOTY-47): path -> (action, method). Only the callback changes anything on a GET, and
 # only after its state check; signout is a JSON-only POST like sync.
 _AUTH_ROUTES = {
@@ -46,10 +53,12 @@ _AUTH_ROUTES = {
 
 def route(method, path, base):
   """(action, arg) for a request. action is health, sync, status, auth_start, auth_callback, me,
-  auth_signout, method or not_found.
+  auth_signout, one of GROUP_ACTIONS, method or not_found.
 
   For sync and status, arg is the username, lowercased but not yet validated (the caller answers
-  400 for a bad one). For auth_callback it's the state nonce from the path. Otherwise None.
+  400 for a bad one). For auth_callback it's the state nonce from the path. For a group route
+  it's the group id (lowercased, unvalidated: the caller answers 404 for a bad one), and for
+  member_remove (id, username). Otherwise None.
   """
   if not path.startswith(base):
     return "not_found", None
@@ -62,6 +71,8 @@ def route(method, path, base):
   m = _CALLBACK_ROUTE.fullmatch(rest)
   if m:
     return ("auth_callback", m.group(1)) if method == "GET" else ("method", None)
+  if rest.startswith("api/groups") or rest.rstrip("/") == "api/me/groups":
+    return _group_route(method, rest)
   m = _USER_ROUTE.fullmatch(rest)
   if not m:
     return "not_found", None
@@ -69,6 +80,42 @@ def route(method, path, base):
   if method != ("POST" if action == "sync" else "GET"):
     return "method", None
   return action, unquote(m.group(1)).strip().lower()
+
+
+def _part(raw):
+  return unquote(raw).strip().lower()
+
+
+def _group_route(method, rest):
+  bare = rest.rstrip("/")
+  if bare == "api/me/groups":
+    return ("my_groups", None) if method == "GET" else ("method", None)
+  if bare == "api/groups":
+    return ("group_create", None) if method == "POST" else ("method", None)
+  m = _MEMBER_ROUTE.fullmatch(rest)
+  if m:
+    return (
+      ("member_remove", (_part(m.group(1)), _part(m.group(2)))) if method == "DELETE" else ("method", None)
+    )
+  m = _MEMBERS_ROUTE.fullmatch(rest)
+  if m:
+    return ("member_add", _part(m.group(1))) if method == "POST" else ("method", None)
+  m = _GROUP_ROUTE.fullmatch(rest)
+  if m:
+    action = _GROUP_METHODS.get(method)
+    return (action, _part(m.group(1))) if action else ("method", None)
+  return "not_found", None
+
+
+def sync_word(status, body):
+  """What a member add's sync request did, for its answer (AOTY-48): queued, cooldown,
+  in_progress, paused, busy, not_queued (SQS failed) or unavailable."""
+  if status == 202:
+    return "queued"
+  body = body if isinstance(body, dict) else {}
+  if body.get("error") == "queue_unavailable":
+    return "not_queued"
+  return str(body.get("reason") or body.get("error") or "unavailable")
 
 
 # ---- sign-in (AOTY-47) ----------------------------------------------------------------------
