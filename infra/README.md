@@ -25,13 +25,14 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | `kamp-aoty-<env>-store` bucket | Private Lambda state: `users/<username>/<year>/weeks.json.gz` (weekly album totals, AOTY-18) and the release index. Never readable by CloudFront. Versioned; old versions expire after 7 days. |
 | `users` table | `username` (lowercased). Deletion protection in prod. TTL on `expires_at`, which only the api's `not_found` rows set (AOTY-22). |
 | `guard` table | `id`. Guardrail counters (AOTY-26): `ip#<hash>#<hour>` (the per-IP new-name limit, TTL on `expires_at`) and `queue` (queue tickets and first-sync timing). Nothing precious: emptying it only restarts the counts. |
+| `groups` table (AOTY-48) | `pk` + `sk`: `group#<slug>` with `meta` or `member#<username>` (`lambdas/common/groups.py`). GSIs `by_member` (username → pk, keys only) and `by_owner` (sparse, meta items only). Deletion protection in prod. See "Groups" below. |
 | `albums` table | `artist_key` + `title_key` (`norm(album artist)`, `norm(base_title(album))`). Deletion protection in staging and prod, `prevent_destroy` everywhere; PITR in prod. |
 | `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` = `sync_concurrency` (2). The sync Lambda reserves one more. Terraform ignores the mapping's `enabled`, which is the syncs' hard stop (see "Guardrails"). |
 | `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. Visibility 900 s (the mb timeout). |
 | mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an hourly EventBridge Scheduler schedule that invokes it through the `…-mb-schedule` role; with both queues empty a run makes no MusicBrainz request. |
 | Release index build (AOTY-20) | `kamp-aoty-<env>-index` ECS cluster (FARGATE_SPOT only) and task definition: 1 vCPU / 4 GB, x86_64 (Spot runs no ARM64), AWS's public `lambda/python:3.13` image pinned by digest, fetching its code from `s3://<store>/code/index.zip`. Runs in the default VPC's public subnets with a public IP and the default security group: no NAT. `…-index-daily` schedule at 06:15 UTC (off in sandbox) runs the exact revision Terraform made, through the `…-index-schedule` role. Logs in `/ecs/kamp-aoty-<env>-index`. See "Release index" below. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
-| Chart builder (AOTY-21) | The chart Lambda has **reserved concurrency 1**, so builds never overlap and an older read can't overwrite a newer chart. Started by async invokes from sync (`{"username", "requested_at"}`) and mb (`{"pending": true}`); same invoke config as mb. Writes `<prefix>data/users/<u>/chart.json` (`Cache-Control: no-cache`) to the site bucket and `users/<u>/<year>/chart_pending.json` to the store. See "Charts" below. |
+| Chart builder (AOTY-21) | The chart Lambda has **reserved concurrency 1**, so builds never overlap and an older read can't overwrite a newer chart. Started by async invokes from sync (`{"username", "requested_at"}`), mb (`{"pending": true}`) and the api (`{"group", ...}`, AOTY-48); same invoke config as mb. Writes `<prefix>data/users/<u>/chart.json` (`Cache-Control: no-cache`) to the site bucket and `users/<u>/<year>/chart_pending.json` to the store. See "Charts" below. |
 | Uptime check (AOTY-27) | The `uptime` Lambda (60 s, 128 MB), started hourly by the `kamp-aoty-<env>-uptime` schedule (off in sandbox, which isn't on kamp.fm) through the `…-uptime-schedule` role. Fetches `kamp.fm<base>`, `<base>api/health` and the chart of the user in SSM `uptime_user`; EMF `UptimeChecks` / `UptimeFailures`. |
 | Alarms (AOTY-27) | CloudWatch alarms to the global `kamp-aoty-alerts` topic; see "Alarms". In prod, a metric filter on the API access log counts `ApiServerErrors-prod`. |
 | `api`, `sync`, `mb`, `chart`, `uptime` Lambdas | python3.13 / arm64. Created from a placeholder (which raises on SQS events, so it never deletes queue messages); CD deploys the real code. Roles at `/kamp-aoty/<env>/`, each with the env's permissions boundary. |
@@ -405,18 +406,43 @@ aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.j
 Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
 `CoverLookups`, `LastfmCalls`.
 
-**Beta group charts (AOTY-50):** a group is defined by hand, as `groups/<id>/group.json`
-`{"name", "members"}` in the store bucket. `tools/beta_group.py create --env <env> --name ...`
-makes one from `.env`'s `LASTFM_USERS` (so no username is in the repo). Its id is a readable
-slug (`--slug`, default the name slugified) and the page is `kamp.fm<base>group/<slug>`. A slug
-can be guessed, so anyone can find a group; that was the user's call (2026-11-23), and it's public
-Last.fm data. `create` refuses a taken slug, and `delete` removes a group and its chart. Then
-`sync` queues every member's sync, `build` rebuilds the chart, and `show` prints its counts. The
-chart Lambda takes `{"group": "<id>"}` and writes `<prefix>data/groups/<id>/chart.json` with M0's
-rules (`lambdas/chart/group_core.py`). After each member's own chart build it rebuilds their
+**Group charts (AOTY-50):** the chart Lambda takes `{"group": "<id>", "requested_at"?}` and
+writes `<prefix>data/groups/<id>/chart.json` with M0's rules (`lambdas/chart/group_core.py`),
+from the groups table (see "Groups"). After each member's own chart build it rebuilds their
 groups, so the group chart fills in as syncs finish. Members still on their first sync count as
-`waiting`; not_found and private ones as `unavailable`. The page is AOTY-51; sign-in and
-editable groups are AOTY-47/48.
+`waiting`; not_found and private ones as `unavailable`. `{"group": "<id>", "deleted": true}`
+removes a deleted or moved group's chart. The page is AOTY-51.
+
+## Groups (AOTY-48)
+
+Owned groups live in the `groups` table; the api's routes are in `lambdas/api/handler.py`
+("groups"). A group's id is a slug made from its name, and renaming it moves it to the new
+slug: the old URL then answers 404. Slugs can be guessed, so anyone can find a group (user
+decision 2026-11-23: it's public Last.fm data). Writes need a Last.fm sign-in and are
+owner-only; at most 25 members, enforced in the same transaction as each add.
+
+**Prod is read-only until AOTY-57.** `group_writes` (Terraform, `envs/*/main.tf`) is on in staging and
+sandbox. Off, every write answers 503 `groups_unavailable`; reads and group pages work. Turn it
+on in prod only once sessions can be revoked.
+
+**By hand:** `tools/beta_group.py` (admin credentials) writes the same items the api does.
+`create --env <env> --name ... --owner <lastfm name>` makes a group from `.env`'s `LASTFM_USERS`
+(so no username is in the repo); `sync` queues every member's sync, skipping the api's limits;
+`build` rebuilds the chart, `show` prints its counts, and `delete` removes a group and its chart.
+
+**Migrating the beta's S3 groups (once per env, right after AOTY-48 deploys there).** Before
+AOTY-48, groups were `s3://<store>/groups/<slug>/group.json`. The new code doesn't read those, so
+a beta group's chart keeps serving but stops rebuilding until it's in the table:
+
+```sh
+.venv/bin/python tools/beta_group.py migrate --env staging --owner <lastfm name> --dry-run
+.venv/bin/python tools/beta_group.py migrate --env staging --owner <lastfm name>
+.venv/bin/python tools/beta_group.py show --env staging --id <slug>   # rebuilt just now?
+```
+
+It keeps each slug, skips groups already in the table, and leaves the S3 files. The chart
+Lambda's `groups/*` read grant stays until every env is migrated, so a rollback still works;
+then the grant and the files go (follow-up ticket).
 
 **Acceptance:** `tools/chart_check.py --env staging --user <name>` compares a deployed chart
 with M0's rules on the same store and albums items, and exits 1 on a difference.

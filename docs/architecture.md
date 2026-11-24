@@ -35,6 +35,7 @@ flowchart LR
     storeb[("store bucket<br/>users/*/YEAR/weeks.json.gz")]
     users[("users table<br/>sync state, progress")]
     guard[("guard table<br/>per-IP counts, queue tickets")]
+    groupst[("groups table<br/>meta + member items,<br/>by_member, by_owner")]
     albums[("albums table<br/>year, type, tracks per album")]
     syncq[["sync queue (FIFO,<br/>group = username)"]]
     sync["sync Lambda"]
@@ -62,6 +63,9 @@ flowchart LR
   api -- "per-IP limit,<br/>take a ticket" --> guard
   sync -- "use up the ticket,<br/>first-sync time" --> guard
   api -- "new name?" --> lastfm
+  api -- "owned groups,<br/>transactions" --> groupst
+  api -- "async: group change" --> chart
+  chart -- "members, which groups" --> groupst
   syncq --> sync
   sync --> lastfm
   sync --> storeb
@@ -224,6 +228,47 @@ sequenceDiagram
   API-->>V: 200, cookie cleared
 ```
 
+## Groups (AOTY-48)
+
+Built: the api and the table. The editing UI is AOTY-52, opting out is AOTY-49. A group is
+addressed by a slug made from its name; renaming it moves it to the new name's slug. Writes need a
+session and are off in prod (`group_writes`) until sessions can be revoked (AOTY-57). Layout and
+rules: `lambdas/common/groups.py`; runbook: `infra/README.md`, "Groups".
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor O as Owner
+  participant API as api Lambda
+  participant G as groups table
+  participant U as users table
+  participant L as Last.fm
+  participant Q as sync queue
+  participant CB as chart Lambda
+  participant S3 as site bucket
+
+  O->>API: POST api/groups/<id>/members {username} (session cookie, JSON)
+  API->>G: Query the group: missing 404, not the owner 403, a member 200, 25 already 409 full
+  API->>U: their row: blocked adds? 409 cannot_add
+  opt new to the app
+    API->>L: user.getInfo, after the new-user pause and the per-IP limit (as POST sync)
+  end
+  API->>G: TransactWriteItems: meta (owner, count < 25, +1, chart_requested_at) + member item
+  API->>Q: their sync, through POST sync's own path (cooldown, pause_syncs)
+  API-)CB: {"group", "requested_at"}
+  API-->>O: 201 {member, sync: queued | cooldown | in_progress | paused | not_queued}
+  CB->>G: meta + members (consistent): chart_built_at covers requested_at? skip
+  CB->>S3: data/groups/<id>/chart.json
+  CB->>G: chart_built_at = the chart_requested_at it read first
+  O->>API: DELETE api/groups/<id>
+  API->>G: one transaction: meta (owner, count unchanged) and every member item
+  API-)CB: {"group", "deleted": true}
+  CB->>S3: delete the chart (unless the slug is a group again by now)
+```
+
+A member's own sync still rebuilds every group they're in: after the user's chart, the chart
+builder looks them up in `by_member`.
+
 ## Background flow: sync, then the mb lane
 
 What happens after a sync message is queued. The sync worker, the mb lane and the release
@@ -335,8 +380,10 @@ and the next day's run starts over.
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
 | `guard` table | api (`ip#` new-name sets, the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
-| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything) | api (status, cooldown), chart builder |
+| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
+| `groups` table (AOTY-48) | api (meta and member items, in transactions), chart builder (`chart_built_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
 | site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
+| site bucket `data/groups/*/chart.json` | chart builder (writes and deletes) | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 | SSM `session_key`, `session_key_previous`, `lastfm_api_secret` (AOTY-47) | the admin, by hand | api only |
