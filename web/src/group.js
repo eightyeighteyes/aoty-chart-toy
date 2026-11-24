@@ -59,13 +59,28 @@
     return "";
   }
 
+  // After a visit queued its members' syncs (AOTY-55), the page keeps re-reading quietly: while
+  // GET api/groups/<id> says members are syncing, plus SYNC_GRACE_MS after the last of them, for
+  // the chart build that follows a finished sync; never past SYNC_WATCH_MAX_MS (a row stuck as
+  // queued would otherwise keep it going). w: {since, lastBusy} (ms), null to start one at now.
+  // Returns the next w, or null to stop.
+  const SYNC_GRACE_MS = 90000;
+  const SYNC_WATCH_MAX_MS = 15 * 60000;
+  function syncWatch(w, info, now) {
+    const cur = w || {since: now, lastBusy: now};
+    if (now - cur.since >= SYNC_WATCH_MAX_MS) return null;
+    const lastBusy = info && info.syncing > 0 ? now : cur.lastBusy;
+    return now - lastBusy < SYNC_GRACE_MS ? {since: cur.since, lastBusy} : null;
+  }
+
   // A chart.json this page can show.
   function valid(chart, id) {
     return !!chart && chart.version === GROUP_VERSION && chart.kind === "group" && chart.id === id
         && Array.isArray(chart.members) && Array.isArray(chart.albums) && !!chart.rankings;
   }
 
-  const api = {MODES, ID_RE, memberIndex, rows, loadingLine, checkingLine, valid};
+  const api = {MODES, ID_RE, memberIndex, rows, loadingLine, checkingLine, valid, syncWatch,
+               SYNC_GRACE_MS, SYNC_WATCH_MAX_MS};
   root.aotyGroup = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
