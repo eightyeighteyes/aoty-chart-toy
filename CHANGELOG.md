@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.4.0...v1.5.0) (2026-11-24)
+
+
+### Features
+
+* **infra:** turn on group writes in prod ([f330d7f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f330d7f7f82a5cfd65ea966cdf3abc3aeec6c212))
+* **infra:** turn on group writes in prod (AOTY-62) ([bae2b52](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bae2b523b8094920bc62216c9f2af78798a78bd2))
+
 ## [1.4.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.3.0...v1.4.0) (2026-11-24)
 
 
