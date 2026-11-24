@@ -506,6 +506,51 @@ writes `data/load_test/run-<ts>/report.md` (queue depth, sync concurrency, Last.
 minute, GB-s). It puts the settings back when it ends, even on an error. Then
 `scripts/sandbox_reset.py --yes --keep-albums`.
 
+## Sign-in (AOTY-47)
+
+Visitors sign in with Last.fm's web auth. `GET <base>api/auth/start` redirects to Last.fm with
+`cb=<PUBLIC_ORIGIN><base>api/auth/callback/<nonce>`. The callback checks the nonce against a
+signed state cookie, calls `auth.getSession`, keeps only the username (Last.fm's session key is
+dropped), and sets `__Secure-kamp_aoty_session` (HMAC-signed, 30 days, `Path=<base>`).
+`GET api/me` says who's signed in; `POST api/auth/signout` clears the cookie.
+
+**Secrets** (SecureStrings, set by hand, readable by the api alone: `auth_param_arns` in
+`modules/stack/ssm.tf`, never `ssm_params`, which every function gets):
+
+```sh
+# The Last.fm account's shared secret for this env's API key (last.fm/api/accounts).
+aws ssm put-parameter --type SecureString --tier Standard \
+  --name /kamp-aoty/<env>/lastfm_api_secret --value '<shared secret>'
+# The session signing key: at least 32 bytes, or sign-in answers 503.
+aws ssm put-parameter --type SecureString --tier Standard \
+  --name /kamp-aoty/<env>/session_key --value "$(openssl rand -base64 48)"
+```
+
+Without them, `auth/start` and `api/me` answer 503 (never 401, so an SSM outage doesn't look like
+being signed out). The api rereads them every 5 min.
+
+**Callback URL:** `cb` overrides the callback registered on the Last.fm API account, so each env
+keeps its own key and nothing needs registering per env. Sandbox's `PUBLIC_ORIGIN` is its
+execute-api URL, so the flow can be tried there too.
+
+**Rotating the session key:** copy `session_key` to `session_key_previous`, put a new
+`session_key`, and delete `session_key_previous` 30 days later (the session length). Sessions
+signed with either verify meanwhile; new ones use the new key. To sign everyone out at once, put
+a new `session_key` without keeping `_previous`.
+
+**Trust boundary:** the cookie goes with every request under `<base>` on kamp.fm, so script on any
+kamp.fm page could call the api as the visitor. Signing out clears this browser's cookie only: a
+copied cookie stays valid until it expires (a per-user "sign out everywhere" is a follow-up).
+CSRF: writes stay JSON-only POSTs and the cookie is `SameSite=Lax`; the only GET that changes
+anything is the callback, after its nonce check. Two tabs signing in at once: the second
+overwrites the state cookie, so the first lands on `?signin=failed`.
+
+**Logs:** the token is only in the callback's query string. API Gateway's access log records the
+path alone, kamp.fm's CloudFront has no access logging (checked 2026-11-23), and the api logs
+usernames by hash and never the token or nonce. Each request emits one EMF line with an `auth`
+field (`started`, `signed_in`, `bad_state`, `no_state`, `lastfm_failed`, `me`, `anonymous`,
+`bad_session`, `signed_out`, `unavailable`, ...), searchable in Logs Insights; no new metrics.
+
 ## Alarms (AOTY-27)
 
 Every alarm emails the `kamp-aoty-alerts` topic (`global/alerts.tf`) on ALARM and again on OK.

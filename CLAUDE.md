@@ -55,10 +55,11 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/common/mbmatch.py`, `musicbrainz.py` | The matching rules (`pick_release_group`/`pick_year`, `pick_release`, `title_tier`, `is_single`, query clauses), shared by M0 (`aoty.py`/`build_page.py` re-export them) and the mb Lambda; and the standard-library MusicBrainz client with a per-call deadline. |
 | `tools/mb_parity.py` | AOTY-19 acceptance: runs `mb_core` on the laptop over `data/mb_bench/candidates.json` and diffs against M0's year and track caches into `data/mb_parity/run-<ts>/report.md`. A MusicBrainz client: run it alone. |
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
-| `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync` and `GET .../status` behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
+| `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24) and `group.js` (the group page's member re-rank, AOTY-51), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base>` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
+| `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
 | `lambdas/uptime/` | Hourly uptime check (AOTY-27). `uptime_core.py` is pure (URLs, what counts as up); `handler.py` fetches `kamp.fm<base>`, `api/health` and the SSM `uptime_user`'s chart.json, and emits `UptimeChecks`/`UptimeFailures` even on a crash. |
 | `infra/modules/stack/dashboard.tf`, `lambdas/common/emf.py` | AOTY-41: the per-env CloudWatch dashboard (at most 50 metrics, checked by a precondition) and the shared EMF line builder. |
@@ -473,6 +474,26 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   equal values let a stray direct invoke throttle the mapping into the DLQ.
 - Last.fm is also called by the chart builder (covers) and the mb lane (track counts), so
   `sync_concurrency` caps the sync worker's rate only. The fake is wired into all four functions.
+
+## Sign-in (AOTY-47, 2026-11-23)
+
+- **Nothing stored.** The session is an HMAC-signed cookie `{u, iat, exp}` (30 days); Last.fm's
+  session key is dropped in `lastfm.auth_get_session`. Secrets (`session_key`,
+  `session_key_previous`, `lastfm_api_secret`) are the api's alone: `auth_param_arns`, never
+  `ssm_params`, which `function_params` grants to every function.
+- **Payload v2 cookies** arrive in `event["cookies"]` (a list), not `headers["cookie"]`, and go
+  out in the response's `cookies` list. Tests build events that way.
+- **Last.fm returns the name in its casing:** lowercase before signing, or `USERNAME_RE` refuses it.
+- **The nonce is in the callback path** (`api/auth/callback/<nonce>`), since Last.fm appends
+  `?token=` to `cb` itself. No nonce match, no `auth.getSession` call (login CSRF).
+- **Keys unreadable = 503, never 401**, so an SSM outage doesn't read as "signed out". A key
+  under 32 bytes counts as missing.
+- **Signatures are compared as encoded text:** base64's spare trailing bits let several
+  spellings of one signature decode to the same bytes (a test caught it).
+- `cb` overrides the registered callback, so each env keeps its own API key. No kamp-site change
+  was needed: the `api/*` behaviours already forward cookies (`AllViewerExceptHostHeader`).
+- Sign-out clears one browser's cookie; revocation ("sign out everywhere") is a follow-up that
+  AOTY-48's writes need before prod.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
