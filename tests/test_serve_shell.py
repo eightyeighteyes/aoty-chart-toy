@@ -44,9 +44,9 @@ def test_a_newbie_walks_every_stage_and_the_wall_goes_once_the_chart_ranks(ss):
 def test_a_newbie_chart_ranks_nothing_at_first_then_fills_in(ss):
   assert ss.fake_first_chart("newbie", T0, T0 + 5, "newbie-1") is None
   first = ss.fake_first_chart("newbie", T0, T0 + ss.FIRST_S["building"], "newbie-1")
-  assert first["rankings"]["track"] == [] and first["username"] == "newbie-1"
+  assert first["rankings"]["album"] == [] and first["username"] == "newbie-1"
   later = ss.fake_first_chart("newbie", T0, T0 + 50, "newbie-1")
-  assert later["rankings"]["track"] and later["generated_at"] > first["generated_at"]
+  assert later["rankings"]["album"] and later["generated_at"] > first["generated_at"]
 
 
 def test_nothing_ends_idle_with_every_album_checked_and_no_hits(ss):
@@ -54,7 +54,7 @@ def test_nothing_ends_idle_with_every_album_checked_and_no_hits(ss):
   assert stages(statuses) == ["queued", "reading", "building", "dating", "idle"]
   end = statuses[-1][1]
   assert end["albums"] == {"checked": ss.FIRST_ALBUMS, "total": ss.FIRST_ALBUMS, "hits": 0}
-  assert ss.fake_first_chart("nothing", T0, T0 + 50, "nothing-1")["rankings"]["track"] == []
+  assert ss.fake_first_chart("nothing", T0, T0 + 50, "nothing-1")["rankings"]["album"] == []
 
 
 def test_the_returning_preview_still_walks_its_stages(ss, tmp_path):

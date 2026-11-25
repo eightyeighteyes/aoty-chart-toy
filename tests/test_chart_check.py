@@ -36,24 +36,24 @@ def test_the_chart_builder_matches_m0s_rules():
   chart, _ = chart_core.build_chart(store, items, username="u", display_name="U", now=NOW)
   ref, got = cc.reference(store, items), cc.chart_entries(chart, store)
   assert cc.compare(ref, got) == []
-  assert len(ref["track"]) == 100 and 0 < len(ref["album"]) <= 100
+  assert 0 < len(ref["album"]) <= 100
+  assert set(chart["rankings"]) == {"album"}  # By Play only (AOTY-63)
 
 
 def test_a_small_world_matches_exactly_in_scores():
   store, items = world(n=40, seed=3)
   chart, _ = chart_core.build_chart(store, items, username="u", display_name="U", now=NOW)
   ref, got = cc.reference(store, items), cc.chart_entries(chart, store)
-  for mode in ("track", "album"):
-    assert [round(s, 3) for _, s in ref[mode]] == [s for _, s in got[mode]]
+  assert [round(s, 3) for _, s in ref["album"]] == [s for _, s in got["album"]]
 
 
 def test_compare_catches_a_wrong_score_and_a_wrong_album():
-  ref = {"track": [("a", 9), ("b", 5), ("c", 5), ("d", 1)], "album": []}
-  assert cc.compare(ref, {"track": [("a", 9), ("c", 5), ("b", 5), ("d", 1)], "album": []}) == []
-  assert cc.compare(ref, {"track": [("a", 9), ("b", 5), ("c", 4), ("d", 1)], "album": []})
-  assert cc.compare(ref, {"track": [("x", 9), ("b", 5), ("c", 5), ("d", 1)], "album": []})
+  ref = {"album": [("a", 9), ("b", 5), ("c", 5), ("d", 1)]}
+  assert cc.compare(ref, {"album": [("a", 9), ("c", 5), ("b", 5), ("d", 1)]}) == []
+  assert cc.compare(ref, {"album": [("a", 9), ("b", 5), ("c", 4), ("d", 1)]})
+  assert cc.compare(ref, {"album": [("x", 9), ("b", 5), ("c", 5), ("d", 1)]})
 
 
 def test_ties_at_the_cutoff_may_differ():
-  ref = {"track": [("a", 9), ("b", 5)], "album": []}
-  assert cc.compare(ref, {"track": [("a", 9), ("z", 5)], "album": []}) == []
+  ref = {"album": [("a", 9), ("b", 5)]}
+  assert cc.compare(ref, {"album": [("a", 9), ("z", 5)]}) == []

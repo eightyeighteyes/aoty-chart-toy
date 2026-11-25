@@ -99,24 +99,11 @@ def test_by_track_keeps_csv_order_with_plays_as_score():
   assert [s for _, s in rankings["track"]] == [40, 40, 18, 72, 120, 10]
 
 
-def test_by_album_ranks_listeners_first_and_drops_singles():
+def test_by_album_divides_by_tracks_drops_singles_and_breaks_ties_by_listeners():
   rows, releases = chart()
   _, rankings, n_singles = build_page.score_rankings(rows, releases, [], 100)
-  # Listeners 4, 3, 2, 1 (AOTY-63): Dense's 12 album plays from 2 listeners no longer lead.
-  assert names(rankings["album"]) == ["Shared", "Long", "Dense", "Tie"]
-  assert [round(s, 3) for _, s in rankings["album"]] == [4.0, 10.0, 12.0, 10.0]
+  assert names(rankings["album"]) == ["Dense", "Long", "Tie", "Shared"]  # Long beats Tie: 3 listeners vs 1
   assert n_singles == 2
-
-
-def test_by_album_orders_equal_listeners_by_album_plays():
-  rows = [
-    row("A", "Long Loved", {"u1": 30, "u2": 30}),  # 60 / 20 = 3
-    row("B", "Short Loved", {"u1": 10, "u2": 10}),  # 20 / 4 = 5
-    row("C", "Looped", {"u1": 90}),  # 90 / 3 = 30, one listener
-  ]
-  releases = releases_for(rows, [ALBUM(20), ALBUM(4), ALBUM(3)])
-  _, rankings, _ = build_page.score_rankings(rows, releases, [], 100)
-  assert names(rankings["album"]) == ["Short Loved", "Long Loved", "Looped"]
 
 
 def test_weighted_needs_the_listener_floor():
@@ -135,10 +122,10 @@ def test_top_n_cuts_every_ranking():
 
 def test_member_views_add_each_members_own_top_albums_in_csv_order():
   rows, releases = chart()
-  # n=1. Everyone's #1s: Shared (track and album: 4 listeners), Long (weighted).
+  # n=1. Everyone's #1s: Shared (track), Dense (album), Long (weighted).
   # u1's own #1 by plays is Long (60); by album plays it's Tie (10/1 beats Dense's 50/6).
   kept, _, _ = build_page.score_rankings(rows, releases, ["u1"], 1)
-  assert [r["Album"] for r in kept] == ["Shared", "Long", "Tie"]
+  assert [r["Album"] for r in kept] == ["Shared", "Dense", "Long", "Tie"]
 
 
 def test_member_view_ties_at_the_cutoff_are_all_kept():
@@ -182,26 +169,39 @@ def test_group_core_ranks_exactly_as_m0s_score_rankings():
     stats[k] = {"plays": sum(by.values()), "by": by}
     items[k] = {"year": YEAR, "tracks": releases[k]["tracks"], "tracks_type": releases[k]["type"]}
   ours = group_core.rank(stats, items)
-  # M0's By Track is the CSV order, which aoty.rank_albums makes (this fixture's rows aren't in it).
-  m0_track = aoty.rank_albums(
-    {k: {"key": k, "listeners": s["by"], "plays": s["plays"]} for k, s in stats.items()}
-  )
-  assert [k for k, _ in ours["track"]] == [s["key"] for s in m0_track]
+  # By Play ("album") and Weighted are M0's; M0 (frozen) has no By Listener, and the app no By
+  # Track (AOTY-63).
+  assert set(ours) == {"listener", "album", "weighted"}
   for mode in ("album", "weighted"):
     m0_keys = [aoty.cache_key(r["Artist"], r["Album"]) for r, _ in m0[mode]]
     assert [k for k, _ in ours[mode]] == m0_keys, mode
     assert [round(s, 6) for _, s in ours[mode]] == [round(s, 6) for _, s in m0[mode]], mode
 
 
-def test_group_core_by_album_ranks_listeners_then_album_plays():
+def test_group_core_by_listener_ranks_listeners_then_album_plays():
   import group_core
 
   stats = {
     "loop": {"plays": 90, "by": {"u1": 90}},  # 30 album plays, one listener
     "short": {"plays": 20, "by": {"u1": 10, "u2": 10}},  # 5
     "long": {"plays": 60, "by": {"u1": 30, "u2": 30}},  # 3
-    "single": {"plays": 99, "by": {"u1": 33, "u2": 33, "u3": 33}},  # out of album modes
+    "single": {"plays": 99, "by": {"u1": 33, "u2": 33, "u3": 33}},  # a single: on no chart
   }
   tracks = {"loop": (3, "Album"), "short": (4, "Album"), "long": (20, "Album"), "single": (1, "Single")}
   items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
-  assert [k for k, _ in group_core.rank(stats, items)["album"]] == ["short", "long", "loop"]
+  ranked = group_core.rank(stats, items)
+  assert [k for k, _ in ranked["listener"]] == ["short", "long", "loop"]
+  assert [k for k, _ in ranked["album"]] == ["loop", "short", "long"]  # By Play: album plays first
+
+
+def test_group_member_views_keep_each_members_top_albums_by_plays_per_track():
+  import group_core
+
+  stats = {
+    "a": {"plays": 60, "by": {"u1": 60}},  # 60 / 20 = 3
+    "b": {"plays": 10, "by": {"u1": 10}},  # 10 / 2 = 5: u1's top by plays per track
+    "s": {"plays": 90, "by": {"u1": 90}},  # a single: never kept
+  }
+  tracks = {"a": (20, "Album"), "b": (2, "Album"), "s": (1, "Single")}
+  items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
+  assert group_core.member_keys(stats, items, ["u1"], n=1) == {"b"}

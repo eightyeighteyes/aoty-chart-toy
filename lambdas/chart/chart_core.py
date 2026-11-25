@@ -10,11 +10,11 @@ Inputs:
 Rules (M0's, CLAUDE.md; user decisions 2026-11-22):
   - Only albums whose item says year == the store's year are ranked. The year comes from the
     albums table at build time, never copied into the store, so mb lane corrections show up.
-  - By Track: the user's plays, most first; ties by key (sync_core.ranked_keys' order).
-  - By Album: plays / track count, singles left out (common.mbmatch.is_single: the release
-    group's type decides; no count at all counts as a single). Ties: plays, then key.
-  - Weighted equals By Album for one listener, so single-user charts leave it out (M2 adds it).
-  - Each ranking is a strict top TOP_N: albums tied with the last one shown are dropped.
+  - One ranking, By Play ("album"): plays / track count, singles left out
+    (common.mbmatch.is_single: the release group's type decides; no count at all counts as a
+    single). Ties: plays, then key. By Track is gone, and with it singles (user, 2026-11-25,
+    AOTY-63); By Listener and Weighted equal By Play for one listener, so only groups have them.
+  - The ranking is a strict top TOP_N: albums tied with the last one shown are dropped.
   - Covers: the scrobbles' Last.fm image, else album.getInfo's (the handler looks those up for
     shown albums only, cover_lookups), then that image's other sizes, then the Cover Art
     Archive. CAA has no art for many small (e.g. Bandcamp-only) releases, which Last.fm has.
@@ -22,8 +22,9 @@ Rules (M0's, CLAUDE.md; user decisions 2026-11-22):
 chart.json (CHART_VERSION 1):
   {"version", "username", "display_name", "year", "generated_at", "pending", "pending_top", "top", "featured",
    "albums": [{"artist", "album", "plays", "tracks", "single", "art", "fallbacks": [...]}],
-   "rankings": {"track": [[album index, plays]], "album": [[album index, album plays]]}}
-albums holds each album once, only if a ranking shows it, in By Track order.
+   "rankings": {"album": [[album index, album plays]]}}
+albums holds each album once, only if the ranking shows it, by plays. Charts built before
+AOTY-63 also carry a "track" ranking, which the page ignores.
 """
 
 import time
@@ -36,7 +37,7 @@ from common.mbmatch import is_single
 CHART_VERSION = 1
 TOP_N = 100
 FEATURED_N = 10
-MODES = ("track", "album")
+MODES = ("album",)
 COVER_RETRY_AFTER = 30 * 86400  # re-ask Last.fm about an album it had no cover for
 # sync_core.HOT_N (tests check they match): the user's top albums by plays, dated first.
 HOT_N = 150
@@ -77,18 +78,17 @@ def track_info(item):
 
 
 def rank(plays, items, year, n=TOP_N):
-  """{"track": [(key, plays)], "album": [(key, plays / tracks)]}, each a strict top n."""
+  """{"album": [(key, plays / tracks)]}, a strict top n."""
   dated = [k for k in plays if (items.get(k) or {}).get("year") == year]
-  by_track = sorted(((k, plays[k]) for k in dated), key=lambda kv: (-kv[1], kv[0]))
   albums = [k for k in dated if not is_single(track_info(items[k]))]
   by_album = sorted(
     ((k, plays[k] / items[k]["tracks"]) for k in albums), key=lambda kv: (-kv[1], -plays[kv[0]], kv[0])
   )
-  return {"track": by_track[:n], "album": by_album[:n]}
+  return {"album": by_album[:n]}
 
 
 def shown_keys(store, items, n=TOP_N):
-  """The albums a chart shows (in any ranking), in By Track order."""
+  """The albums a chart shows, by plays."""
   plays = year_plays(store)
   rankings = rank(plays, items, store["year"], n)
   shown = list(dict.fromkeys(k for mode in MODES for k, _ in rankings[mode]))

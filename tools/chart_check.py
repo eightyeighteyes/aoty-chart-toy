@@ -12,8 +12,8 @@ Then it builds the reference with M0's code:
     one listener per album, so the order is plays);
   - build_page.score_rankings for which albums are singles and for track counts;
   - M0's per-member re-rank, which lives in the page script (build_page.PAGE_SCRIPT's
-    ranked()), transcribed below: By Track = the member's plays, By Album = plays / tracks
-    with singles left out.
+    ranked()), transcribed below: By Album = plays / tracks with singles left out, which is
+    the user chart's only ranking (By Play) since AOTY-63.
 Albums are joined on the sync worker's keys (common.albumkey), not aoty.cache_key, whose lack
 of a punctuation fallback could merge two albums.
 
@@ -41,6 +41,7 @@ from common.config import TARGET_YEAR  # noqa: E402
 REGION = "us-east-1"
 TOP_N = 100
 MEMBER = "m01"  # the one member of the reference server
+MODES = ("album",)  # By Play only since AOTY-63
 PREFIXES = {"prod": "toys/aoty/", "staging": "toys/aoty-staging/", "sandbox": "toys/aoty-sandbox/"}
 
 
@@ -56,7 +57,7 @@ def year_plays(store):
 
 
 def reference(store, items, year=TARGET_YEAR, n=TOP_N):
-  """{"track": [(key, score)], "album": [(key, score)]} by M0's rules for one member."""
+  """{"album": [(key, score)]} by M0's rules for one member."""
   plays = year_plays(store)
   meta = store.get("albums", {})
   dated = [k for k in plays if (items.get(k) or {}).get("year") == year]
@@ -83,17 +84,14 @@ def reference(store, items, year=TARGET_YEAR, n=TOP_N):
   def ranked(pool, score_of):
     return sorted(((r["sync_key"], score_of(r)) for r in pool), key=lambda kv: -kv[1])[:n]
 
-  return {
-    "track": ranked(rows, lambda r: r["by_user"][MEMBER]),
-    "album": ranked(albums, lambda r: r["by_user"][MEMBER] / r["tracks"]),
-  }
+  return {"album": ranked(albums, lambda r: r["by_user"][MEMBER] / r["tracks"])}
 
 
 def chart_entries(chart, store):
-  """{"track": [(key, score)], ...} from chart.json, keyed back to the store's keys."""
+  """{"album": [(key, score)]} from chart.json, keyed back to the store's keys."""
   by_names = {(a.get("artist"), a.get("album")): k for k, a in store.get("albums", {}).items()}
   out = {}
-  for mode in ("track", "album"):
+  for mode in MODES:
     out[mode] = [
       (by_names.get((chart["albums"][i]["artist"], chart["albums"][i]["album"])), s)
       for i, s in chart["rankings"].get(mode, [])
@@ -104,7 +102,7 @@ def chart_entries(chart, store):
 def compare(ref, got):
   """Problems (strings) between two rankings, ignoring order within equal scores."""
   problems = []
-  for mode in ("track", "album"):
+  for mode in MODES:
     r = [(k, round(s, 3)) for k, s in ref[mode]]
     g = [(k, round(s, 3)) for k, s in got.get(mode, [])]
     if len(r) != len(g):
@@ -171,7 +169,7 @@ def main():
 
   print(f"{args.label} ({args.env}, {args.year}): {len(year_plays(store))} albums played, "
         f"{len(items)} with an albums item, chart generated {chart.get('generated_at')}")  # fmt: skip
-  for mode in ("track", "album"):
+  for mode in MODES:
     print(f"  {mode}: chart {len(got[mode])}, reference {len(ref[mode])}")
   problems = compare(ref, got)
   if chart.get("pending"):
