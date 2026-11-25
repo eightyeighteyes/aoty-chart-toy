@@ -472,6 +472,8 @@ def test_a_group_event_writes_the_group_chart_with_m0s_rules(h):
   shared = chart["albums"][chart["rankings"]["track"][0][0]]
   assert shared["listeners"] == 3 and shared["by"] == {"0": 5, "1": 1, "2": 2}
   assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["weighted"]] == ["Shared"]  # 3+ only
+  album = [chart["albums"][i]["album"] for i, _ in chart["rankings"]["album"]]
+  assert album == ["Shared", "Mine"]  # listeners first in By Album too (AOTY-63), not Mine's 50 plays
 
 
 def test_a_members_sync_rebuilds_their_groups(h):

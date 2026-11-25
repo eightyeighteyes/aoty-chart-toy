@@ -49,7 +49,8 @@ MODES = [
   (
     "album",
     "By Album",
-    "ranked by album plays: track plays divided by the album's track count (singles left out)",
+    "ranked by how many of our {total} members played them, then album plays: track plays divided by"
+    " the album's track count (singles left out)",
   ),
   (
     "weighted",
@@ -238,8 +239,9 @@ def score_rankings(rows, releases, members, n):
   scored = {
     # The CSV is already in this order: listeners, then plays.
     "track": [(r, r["plays"]) for r in rows],
+    # Listeners first, as By Track (AOTY-63), then album plays.
     "album": sorted(
-      ((r, r["plays"] / r["tracks"]) for r in albums), key=lambda x: (x[1], x[0]["listeners"]), reverse=True
+      ((r, r["plays"] / r["tracks"]) for r in albums), key=lambda x: (x[0]["listeners"], x[1]), reverse=True
     ),
     # Mean album plays across the people who played it. Without a listener floor,
     # one member looping a record takes #1.

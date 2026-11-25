@@ -4,7 +4,8 @@ No I/O here (handler.py does it). The rules are M0's (aoty.aggregate_plays / ran
 build_page.score_rankings / page_data), so a group of M0's members ranks as M0's page did:
   - Only albums whose albums item says year == the year are ranked.
   - By Track: unique listeners, then total plays (one play makes a listener).
-  - By Album: plays / tracks, singles out (common.mbmatch.is_single). Ties: listeners.
+  - By Album: unique listeners, then plays / tracks, singles out (common.mbmatch.is_single)
+    (AOTY-63, 2026-11-25: listeners first, as By Track; was plays / tracks, then listeners).
   - Weighted: plays / tracks / listeners, only with at least WEIGHTED_MIN_LISTENERS listeners.
   - Each ranking is the top n. A member's own view is ranked in the page, so the chart also
     keeps every album in any member's top n by their plays or plays per track (ties at the
@@ -63,7 +64,7 @@ def rank(stats, items, n=chart_core.TOP_N):
     "track": sorted(
       ((k, stats[k]["plays"]) for k in stats), key=lambda kv: (-listeners(kv[0]), -kv[1], kv[0])
     ),
-    "album": sorted(((k, per_track[k]) for k in albums), key=lambda kv: (-kv[1], -listeners(kv[0]), kv[0])),
+    "album": sorted(((k, per_track[k]) for k in albums), key=lambda kv: (-listeners(kv[0]), -kv[1], kv[0])),
     "weighted": sorted(
       ((k, per_track[k] / listeners(k)) for k in albums if listeners(k) >= WEIGHTED_MIN_LISTENERS),
       key=lambda kv: (-kv[1], -listeners(kv[0]), kv[0]),
