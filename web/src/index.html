@@ -70,7 +70,7 @@
   <p class="privacy">we read your public last.fm plays. no login needed, nothing sold.</p>
 </section>
 
-<main class="poster" id="poster" data-view="poster" data-rank="track">
+<main class="poster" id="poster" data-view="poster" data-rank="listener">
   <header>
     <div class="eyebrow" id="eyebrow">{{NAME}}</div>
     <h1 id="title">{{NAME}}</h1>
@@ -82,11 +82,11 @@
         <button type="button" data-view="poster" aria-pressed="true">Poster</button>
         <button type="button" data-view="list" aria-pressed="false">List</button>
       </div>
-      <div class="switch" role="group" aria-label="Ranking">
-        <button type="button" data-rank="track" aria-pressed="true">By Track</button>
-        <button type="button" data-rank="album" aria-pressed="false">By Album</button>
-        <!-- Groups only (AOTY-51): for one listener it equals By Album. -->
-        <button type="button" data-rank="weighted" aria-pressed="false" id="rank-weighted" hidden>Weighted</button>
+      <!-- Group pages only, and only for everyone (AOTY-63): for one listener all three are By Play. -->
+      <div class="switch" role="group" aria-label="Ranking" id="rank-switch" hidden>
+        <button type="button" data-rank="listener" aria-pressed="true">By Listener</button>
+        <button type="button" data-rank="album" aria-pressed="false">By Play</button>
+        <button type="button" data-rank="weighted" aria-pressed="false">Weighted</button>
       </div>
       <label class="who" id="who-wrap" hidden><span class="who-label">listened by</span>
         <select id="who"><option value="">everyone</option></select>

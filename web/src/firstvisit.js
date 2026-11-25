@@ -3,8 +3,8 @@
 // here, so node --test runs it (web/test/firstvisit.test.mjs). A classic script: it sets
 // globalThis.aotyFirstVisit before app.js runs.
 //
-// A first visit is a chart page with nothing ranked yet: no chart.json, or one whose By Track
-// ranking is empty. The first build runs before any album is dated, so that chart is the usual
+// A first visit is a chart page with nothing ranked yet: no chart.json, or one whose By Play
+// ranking ("album", its only one since AOTY-63) is empty. The first build runs before any album is dated, so that chart is the usual
 // case, not an edge.
 (function (root) {
   "use strict";
@@ -15,8 +15,8 @@
   const plural = (n, one, many) => `${num(n)} ${n === 1 ? one : many}`;
 
   function isFirstVisit(chart) {
-    const track = chart && chart.rankings && chart.rankings.track;
-    return !Array.isArray(track) || track.length === 0;
+    const ranked = chart && chart.rankings && chart.rankings.album;  // By Play, the one ranking (AOTY-63)
+    return !Array.isArray(ranked) || ranked.length === 0;
   }
 
   // The returning-user banner: [message, detail] for a status ("" when there's nothing to say).

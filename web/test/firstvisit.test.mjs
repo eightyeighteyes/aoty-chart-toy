@@ -12,8 +12,10 @@ const dating = (checked, total, hits = 0) => ({stage: "dating", albums: {checked
 
 test("no chart, or a chart that ranks nothing, is a first visit", () => {
   assert.equal(isFirstVisit(null), true);
-  assert.equal(isFirstVisit({rankings: {track: [], album: []}}), true);
-  assert.equal(isFirstVisit({rankings: {track: [[0, 9]], album: []}}), false);
+  assert.equal(isFirstVisit({rankings: {album: []}}), true);
+  assert.equal(isFirstVisit({rankings: {album: [[0, 9]]}}), false);
+  // By Play is the one ranking (AOTY-63): a chart whose only ranked albums are singles ranks nothing.
+  assert.equal(isFirstVisit({rankings: {track: [[0, 9]], album: []}}), true);
   assert.equal(isFirstVisit({}), true);
 });
 
