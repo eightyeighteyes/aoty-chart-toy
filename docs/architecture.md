@@ -431,9 +431,9 @@ and the next day's run starts over.
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
 | `guard` table | api (`ip#` new-name sets, the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
-| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
+| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`, the owner's `theme` and `theme_set_at` (AOTY-65)), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
 | `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
-| site bucket `data/users/*/chart.json` | chart builder | browsers, through CloudFront |
+| site bucket `data/users/*/chart.json` | chart builder (builds, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-65) |
 | site bucket `data/groups/*/chart.json` | chart builder (writes and deletes) | browsers, through CloudFront |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
@@ -489,3 +489,31 @@ overwrite a newer chart. The year comes from the `albums` table at build time, s
 that corrects an album reaches the chart at the user's next sync. The pending pass Scans the
 users table, which is fine at M1's scale; past a few thousand users, a sparse GSI on
 `chart_pending` replaces it.
+
+### Page themes (AOTY-65)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as owner's browser
+  participant API as api Lambda
+  participant U as users table
+  participant CB as chart Lambda
+  participant S3 as site bucket
+  participant V as a visitor's browser
+
+  B->>B: show the pick at once
+  B->>API: POST api/users/u/theme {theme} (800 ms after the last pick)
+  API->>API: session_user is u, theme is a common.themes id, group_writes on
+  API->>U: SET theme, theme_set_at (only if the row exists)
+  API-)CB: {"username": u, "restyle": true}
+  CB->>U: theme, chart_built_at (the row, never the event)
+  CB->>S3: get data/users/u/chart.json
+  CB->>S3: put it back with "theme" (Cache-Control no-cache)
+  V->>S3: chart.json (through CloudFront)
+  V->>V: paint it in the owner's theme ("album of the year": colours from the #1 cover, read in the browser)
+```
+
+Every full build also copies the row's theme, so a restyle that was lost costs nothing after the
+next build. The theme is always an id from an allowlist, never CSS, so nothing a visitor's page
+applies comes from the owner as free text.

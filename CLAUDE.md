@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52) and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -623,6 +623,49 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   kamp.fm's own gtag doesn't template it.
 - Preview: `tools/serve_shell.py --ga-id G-QNJVBYWDYN`. Off kamp.fm every hit has `debug_mode`, so it
   shows in DebugView and the property's developer-traffic filter keeps it out of reports.
+
+## User themes (AOTY-65, 2026-11-25)
+
+- User decisions:
+  - **The owner sets their user page's theme and every visitor sees it.**
+  - The choices are the poster look (the default), kamp's 8 dark palettes, and a theme from the
+    chart's #1 cover, labelled **"album of the year"** (id `match1`; "match my #1" was only the
+    ticket's working name).
+  - Visitors see a new pick **within seconds** (a restyle, not the next build).
+  - "album of the year" **fades in** once the #1 cover loads, with no fade under reduced motion.
+  - Groups (AOTY-76) and light themes (AOTY-75) are their own stories.
+- **The ids are an allowlist.**
+  - Two copies: `lambdas/common/themes.py` and `web/src/theme.js` (`tests/test_themes.py` keeps them
+    the same), plus `kampstats` `theme_set`, which a JS test keeps in step.
+  - Only an id is stored or published, never colours or CSS.
+  - A new preset means all three places, and its contrast must pass `web/test/theme.test.mjs`.
+- **Contrast is tested:** every preset and derived theme keeps text at 4.5:1 on bg and panel,
+  muted and both accents included, on-accent on both accents, and kamp's periwinkle on bg.
+  - Kamp's values are kept wherever they pass. Measured 2026-11-25: `textDim` on the panel fails in
+    beach house (4.27), blackpink (4.46), deep purple (3.78) and golden smog (4.48), and deep
+    purple's accent is 4.48. Those are lifted (theme.js header).
+  - `accent2` is picked per preset, because the poster has two accents.
+- **All of app.css's colours are tokens.** `--line`, `--on-accent`, `--tile` and `--bg-seam` were
+  added, and the overlays use `color-mix` with `--bg`.
+  - Seam fix 2's other end is `--bg-seam` (`theme.seamOf`: blue ±1, never wrapping), and
+    `test_build_shell` still guards it.
+  - `.theme-fade` transitions colours only, never transforms, so no layers are promoted (Seam fix).
+- **Where it lives:**
+  - The users row's `theme`, set by `POST api/users/<name>/theme` (the owner only, through
+    `session_user`). It needs an existing row (404 `no_chart`), and `group_writes` is its kill
+    switch too.
+  - The api then sends the chart Lambda `{"username", "restyle": true}`, which copies **the row's**
+    theme (never the event's: async events repeat) into the published chart.json, without a build.
+  - Full builds carry it as well. The default is left out of chart.json.
+- **On the page:**
+  - The theme is applied in `paint()`. `clearTheme()` runs on every other view: state, intro, first
+    visit, groups.
+  - Once the owner picks in a page session, their pick wins over a re-fetched chart.json, which
+    may not be restyled yet.
+  - "album of the year" uses its own `new Image()` with `crossOrigin` (the chart's `<img>`s aren't
+    readable), drawn at 32×32. A tainted canvas or a grey cover keeps the default.
+- Preview: `tools/serve_shell.py --sample alice --port 8001`, then "sign in with last.fm" (alice)
+  shows the picker; the stand-in API writes the theme into the preview chart at once.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

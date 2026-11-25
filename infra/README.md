@@ -406,6 +406,14 @@ aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.j
 Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
 `CoverLookups`, `LastfmCalls`.
 
+**Page themes (AOTY-65):** the owner's pick (`POST api/users/<name>/theme`) is saved on the users
+row (`theme`), and the api sends the chart Lambda `{"username", "restyle": true}`. That copies the
+row's theme into the published `chart.json` without a build, which is why the chart role can read
+`<prefix>data/users/*` on the site bucket. There's no ListBucket there, so restyle only reads a
+chart once `chart_built_at` says one exists. Full builds carry the theme too. To restyle by hand,
+send the same payload. `group_writes` (below) is the kill switch for theme writes as well: off,
+they answer 503 `writes_off` and the page hides the picker.
+
 **Group charts (AOTY-50):** the chart Lambda takes `{"group": "<id>", "requested_at"?}` and
 writes `<prefix>data/groups/<id>/chart.json` with M0's rules (`lambdas/chart/group_core.py`),
 from the groups table (see "Groups"). After each member's own chart build it rebuilds their
