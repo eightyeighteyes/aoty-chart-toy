@@ -34,6 +34,7 @@ ASSETS = {
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",
   "theme.js": "THEME",
+  "borealis.js": "BOREALIS",
   "favicon.svg": "ICON",
   "apple-touch-icon.png": "TOUCH",
 }

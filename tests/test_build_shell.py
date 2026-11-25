@@ -113,6 +113,7 @@ def test_placeholders_name_year_title_and_icon_are_filled(tmp_path):
   # intro.js and firstvisit.js load before app.js, which reads their globals.
   assert html.index(published["intro.js"]) < html.index(published["app.js"])
   assert html.index(published["firstvisit.js"]) < html.index(published["app.js"])
+  assert html.index(published["borealis.js"]) < html.index(published["app.js"])  # AOTY-67
   assert f'<meta name="aoty-year" content="{bs.TARGET_YEAR}">' in html
 
 
