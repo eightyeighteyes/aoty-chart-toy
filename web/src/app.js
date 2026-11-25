@@ -583,12 +583,15 @@
   //
   // Ask for a sync (the API answers a running sync or the 10-minute cooldown without queueing),
   // then poll the status: every 2 s, backing off to 5 s, every 30 s while release years are
-  // checked, every 20-25 s while waiting in line (AOTY-26), pausing while the tab is hidden.
+  // checked, and by place while waiting in line (AOTY-26; see queuedPollMs), pausing while the tab
+  // is hidden.
   // When the chart builder writes a newer chart, onNewChart repaints it in place. Nothing here
   // ever blocks the chart: errors only show a quiet line. A throttled or busy status (429/503)
   // is retried with a back-off, not given up on: a queued crowd is exactly when that happens.
   const POLL_FIRST_MS = 2000, POLL_MAX_MS = 5000, POLL_DATING_MS = 30000;
-  const POLL_QUEUED_MS = 20000, POLL_QUEUED_JITTER_MS = 5000, POLL_RETRY_MAX_MS = 60000, RETRIES_MAX = 10;
+  // While in line the pace goes by place (firstvisit.queuedPollMs): the normal back-off near the
+  // front, 8-10 s in a short line, 20-25 s in a crowd. POLL_QUEUED_MS is a throttled poll's floor.
+  const POLL_QUEUED_MS = 20000, POLL_RETRY_MAX_MS = 60000, RETRIES_MAX = 10;
   // The watch only counts once the sync has left the queue: a long wait in line isn't a stall.
   const WATCH_FOR_MS = 10 * 60 * 1000, DATING_FOR_MS = 2 * 60 * 1000;
 
@@ -619,7 +622,6 @@
     const quiet = () => stop("Couldn't update right now.");
     const schedule = ms => { if (!stopped && !document.hidden) timer = setTimeout(tick, ms); };
     const timedOut = () => watchFrom !== null && Date.now() - watchFrom > WATCH_FOR_MS;
-    const queuedDelay = () => POLL_QUEUED_MS + Math.round(Math.random() * POLL_QUEUED_JITTER_MS);
 
     async function maybeRefresh(s) {
       const built = s.chart_built_at || 0;
@@ -650,7 +652,7 @@
       // In line, the banner carries the place (announced at most once a minute); after, progress.
       if (position) say(place.live, ""); else say(live, detail);
       document.title = fv.tabTitle(baseTitle, position, percent);
-      delay = fv.inLine(s) ? queuedDelay() : Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
+      delay = fv.queuedPollMs(s) ?? Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
       schedule(delay);
       return true;
     }
@@ -680,8 +682,8 @@
         datingSince = datingSince || Date.now();
         if (!firstSession && Date.now() - datingSince > DATING_FOR_MS) return stop("");
         delay = POLL_DATING_MS;
-      } else if (fv.inLine(s)) {
-        delay = queuedDelay();
+      } else if (fv.queuedPollMs(s) !== null) {
+        delay = fv.queuedPollMs(s);
       } else {
         delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
       }

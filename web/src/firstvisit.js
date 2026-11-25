@@ -118,12 +118,16 @@
     };
   }
 
-  // Whether the status puts this user in a real line, so the page polls at the slow, jittered
-  // in-line pace (AOTY-26). A queued status with no place (the api just queued them, nobody's
-  // ahead, or the counters were unreadable) is about to start: poll at the normal pace, or the
-  // first poll waits 20-25 s for a sync that started in two (found in the AOTY-66 preview).
-  function inLine(s) {
-    return !!s && s.stage === "queued" && !!s.queue && Number(s.queue.position) > 0;
+  // How long to wait before the next status poll while queued (AOTY-26), by place in line; null
+  // means the page's normal 2-5 s back-off. The slow, jittered pace is for a real crowd, which is
+  // when polls pile up. Near the front, or with no place at all (counters unreadable), the sync is
+  // seconds away, and a 20-25 s poll left a lone user staring at "caller #1" (user, 2026-11-25).
+  // rand: Math.random, for the jitter.
+  const NEAR_FRONT = 2, SHORT_LINE = 10;
+  function queuedPollMs(s, rand = Math.random) {
+    const p = s && s.stage === "queued" && s.queue ? Number(s.queue.position) : 0;
+    if (!(p > NEAR_FRONT)) return null;
+    return p <= SHORT_LINE ? 8000 + Math.round(rand() * 2000) : 20000 + Math.round(rand() * 5000);
   }
 
   // "about 12 minutes" for a wait in seconds, or "" when there's no estimate.
@@ -219,7 +223,7 @@
   }
 
   const api = {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText,
-               queueLines, tabTitle, refusal, wallSources, inLine};
+               queueLines, tabTitle, refusal, wallSources, queuedPollMs};
   root.aotyFirstVisit = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
