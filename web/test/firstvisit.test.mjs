@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText, queueLines,
-       tabTitle, refusal, wallSources, inLine} = require("../src/firstvisit.js");
+       tabTitle, refusal, wallSources, queuedPollMs} = require("../src/firstvisit.js");
 
 const reading = (done, total, scrobbles = 0) => ({stage: "reading", weeks: {done, total}, scrobbles});
 const dating = (checked, total, hits = 0) => ({stage: "dating", albums: {checked, total, hits}});
@@ -187,11 +187,17 @@ test("the wall fetches each URL once", () => {
   assert.deepEqual(wallSources(undefined), []);
 });
 
-test("only a status with a place in line polls at the in-line pace", () => {
-  assert.equal(inLine({stage: "queued", queue: {position: 37, wait_s: 600}}), true);
-  // Just queued, nobody ahead or the counters unreadable: the sync is about to start.
-  assert.equal(inLine({stage: "queued"}), false);
-  assert.equal(inLine({stage: "queued", queue: {position: 0}}), false);
-  assert.equal(inLine({stage: "reading", queue: {position: 3}}), false);
-  assert.equal(inLine(null), false);
+test("the in-line poll goes by place: normal near the front, slower in a short line, slowest in a crowd", () => {
+  const q = position => ({stage: "queued", queue: {position}});
+  const mid = () => 0.5;
+  assert.equal(queuedPollMs(q(1), mid), null);  // caller #1: the sync is seconds away
+  assert.equal(queuedPollMs(q(2), mid), null);
+  assert.equal(queuedPollMs(q(3), mid), 9000);
+  assert.equal(queuedPollMs(q(10), mid), 9000);
+  assert.equal(queuedPollMs(q(11), mid), 22500);
+  assert.equal(queuedPollMs(q(500), () => 1), 25000);
+  // Queued with no place (counters unreadable), or not queued at all: the normal back-off.
+  assert.equal(queuedPollMs({stage: "queued"}, mid), null);
+  assert.equal(queuedPollMs({stage: "reading", queue: {position: 40}}, mid), null);
+  assert.equal(queuedPollMs(null, mid), null);
 });
