@@ -19,6 +19,9 @@ read older data can never overwrite a newer chart. Two events:
       From the api after the owner picked a page theme (AOTY-65): copies the users row's theme
       into the published chart.json, without rebuilding anything (restyle). Full builds carry the
       row's theme too.
+  {"group": "<slug>", "restyle": true}
+      From the api after the group's owner picked a page theme (AOTY-76): copies the meta's theme
+      into the group's published chart.json, without a build (restyle_group).
   {"group": "<slug>", "deleted": true}
       From the api after a group was deleted or moved to a new slug: removes its chart, unless a
       group with that slug exists again by now (then it's rebuilt). Coming through here orders the
@@ -105,6 +108,8 @@ def handler(event, context, deps=None):
     group_id = str(event["group"])
     if event.get("deleted"):
       _guarded(deps, group_id, totals, lambda: _count(totals, delete_group_chart(deps, group_id)))
+    elif event.get("restyle"):  # before the build fall-through: a restyle must never rebuild (AOTY-76)
+      _guarded(deps, group_id, totals, lambda: _count(totals, restyle_group(deps, group_id)))
     else:
       requested_at = int(event.get("requested_at") or 0)
       _guarded(
@@ -249,15 +254,48 @@ def restyle(deps, username):
   if not row.get("chart_built_at"):
     return False
   key = chart_key(deps.env.get("SITE_PREFIX", ""), username)
-  body = _get_object(deps, deps.env["SITE_BUCKET"], key)
+  if not _restyle_published(deps, key, row.get("theme")):
+    return False
+  log.info("chart %s restyled", _tag(username))
+  return True
+
+
+def restyle_group(deps, group_id):
+  """Copy the group meta's theme into its published chart.json (AOTY-76), as restyle does for a
+  user. The theme comes from the meta, never the event. No group (deleted, or moved by a rename,
+  whose new slug's build carries the theme) or no published chart (404, or the 403 a missing
+  object answers without ListBucket): nothing to do. Not gated on chart_built_at, which a build
+  stamps only from chart_requested_at."""
+  if not grp.SLUG_RE.match(group_id):
+    log.warning("invalid group id in event; dropped")
+    return False
+  meta, _ = _load_group(deps, group_id)
+  if meta is None:
+    return False
+  key = group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id)
+  if not _restyle_published(deps, key, meta.get("theme")):
+    return False
+  log.info("group %s restyled", group_id)
+  return True
+
+
+def _restyle_published(deps, key, theme):
+  """Set (or clear) the theme of the chart.json published at key. False when there's no chart, or it
+  already has that theme. The role has no s3:ListBucket on the site bucket, so a missing chart can
+  answer 403 rather than 404: either way there's nothing to restyle."""
+  try:
+    body = _get_object(deps, deps.env["SITE_BUCKET"], key)
+  except Exception as e:
+    if _error_code(e) not in ("AccessDenied", "403"):
+      raise
+    body = None
   if body is None:
     return False
   chart = json.loads(body)
   before = chart.get("theme")
-  if core.with_theme(chart, row.get("theme")).get("theme") == before:
+  if core.with_theme(chart, theme).get("theme") == before:
     return False
   _put_json(deps, deps.env["SITE_BUCKET"], key, chart, CacheControl="no-cache")
-  log.info("chart %s restyled", _tag(username))
   return True
 
 
@@ -311,6 +349,7 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finishe
   chart, _ = group_core.build_group_chart(
     stores, items, group_id=group_id, name=str(meta.get("name") or ""), year=year,
     waiting=waiting, unavailable=unavailable, now=int(deps.clock()), images=images,
+    theme=meta.get("theme"),
   )  # fmt: skip
   _put_json(
     deps, deps.env["SITE_BUCKET"], group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id), chart,
