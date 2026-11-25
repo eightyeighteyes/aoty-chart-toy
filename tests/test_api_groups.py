@@ -51,6 +51,13 @@ CONDITIONS = {
     lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count", 0) < v[":max"],
   "#o = :me AND member_count = :n":
     lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count") == v[":n"],
+  # a rename's old meta, guarded against a theme saved since it was read (AOTY-76)
+  "#o = :me AND member_count = :n" + groups_store.THEME_UNSET:
+    lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count") == v[":n"]
+    and "theme_set_at" not in it,
+  "#o = :me AND member_count = :n" + groups_store.THEME_SAME:
+    lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count") == v[":n"]
+    and it.get("theme_set_at") == v[":ts"],
   # a group visit's sync claim and release (AOTY-55)
   groups_store.CLAIM_SYNC:
     lambda it, v: _has(it) and ("sync_requested_at" not in it or it["sync_requested_at"] <= v[":cool"]),
@@ -284,6 +291,7 @@ WRITES = [
   ("DELETE", "groups/g", None),
   ("POST", "groups/g/members", {"username": "carol"}),
   ("DELETE", "groups/g/members/bob", None),
+  ("POST", "groups/g/theme", {"theme": "kamp"}),  # AOTY-76
 ]
 
 
@@ -898,3 +906,63 @@ def test_revoked_requests_are_named_in_the_metric_line(h, capsys):
   raw(h, d, "PATCH", "groups/g", copied, {"name": "y"})
   lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
   assert [x.get("auth") or x.get("outcome") for x in lines] == ["revoked", "revoked"]
+
+
+# ---- group themes (AOTY-76) -----------------------------------------------------------------
+
+
+def test_the_owner_sets_the_groups_theme_and_its_chart_is_restyled(h):
+  d = group_with_members(h)
+  assert api_core.route("POST", f"{BASE}api/groups/g/theme", BASE) == ("group_theme", "g")
+  assert api_core.route("GET", f"{BASE}api/groups/g/theme", BASE) == ("method", None)
+  assert call(h, d, "POST", "groups/g/theme", {"theme": "gabbie"}) == (200, {"theme": "gabbie"})
+  assert (d.ddb.meta("g")["theme"], d.ddb.meta("g")["theme_set_at"]) == ("gabbie", NOW)
+  assert d.lam.events == [{"group": "g", "restyle": True}]
+  status, body = call(h, d, "GET", "groups/g", user=None, ctype=None)
+  assert status == 200 and body["theme"] == "gabbie"
+
+
+def test_only_the_owner_sets_a_groups_theme_even_a_member_cannot(h):
+  d = group_with_members(h)  # alice owns g; bob is a member
+  assert call(h, d, "POST", "groups/g/theme", {"theme": "kamp"}, user="bob") == (
+    403,
+    {"error": "not your group"},
+  )
+  assert call(h, d, "POST", "groups/nope/theme", {"theme": "kamp"}) == (404, {"error": "no such group"})
+  assert "theme" not in d.ddb.meta("g") and d.lam.events == []
+
+
+def test_unknown_group_themes_are_refused(h):
+  d = group_with_members(h)
+  status, body = call(h, d, "POST", "groups/g/theme", {"theme": "</style>"})
+  assert status == 400 and body["error"] == "unknown_theme"
+  assert "theme" not in d.ddb.meta("g")
+
+
+def test_group_get_carries_only_a_valid_non_default_theme(h):
+  d = group_with_members(h)
+  for stored, shown in (("kamp", "kamp"), ("poster", None), ("junk", None)):
+    d.ddb.meta("g")["theme"] = stored
+    _, body = call(h, d, "GET", "groups/g", user=None, ctype=None)
+    assert body.get("theme") == shown, stored
+
+
+def test_a_rename_carries_the_theme_to_the_new_slug(h):
+  d = group_with_members(h)
+  call(h, d, "POST", "groups/g/theme", {"theme": "mint-royale"})
+  status, body = call(h, d, "PATCH", "groups/g", {"name": "The Crew"})
+  assert status == 200 and body["id"] == "the-crew"
+  assert d.ddb.meta("the-crew")["theme"] == "mint-royale"
+
+
+def test_a_theme_saved_while_a_rename_runs_is_not_lost(h):
+  d = group_with_members(h)
+  d.ddb.meta("g").update(theme="kamp", theme_set_at=NOW - 50)
+
+  def save_theme_meanwhile(ddb):  # lands between the rename's read and its transaction
+    ddb.meta("g").update(theme="gabbie", theme_set_at=NOW)
+
+  d.ddb.before_transact = save_theme_meanwhile
+  status, body = call(h, d, "PATCH", "groups/g", {"name": "The Crew"})
+  assert status == 200 and body["id"] == "the-crew"
+  assert d.ddb.meta("the-crew")["theme"] == "gabbie"  # the retry read the newer theme
