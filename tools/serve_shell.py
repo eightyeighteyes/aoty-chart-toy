@@ -32,6 +32,9 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
                                         <base>api/auth/start?as=bob&next=<path> as anyone else.
                                         With --proxy sandbox --sign-in-as NAME, sign-in mints a
                                         real sandbox session for NAME instead (admin credentials).
+  <base>api/users/<u>/theme             the owner's page theme (AOTY-65): signed in as <u> (alice
+                                        for --sample alice), POST sets the preview chart's theme
+                                        at once, as the chart builder's restyle would.
   any other path under <base>           index.html, as kamp.fm's shell function does
 with kamp.fm's Content-Security-Policy, so CSP violations show in the browser console.
 data/ is git-ignored, so real charts copied there stay local.
@@ -55,7 +58,7 @@ sys.path[:0] = [str(REPO), str(REPO / "lambdas"), str(REPO / "lambdas" / "chart"
 import api_core  # noqa: E402
 import chart_core  # noqa: E402
 import preview_groups  # noqa: E402  (tools/, beside this script)
-from common import session  # noqa: E402
+from common import session, themes  # noqa: E402
 from common.albumkey import album_key, join_key  # noqa: E402
 from scripts import build_shell  # noqa: E402
 
@@ -97,6 +100,26 @@ def fake_outcome(name):
   if name.startswith("private-"):
     return 200, {"queued": False, "reason": "cooldown", "status": {"stage": "error", "reason": "private"}}
   return FAKE_OUTCOMES.get(name)
+
+
+def fake_theme(method, name, body, signed_in, data):
+  """POST users/<name>/theme (AOTY-65), as the api answers it: only the signed-in owner (the preview
+  cookie, api/auth/start?as=<name>), only a common.themes id. The restyle is immediate here: the
+  theme goes straight into the preview chart.json."""
+  if method != "POST":
+    return 405, b'{"error":"method not allowed"}', "application/json"
+  if not signed_in:
+    return 401, b'{"error":"signed_out"}', "application/json"
+  if signed_in.lower() != name:
+    return 403, b'{"error":"not_owner"}', "application/json"
+  if not themes.valid(body.get("theme")):
+    return 400, json.dumps({"error": "unknown_theme", "themes": sorted(themes.IDS)}).encode(), "application/json"
+  f = data / "users" / name / "chart.json"
+  if not f.exists():
+    return 404, b'{"error":"no_chart"}', "application/json"
+  chart = chart_core.with_theme(json.loads(f.read_text(encoding="utf-8")), body["theme"])
+  f.write_text(json.dumps(chart), encoding="utf-8")
+  return 200, json.dumps({"theme": body["theme"]}).encode(), "application/json"
 
 
 def sample_chart(username, n=120):
@@ -417,10 +440,12 @@ def handler_for(base, out, data, proxy=None):
         status, payload, extra = answer
         raw = b"" if payload is None else json.dumps(payload).encode()
         return self.send(status, raw, "application/json", "no-store", extra)
-      parts = rest.split("/")  # api, users, <name>, sync|status
-      if len(parts) != 4 or parts[:2] != ["api", "users"] or parts[3] not in ("sync", "status"):
+      parts = rest.split("/")  # api, users, <name>, sync|status|theme
+      if len(parts) != 4 or parts[:2] != ["api", "users"] or parts[3] not in ("sync", "status", "theme"):
         return self.send(404, b'{"error":"not found"}', "application/json")
       name, action = parts[2].lower(), parts[3]
+      if action == "theme":
+        return self.send(*fake_theme(method, name, parsed, self.cookies().get(preview_groups.COOKIE), data))
       now = time.time()
       special = fake_outcome(name) if action == "sync" and method == "POST" else None
       if special:

@@ -17,6 +17,7 @@
   const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
   const grp = globalThis.aotyGroup;  // web/src/group.js, loaded first (AOTY-51)
   const ge = globalThis.aotyGroupEdit;  // web/src/groupedit.js, loaded first (AOTY-52)
+  const th = globalThis.aotyTheme;  // web/src/theme.js, loaded first (AOTY-65)
   // Analytics (web/src/kampstats.js, AOTY-38). An ad blocker may drop that file, and nothing it
   // does may ever break the page, so every call goes through here.
   const kampStats = globalThis.aotyStats;
@@ -199,6 +200,7 @@
   // A message panel, optionally with the username box. The footer's profile line goes: the
   // panel may be saying this Last.fm user doesn't exist.
   function state(title, text, withLookup) {
+    clearTheme();
     $("controls").hidden = true;
     $("sub").textContent = "";
     $("footer-user").hidden = true;
@@ -310,6 +312,7 @@
       try { history.replaceState(null, "", BASE); } catch (_) {}
     }
     document.title = TITLE;
+    clearTheme();
     poster.hidden = true;
     $("intro").hidden = false;
     bindLookup($("intro-form"));
@@ -374,6 +377,7 @@
     } else {
       renderChart(chart);
     }
+    themeForChart(chart, lower, repaint);
   }
 
   // The footer's line about this page's user (AOTY-29): a link to their Last.fm profile, as
@@ -427,6 +431,7 @@
   let firstView = null;
 
   function showFirstVisit(name) {
+    clearTheme();
     $("controls").hidden = true;
     $("sub").textContent = `pressing ${name}'s first chart. it takes a few minutes: we read the year's `
         + "scrobbles, then check every album's release year with musicbrainz.";
@@ -750,6 +755,7 @@
   }
 
   async function showGroup(id) {
+    clearTheme();  // groups stay on the default (their own themes are AOTY-76)
     heading(NAME, "");
     if (!grp.ID_RE.test(id)) {
       state("there's no group here", "check the link you were given.", false);
@@ -951,6 +957,7 @@
   // The row under the top bar. Hidden while api/me is unknown, and where group writes are off
   // (group_writes): signing in would offer nothing there.
   function renderAccount() {
+    renderThemeTools();  // the theme picker is the page owner's (AOTY-65)
     const row = $("account-row");
     $("account").hidden = me === undefined || !writesOn;
     $("intro-groups").hidden = !canWrite();
@@ -1323,6 +1330,193 @@
     writeFailed(out);
     if (!out.signedOut) $("rename-msg").textContent = out.message;
   });
+
+  // ---- page themes (AOTY-65) -------------------------------------------------------------------
+  //
+  // A user chart page shows its owner's theme (chart.json "theme", from the users row). Every other
+  // view is the default (the poster look). "match1", shown as "album of the year", is derived here
+  // from the chart's #1 cover: drawn small to a canvas (both cover hosts send CORS headers), then
+  // theme.derive. The page fades into it once the cover has loaded; no cover, or one the browser
+  // won't let us read, keeps the default.
+  //
+  // The owner (signed in as the page's user, where writes are on) gets a picker: a pick shows at
+  // once and saves THEME_SAVE_MS later, so a run of clicks is one save. Once they've picked, their
+  // pick wins over the chart.json this page fetches: the chart builder's restyle may land after a
+  // repaint, and the page mustn't flick back.
+  const THEME_SAVE_MS = 800;
+  const THEME_FADE_MS = 450;
+  let themeUser = null;  // the user chart on screen, lowercased; null on any other view
+  let themeChart = null;  // that chart, for the #1 cover
+  let shownTheme = th.DEFAULT, savedTheme = th.DEFAULT, pickedTheme = null;
+  let themeGen = 0, themeSaveTimer = 0, fadeTimer = 0;
+
+  function fade(on) {
+    if (!on) return;
+    document.documentElement.classList.add("theme-fade");
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => document.documentElement.classList.remove("theme-fade"), THEME_FADE_MS);
+  }
+
+  // The cover URLs to try for the #1 (the chart's art, then its fallbacks), or [] for none.
+  function topCovers(chart) {
+    const top = chart && chart.rankings && (chart.rankings.album || [])[0];
+    const a = top ? chart.albums[top[0]] : null;
+    return a && a.art ? [a.art, ...(a.fallbacks || [])] : [];
+  }
+
+  // The #1 cover's colours as a theme, or null. Resolves once the cover loaded or every URL failed.
+  function coverTheme(urls) {
+    return new Promise(resolve => {
+      const next = i => {
+        if (i >= urls.length) return resolve(null);
+        const img = new Image();
+        img.crossOrigin = "anonymous";  // its own CORS request: the chart's <img>s aren't readable
+        img.decoding = "async";
+        img.onerror = () => next(i + 1);
+        img.onload = () => {
+          try {
+            const c = document.createElement("canvas");
+            c.width = c.height = 32;
+            const ctx = c.getContext("2d", {willReadFrequently: true});
+            ctx.drawImage(img, 0, 0, 32, 32);
+            resolve(th.derive(ctx.getImageData(0, 0, 32, 32).data));
+          } catch (_) {
+            resolve(null);  // a tainted canvas: the host didn't allow it after all
+          }
+        };
+        img.src = urls[i];
+      };
+      next(0);
+    });
+  }
+
+  let matchKey = "", matchTokens = null;  // the cover the "album of the year" colours came from
+  async function showTheme(id, withFade) {
+    const gen = ++themeGen;
+    shownTheme = th.IDS.includes(id) ? id : th.DEFAULT;
+    markSwatches();
+    if (shownTheme !== th.MATCH) {
+      fade(withFade);
+      return th.apply(th.tokens(shownTheme));
+    }
+    const urls = topCovers(themeChart);
+    const key = urls[0] || "";
+    if (key !== matchKey) {
+      matchKey = key;
+      matchTokens = key ? await coverTheme(urls) : null;
+      if (gen !== themeGen) return;  // another pick, or another page, since
+      withFade = true;  // a cover's colours arrive after the first paint: settle into them
+    }
+    fade(withFade);
+    th.apply(matchTokens);
+  }
+
+  // Off a user chart (intro, a message, first visit, groups): the default, no picker.
+  function clearTheme() {
+    themeGen++;
+    themeUser = themeChart = pickedTheme = null;
+    shownTheme = savedTheme = th.DEFAULT;
+    clearTimeout(themeSaveTimer);
+    th.reset();
+    renderThemeTools();
+  }
+
+  // A user chart was painted (first paint or in place).
+  function themeForChart(chart, lower, repaint) {
+    if (themeUser !== lower) pickedTheme = null;
+    themeUser = lower;
+    themeChart = chart;
+    savedTheme = th.IDS.includes(chart.theme) ? chart.theme : th.DEFAULT;
+    showTheme(pickedTheme || savedTheme, repaint);
+    renderThemeTools();
+  }
+
+  const isThemeOwner = () => !!themeUser && canWrite() && me.username === themeUser;
+
+  function renderThemeTools() {
+    const owner = isThemeOwner();
+    $("theme-tools").hidden = !owner;
+    if (!owner) {
+      $("theme-row").hidden = true;
+      $("theme-toggle").setAttribute("aria-expanded", "false");
+      return;
+    }
+    buildSwatches();
+  }
+
+  let swatchesBuilt = false;
+  function buildSwatches() {
+    const row = $("theme-row");
+    if (!swatchesBuilt) {
+      swatchesBuilt = true;
+      for (const id of th.IDS) {
+        const b = row.appendChild(document.createElement("button"));
+        b.type = "button";
+        b.className = "pill swatch";
+        b.dataset.theme = id;
+        const dot = b.appendChild(document.createElement("span"));
+        dot.className = id === th.MATCH ? "swatch-dot cover" : "swatch-dot";
+        dot.setAttribute("aria-hidden", "true");
+        const t = th.THEMES[id];
+        if (t) {
+          dot.style.setProperty("--sw-bg", t.bg);
+          dot.style.setProperty("--sw-a", t.accent);
+          dot.style.setProperty("--sw-b", t.accent2);
+        }
+        b.append(th.LABELS[id]);
+        b.addEventListener("click", () => pickTheme(id));
+      }
+    }
+    // "album of the year" shows the current #1 in its dot.
+    const cover = row.querySelector(".swatch-dot.cover");
+    const url = topCovers(themeChart)[0];
+    if (url) cover.style.setProperty("--sw-img", `url("${url.replace(/["\\]/g, "")}")`);
+    else cover.style.removeProperty("--sw-img");
+    markSwatches();
+  }
+
+  function markSwatches() {
+    for (const b of $("theme-row").querySelectorAll(".swatch")) {
+      b.setAttribute("aria-pressed", String(b.dataset.theme === shownTheme));
+    }
+  }
+
+  $("theme-toggle").addEventListener("click", () => {
+    const row = $("theme-row");
+    row.hidden = !row.hidden;
+    $("theme-toggle").setAttribute("aria-expanded", String(!row.hidden));
+    if (!row.hidden) (row.querySelector('[aria-pressed="true"]') || row.querySelector(".swatch")).focus();
+  });
+
+  function pickTheme(id) {
+    if (!isThemeOwner()) return;
+    pickedTheme = id;
+    $("theme-msg").textContent = "";
+    showTheme(id, true);
+    clearTimeout(themeSaveTimer);
+    const user = themeUser;
+    themeSaveTimer = setTimeout(() => saveTheme(user, id), THEME_SAVE_MS);
+  }
+
+  const THEME_ERRORS = {
+    401: "you're signed out. sign in again to change your theme.",
+    403: "only this page's owner can change its theme.",
+    404: "your chart isn't ready yet. try again once it's pressed.",
+  };
+  async function saveTheme(user, id) {
+    const r = await apiCall("POST", `users/${user}/theme`, {theme: id});
+    if (user !== themeUser || id !== pickedTheme) return;  // the page or the pick moved on
+    if (r.status === 200) {
+      savedTheme = id;
+      $("theme-msg").textContent = "saved. everyone sees it now.";
+      track("event", "theme_set", {theme: id});
+      return;
+    }
+    pickedTheme = null;
+    showTheme(savedTheme, true);
+    $("theme-msg").textContent = THEME_ERRORS[r.status] || "couldn't save your theme. try again in a minute.";
+    if (r.status === 401) { me = null; renderAccount(); }
+  }
 
   // ---- routing ---------------------------------------------------------------------------------
 

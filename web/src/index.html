@@ -93,6 +93,12 @@
         <select id="who"><option value="">everyone</option></select>
       </label>
     </div>
+    <!-- User pages (AOTY-65): the page's owner picks its colours; everyone sees them. -->
+    <div class="theme-tools" id="theme-tools" hidden>
+      <button type="button" class="pill" id="theme-toggle" aria-expanded="false" aria-controls="theme-row">theme</button>
+      <span class="tool-msg" id="theme-msg" role="status" aria-live="polite"></span>
+    </div>
+    <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
     <!-- Group pages (AOTY-52): share for everyone, edit for the owner only. -->
     <div class="group-tools" id="group-tools" hidden>
       <button type="button" class="pill" id="share">copy link</button>
