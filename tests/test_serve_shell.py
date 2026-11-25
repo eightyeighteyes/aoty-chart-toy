@@ -98,3 +98,22 @@ def test_the_preview_theme_route_answers_like_the_api(ss, tmp_path):
   assert ss.fake_theme("POST", "alice", {"theme": "nope"}, "alice", tmp_path)[0] == 400
   assert ss.fake_theme("POST", "carol", {"theme": "kamp"}, "carol", tmp_path)[0] == 404
   assert ss.fake_theme("GET", "alice", {}, "alice", tmp_path)[0] == 405
+
+
+def test_the_preview_wall_mixes_ready_slow_broken_and_missing_covers(ss):
+  wall = ss.fake_wall()
+  arts = [w["art"] for w in wall]
+  assert any(a.startswith("data:image/svg+xml") for a in arts)
+  assert any(
+    a.startswith("../preview/slow-cover?") for a in arts
+  )  # resolves to <base>preview/... from user/<name>
+  assert any("doesnotexist" in a for a in arts) and "" in arts
+  # Sized SVGs: Firefox gives a viewBox-only SVG naturalWidth 0, which the wall's loader drops.
+  assert all("width='300'" in ss.urllib.parse.unquote(a) for a in arts if a.startswith("data:"))
+
+
+def test_slow_covers_are_capped_and_tolerate_junk(ss):
+  assert ss.slow_cover("ms=1500&hue=40")[0] == 1.5
+  assert ss.slow_cover("ms=999999")[0] == ss.SLOW_COVER_MAX_MS / 1000
+  assert ss.slow_cover("ms=nope&hue=x")[0] == 2.0
+  assert ss.slow_cover("")[1].startswith(b"<svg")

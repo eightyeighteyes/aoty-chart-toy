@@ -220,23 +220,49 @@ def fake_caller_status(started, now, name):
   return api_core.status(row, now, COOLDOWN, queue_depth=CALLER_FROM + 3, queue=counters)
 
 
+def cover_svg(hue):
+  """A coloured square cover. width/height as well as the viewBox: Firefox reports naturalWidth 0
+  for an SVG with only a viewBox, and the wall's loader (AOTY-66) drops a cover with no width."""
+  return (f"<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 10 10'>"
+          f"<defs><linearGradient id='g'><stop offset='0' stop-color='hsl({hue},60%,45%)'/>"
+          f"<stop offset='1' stop-color='hsl({(hue + 60) % 360},70%,30%)'/></linearGradient></defs>"
+          "<rect width='10' height='10' fill='url(#g)'/></svg>")  # fmt: skip
+
+
+SLOW_COVER_MAX_MS = 10000
+
+
 def fake_wall(n=60):
-  """Covers for the wall: coloured squares as data: URIs (the CSP allows data:), a few with no
-  cover (the artist-name tile) and a few broken ones (the fallback chain, then the tile)."""
+  """Covers for the wall. Most are coloured squares as data: URIs (the CSP allows data:). Since
+  AOTY-66 the wall shows only covers that loaded, so these all stay off it:
+    - a few with no cover at all
+    - a few broken ones, whose only fallback is broken too
+  A few arrive late: preview/slow-cover answers after a delay. The URL is relative to the page,
+  <base>user/<name>, so it needs no base path here."""
   wall = []
   for i in range(n):
     artist, album = f"Sample Artist {i % 23}", f"Recent Album {i:02d}"
-    art, fallbacks = "", []
+    art, fallbacks, hue = "", [], (i * 47) % 360
     if i % 9 == 4:
       art = "https://lastfm.freetls.fastly.net/i/u/300x300/doesnotexist.jpg"
+      fallbacks = ["https://lastfm.freetls.fastly.net/i/u/174s/doesnotexist.jpg"]
+    elif i % 13 == 5:
+      art = f"../preview/slow-cover?ms={1500 + (i * 97) % 6000}&hue={hue}"
     elif i % 11 != 7:
-      hue = (i * 47) % 360
-      svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><defs><linearGradient id='g'>"
-             f"<stop offset='0' stop-color='hsl({hue},60%,45%)'/><stop offset='1' stop-color='hsl({(hue + 60) % 360},70%,30%)'/>"
-             "</linearGradient></defs><rect width='10' height='10' fill='url(#g)'/></svg>")  # fmt: skip
-      art = "data:image/svg+xml," + urllib.parse.quote(svg)
+      art = "data:image/svg+xml," + urllib.parse.quote(cover_svg(hue))
     wall.append({"artist": artist, "album": album, "art": art, "fallbacks": fallbacks})
   return wall
+
+
+def slow_cover(query):
+  """(delay in seconds, SVG bytes) for preview/slow-cover?ms=&hue=: a cover that arrives late."""
+  q = dict(urllib.parse.parse_qsl(query))
+  try:
+    ms = min(max(int(q.get("ms", "2000")), 0), SLOW_COVER_MAX_MS)
+    hue = int(q.get("hue", "0")) % 360
+  except ValueError:
+    ms, hue = 2000, 0
+  return ms / 1000, cover_svg(hue).encode()
 
 
 def _first_hits(kind, e):
@@ -513,6 +539,10 @@ def handler_for(base, out, data, proxy=None):
         return self.proxied("GET", rest)
       if rest.startswith("api/"):
         return self.api("GET", rest)
+      if rest == "preview/slow-cover":  # the first-visit wall's late covers (AOTY-66)
+        delay, svg = slow_cover(self.query)
+        time.sleep(delay)  # ThreadingHTTPServer: only this request waits
+        return self.send(200, svg, "image/svg+xml", "no-store")
       if rest.startswith("data/"):
         if self.first_visit_chart(rest):
           return None
