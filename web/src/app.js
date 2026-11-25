@@ -223,6 +223,7 @@
   // A message panel, optionally with the username box. The footer's profile line goes: the
   // panel may be saying this Last.fm user doesn't exist.
   function state(title, text, withLookup) {
+    stopAurora();
     clearTheme();
     $("controls").hidden = true;
     $("sub").textContent = "";
@@ -335,6 +336,7 @@
       try { history.replaceState(null, "", BASE); } catch (_) {}
     }
     document.title = TITLE;
+    stopAurora();
     clearTheme();
     poster.hidden = true;
     $("intro").hidden = false;
@@ -384,6 +386,7 @@
     }
     const repaint = current !== null;
     if (!repaint && firstView) track("event", "first_visit_end", {result: "painted"});
+    stopAurora();  // the chart's here: the first visit's aurora fades out (AOTY-67)
     current = chart;
     heading(display, chart.year);
     $("controls").hidden = false;
@@ -474,6 +477,7 @@
     wall.hidden = true;  // until its first cover has loaded (fillWall)
     $("ranking").replaceChildren(box);
     firstView = {box, queue, sofar, note, wall, walled: false};
+    startAurora();  // AOTY-67
   }
 
   // The request line (AOTY-26): the place in line, this page's address with a copy button, and
@@ -560,10 +564,21 @@
   // artist-name tiles. The wall stays hidden until its first cover lands. A burst of arrivals (a
   // warm cache) staggers by its place in the burst, as the chart's cards do.
   const WALL_BURST_MS = 400;
+  // The first AURORA_COVERS load with CORS, once, and also colour the aurora (AOTY-67). A cover
+  // whose CORS request fails still goes on the wall through a plain load; it just doesn't colour.
+  const AURORA_COVERS = 6;
+  async function wallCover(urls, forAurora) {
+    if (!forAurora) return loadCover(urls);
+    const img = await loadCover(urls, {cors: true});
+    if (!img) return loadCover(urls);
+    const px = coverPixels(img);
+    if (px) auroraCover(px);
+    return img;
+  }
   function fillWall(wall, entries) {
     let burst = 0, last = -Infinity;
-    for (const urls of fv.wallSources(entries)) {
-      loadCover(urls).then(img => {
+    fv.wallSources(entries).forEach((urls, n) => {
+      wallCover(urls, n < AURORA_COVERS).then(img => {
         if (!img || !wall.isConnected) return;  // a newer first-visit view, or the chart, replaced it
         const now = performance.now();
         if (now - last > WALL_BURST_MS) burst = 0;
@@ -576,7 +591,115 @@
         wall.appendChild(li);
         wall.hidden = false;
       });
+    });
+  }
+
+  // A loaded cover's pixels, drawn small (32x32), or null when the browser won't let us read them
+  // (a tainted canvas: the host didn't allow CORS after all). Shared by AOTY-65's "album of the
+  // year" and the aurora.
+  function coverPixels(img) {
+    if (!img) return null;
+    try {
+      const c = document.createElement("canvas");
+      c.width = c.height = 32;
+      const ctx = c.getContext("2d", {willReadFrequently: true});
+      ctx.drawImage(img, 0, 0, 32, 32);
+      return ctx.getImageData(0, 0, 32, 32).data;
+    } catch (_) {
+      return null;
     }
+  }
+
+  // ---- the aurora (AOTY-67) -----------------------------------------------------------------
+  //
+  // kamp's Borealis (web/src/borealis.js) fills the viewport behind a first visit, coloured by the
+  // first wall covers. User decisions (2026-11-25): first visits only, the whole page, the surge
+  // as covers land. It mounts AURORA_DELAY_MS in, so a chart that's there at once never flashes
+  // it, and it fades out when the chart paints or the page leaves the first visit.
+  //
+  // The canvas sits at z-index -1, under body's in-flow content but over the root's background,
+  // and html.aurora makes body's own background transparent so it shows. That class stays until
+  // the fade-out ends: removed earlier, body's background would hide the canvas at once.
+  const bo = globalThis.aotyBorealis;  // web/src/borealis.js, loaded first
+  const AURORA_DELAY_MS = 1500, AURORA_FADE_MS = 600;
+  let aurora = null, auroraCanvas = null, auroraTimer = 0, auroraFeed = 0;
+  let auroraPixels = [], auroraSent = null;
+
+  function startAurora() {
+    if (!bo || auroraCanvas || auroraTimer) return;
+    auroraTimer = setTimeout(mountAurora, AURORA_DELAY_MS);
+  }
+
+  function pageColors() {
+    const css = getComputedStyle(document.documentElement);
+    return {bg: css.getPropertyValue("--bg").trim(), accent: css.getPropertyValue("--accent").trim()};
+  }
+
+  function mountAurora() {
+    auroraTimer = 0;
+    if (auroraCanvas || !firstView || !firstView.box.isConnected) return;
+    const canvas = document.createElement("canvas");
+    canvas.className = "aurora";
+    canvas.setAttribute("aria-hidden", "true");
+    document.body.prepend(canvas);
+    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const a = bo.mount(canvas, {...pageColors(), reducedMotion, onLost: () => stopAurora(true)});
+    if (!a) { canvas.remove(); return; }  // no WebGL: the page stays as it always was
+    aurora = a;
+    auroraCanvas = canvas;
+    document.documentElement.classList.add("aurora");
+    requestAnimationFrame(() => canvas.classList.add("on"));  // fades in
+    feedAurora();  // covers that arrived before it mounted
+  }
+
+  // A wall cover's pixels: the palette is recomputed once per burst of arrivals, and changes only
+  // when it really does (borealis.paletteChanged), so a warm cache's six covers make one surge.
+  function auroraCover(px) {
+    if (!firstView || !firstView.box.isConnected) return;
+    auroraPixels.push(px);
+    clearTimeout(auroraFeed);
+    auroraFeed = setTimeout(feedAurora, WALL_BURST_MS);
+  }
+
+  function feedAurora() {
+    auroraFeed = 0;
+    if (!aurora || !auroraPixels.length) return;
+    const all = new Uint8ClampedArray(auroraPixels.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of auroraPixels) { all.set(p, at); at += p.length; }
+    const {colors, source} = bo.extractPalette(all, pageColors().accent);
+    if (source !== "art" || !bo.paletteChanged(auroraSent, colors)) return;
+    auroraSent = colors;
+    aurora.setPalette(colors);
+  }
+
+  // The page's colours changed (an owner's theme): the aurora paints its background itself.
+  function auroraColors() {
+    if (aurora) aurora.setColors(pageColors());
+  }
+
+  // Fade out, then take it down (and its WebGL context). lost: the context is gone already.
+  function stopAurora(lost = false) {
+    clearTimeout(auroraTimer);
+    clearTimeout(auroraFeed);
+    auroraTimer = auroraFeed = 0;
+    auroraPixels = [];
+    auroraSent = null;
+    if (!auroraCanvas) return;
+    const canvas = auroraCanvas, a = aurora;
+    auroraCanvas = aurora = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      a.destroy();
+      canvas.remove();
+      if (!auroraCanvas) document.documentElement.classList.remove("aurora");
+    };
+    if (lost) return finish();
+    canvas.addEventListener("transitionend", finish, {once: true});
+    setTimeout(finish, AURORA_FADE_MS + 300);  // reduced motion has no transition to end
+    canvas.classList.remove("on");
   }
 
   // ---- sync on visit (AOTY-22) ------------------------------------------------------------
@@ -806,6 +929,7 @@
   }
 
   async function showGroup(id) {
+    stopAurora();
     clearTheme();  // groups stay on the default (their own themes are AOTY-76)
     heading(NAME, "");
     if (!grp.ID_RE.test(id)) {
@@ -1418,17 +1542,14 @@
   // The #1 cover's colours as a theme, or null. Its own CORS request: the chart's <img>s aren't
   // readable.
   async function coverTheme(urls) {
-    const img = await loadCover(urls, {cors: true});
-    if (!img) return null;
-    try {
-      const c = document.createElement("canvas");
-      c.width = c.height = 32;
-      const ctx = c.getContext("2d", {willReadFrequently: true});
-      ctx.drawImage(img, 0, 0, 32, 32);
-      return th.derive(ctx.getImageData(0, 0, 32, 32).data);
-    } catch (_) {
-      return null;  // a tainted canvas: the host didn't allow it after all
-    }
+    const px = coverPixels(await loadCover(urls, {cors: true}));
+    return px ? th.derive(px) : null;
+  }
+
+  // Paint a theme's tokens (null: the default), and tell the aurora (AOTY-67) its new colours.
+  function applyTheme(tokens) {
+    th.apply(tokens);
+    auroraColors();
   }
 
   let matchKey = "", matchTokens = null;  // the cover the "album of the year" colours came from
@@ -1438,7 +1559,7 @@
     markSwatches();
     if (shownTheme !== th.MATCH) {
       fade(withFade);
-      return th.apply(th.tokens(shownTheme));
+      return applyTheme(th.tokens(shownTheme));
     }
     const urls = topCovers(themeChart);
     const key = urls[0] || "";
@@ -1449,7 +1570,7 @@
       withFade = true;  // a cover's colours arrive after the first paint: settle into them
     }
     fade(withFade);
-    th.apply(matchTokens);
+    applyTheme(matchTokens);
   }
 
   // Off a user chart (intro, a message, first visit, groups): the default, no picker.
@@ -1458,7 +1579,7 @@
     themeUser = themeChart = pickedTheme = null;
     shownTheme = savedTheme = th.DEFAULT;
     clearTimeout(themeSaveTimer);
-    th.reset();
+    applyTheme(null);
     renderThemeTools();
   }
 
