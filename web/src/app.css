@@ -217,11 +217,32 @@ ol {
    fades in tile by tile. The progress line is the banner above. */
 .fv-sofar { font-size: 15px; line-height: 1.5; color: var(--ink); margin: 0; min-height: 1.5em; }
 .fv-note { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+/* The wall (AOTY-24, -66, -68): rows of covers, each swaying slowly at its own pace (--drift-s,
+   --drift-dir from firstvisit.drift), so the rows read as depth. Clipped, so a swaying row never
+   makes the page scroll sideways; each row is wider than the wall by the sway on both sides, so no
+   bare edge ever shows; the edges fade out. The old 0.5 opacity is folded into the mask's alpha:
+   one effect, not two. */
 .wall {
-  list-style: none; margin: 24px 0 0; padding: 0;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px;
-  opacity: .5;
+  --tile: 88px; --sway: 28px;
+  margin: 24px 0 0;
+  display: flex; flex-direction: column; gap: 8px;
+  overflow: hidden; overflow: clip;
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .5) 6%, rgb(0 0 0 / .5) 94%, transparent);
+  mask-image: linear-gradient(90deg, transparent, rgb(0 0 0 / .5) 6%, rgb(0 0 0 / .5) 94%, transparent);
 }
+.wall-row {
+  list-style: none; padding: 0; margin: 0 0 0 calc(-1 * var(--sway));
+  width: calc(100% + 2 * var(--sway));
+  display: flex; flex-wrap: nowrap; gap: 8px;
+  animation: wall-drift var(--drift-s, 60s) ease-in-out infinite var(--drift-dir, alternate);
+}
+.wall-row:empty { display: none; }
+.wall-row li { flex: none; width: var(--tile); }
+@keyframes wall-drift {
+  from { transform: translateX(calc(-1 * var(--sway))); }
+  to { transform: translateX(var(--sway)); }
+}
+@media (prefers-reduced-motion: reduce) { .wall-row { animation: none; } }
 .wall li {
   /* "backwards", not "both" (the seam lesson above): nothing is held on its own layer after. */
   animation: wall-in .6s backwards ease-out;
@@ -478,5 +499,6 @@ html.has-aurora .account {
   .row .artist { font-size: 13px; }
   .row-numbers { grid-column: 2 / -1; width: auto; text-align: left; }
   .state { padding: 28px 20px; }
-  .wall { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+  .wall { --tile: 64px; --sway: 20px; gap: 6px; }
+  .wall-row { gap: 6px; }
 }

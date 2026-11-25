@@ -222,8 +222,25 @@
     return out;
   }
 
+  // The wall's drift (AOTY-68, user decision 2026-11-25): a few rows of covers, each swaying slowly
+  // at its own pace, neighbours opposite ways, so the rows read as depth. wallRows: how many rows a
+  // wall of `count` covers gets (one for a handful, up to four, about 15 covers a row, so a full
+  // wall overfills any screen's width). drift(k): row k's period and direction; the periods share
+  // no small factor, so the rows never fall into step.
+  const WALL_ROWS_MAX = 4, WALL_PER_ROW = 15, WALL_ONE_ROW = 8;
+  const DRIFT_PERIODS_S = [46, 59, 72, 85];
+  function wallRows(count) {
+    const n = Math.max(0, Math.floor(Number(count) || 0));
+    if (n <= WALL_ONE_ROW) return 1;
+    return Math.min(WALL_ROWS_MAX, Math.ceil(n / WALL_PER_ROW));
+  }
+  function drift(k) {
+    const i = Math.max(0, Math.floor(Number(k) || 0));
+    return {seconds: DRIFT_PERIODS_S[i % DRIFT_PERIODS_S.length], reverse: i % 2 === 1};
+  }
+
   const api = {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText,
-               queueLines, tabTitle, refusal, wallSources, queuedPollMs};
+               queueLines, tabTitle, refusal, wallSources, queuedPollMs, wallRows, drift};
   root.aotyFirstVisit = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

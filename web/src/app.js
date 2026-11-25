@@ -471,7 +471,7 @@
     note.className = "fv-note";
     note.textContent = "counting every play this year, whatever year the album came out.";
     note.hidden = true;
-    const wall = box.appendChild(document.createElement("ul"));
+    const wall = box.appendChild(document.createElement("div"));  // rows of covers (fillWall)
     wall.className = "wall";
     wall.setAttribute("aria-hidden", "true");  // decoration: the numbers above carry the meaning
     wall.hidden = true;  // until its first cover has loaded (fillWall)
@@ -576,8 +576,19 @@
     return img;
   }
   function fillWall(wall, entries) {
-    let burst = 0, last = -Infinity;
-    fv.wallSources(entries).forEach((urls, n) => {
+    let burst = 0, last = -Infinity, loaded = 0;
+    const sources = fv.wallSources(entries);
+    // Rows that each drift at their own pace (AOTY-68). Loaded covers go round-robin, so the rows
+    // grow evenly and a failed cover just shortens them all a little.
+    const rows = Array.from({length: fv.wallRows(sources.length)}, (_, k) => {
+      const row = wall.appendChild(document.createElement("ul"));
+      const {seconds, reverse} = fv.drift(k);
+      row.className = "wall-row";
+      row.style.setProperty("--drift-s", `${seconds}s`);
+      row.style.setProperty("--drift-dir", reverse ? "alternate-reverse" : "alternate");
+      return row;
+    });
+    sources.forEach((urls, n) => {
       wallCover(urls, n < AURORA_COVERS).then(img => {
         if (!img || !wall.isConnected) return;  // a newer first-visit view, or the chart, replaced it
         const now = performance.now();
@@ -588,7 +599,7 @@
         const li = document.createElement("li");
         li.style.setProperty("--i", String(burst++));
         li.appendChild(img);
-        wall.appendChild(li);
+        rows[loaded++ % rows.length].appendChild(li);
         wall.hidden = false;
       });
     });

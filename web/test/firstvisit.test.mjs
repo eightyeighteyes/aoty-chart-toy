@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText, queueLines,
-       tabTitle, refusal, wallSources, queuedPollMs} = require("../src/firstvisit.js");
+       tabTitle, refusal, wallSources, queuedPollMs, wallRows, drift} = require("../src/firstvisit.js");
 
 const reading = (done, total, scrobbles = 0) => ({stage: "reading", weeks: {done, total}, scrobbles});
 const dating = (checked, total, hits = 0) => ({stage: "dating", albums: {checked, total, hits}});
@@ -200,4 +200,23 @@ test("the in-line poll goes by place: normal near the front, slower in a short l
   assert.equal(queuedPollMs({stage: "queued"}, mid), null);
   assert.equal(queuedPollMs({stage: "reading", queue: {position: 40}}, mid), null);
   assert.equal(queuedPollMs(null, mid), null);
+});
+
+test("the wall gets one row for a handful of covers, then up to four", () => {
+  assert.equal(wallRows(0), 1);
+  assert.equal(wallRows(8), 1);
+  assert.equal(wallRows(9), 1);
+  assert.equal(wallRows(16), 2);
+  assert.equal(wallRows(31), 3);
+  assert.equal(wallRows(60), 4);
+  assert.equal(wallRows(500), 4);
+  assert.equal(wallRows("junk"), 1);
+});
+
+test("each row drifts at its own pace, neighbours opposite ways", () => {
+  const rows = [0, 1, 2, 3].map(drift);
+  assert.deepEqual(rows.map(r => r.reverse), [false, true, false, true]);
+  assert.equal(new Set(rows.map(r => r.seconds)).size, 4);  // no two rows in step
+  assert.ok(rows.every(r => r.seconds >= 40 && r.seconds <= 90));  // slow
+  assert.deepEqual(drift(4), {seconds: rows[0].seconds, reverse: false});
 });
