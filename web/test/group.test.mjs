@@ -15,7 +15,7 @@ const chart = {
     {album: "Loop", listeners: 1, tracks: 2, single: false, by: {1: 40}},
     {album: "Single", listeners: 2, tracks: 1, single: true, by: {0: 9, 1: 30}},
   ],
-  rankings: {track: [[0, 8], [2, 39], [1, 40]], album: [[1, 20], [0, 0.8]], weighted: [[0, 0.267]]},
+  rankings: {track: [[0, 8], [2, 39], [1, 40]], album: [[0, 0.8], [1, 20]], weighted: [[0, 0.267]]},
 };
 const names = rs => rs.map(r => r.album);
 

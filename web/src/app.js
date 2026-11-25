@@ -32,6 +32,14 @@
     album: "ranked by album plays: track plays divided by the album's track count (singles left out)",
     weighted: "ranked by album plays per listener (albums with 3 or more listeners, singles left out)",
   };
+  // A group's everyone view ranks listeners first (By Album too since AOTY-63). A member's view
+  // has one listener, so it keeps MODES.
+  const GROUP_MODES = {
+    ...MODES,
+    track: "ranked by how many members played them, then plays",
+    album: "ranked by how many members played them, then album plays: track plays divided by the "
+        + "album's track count (singles left out)",
+  };
 
   const poster = document.querySelector(".poster");
   const $ = id => document.getElementById(id);
@@ -701,7 +709,8 @@
     groupTotal = chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0);
     groupWho = who < 0 ? "" : chart.members[who];
     const whose = who < 0 ? `${chart.name}'s members` : chart.members[who];
-    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${MODES[mode]}.`;
+    const how = (who < 0 ? GROUP_MODES : MODES)[mode];
+    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${how}.`;
     const extra = [grp.loadingLine(chart), grp.checkingLine(chart)].filter(Boolean).join(" · ");
     if (extra) {
       const p = $("sub").appendChild(document.createElement("span"));
