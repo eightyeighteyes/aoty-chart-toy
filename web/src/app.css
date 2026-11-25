@@ -8,7 +8,18 @@
   --accent: #ff6b4a;
   --accent-2: #ffc24b;
   --kamp: #7c86e1;  /* kamp's periwinkle: the endorsement chrome only */
+  /* AOTY-65: the rest of the palette, so an owner's theme (web/src/theme.js sets these on <html>)
+     recolours everything. These defaults are the poster look, unchanged. */
+  --line: #2c2937;  /* borders, empty listener dots */
+  --on-accent: #1a1014;  /* text on the accent gradient */
+  --tile: #3a2a55;  /* the artist-name tile's gradient start */
+  --bg-seam: #0d0c13;  /* Seam fix 2's other end: --bg, 1/255 away (theme.seamOf) */
 }
+/* A theme change (an owner's pick, or "album of the year" settling in after the #1 cover loads)
+   fades the colours; transitions on colours only, never transforms, so nothing gets its own layer
+   (Seam fix). */
+.theme-fade, .theme-fade * { transition: color .4s, background-color .4s, border-color .4s; }
+@media (prefers-reduced-motion: reduce) { .theme-fade, .theme-fade * { transition: none; } }
 * { box-sizing: border-box; }
 /* Seam fix (keep it): paint the page colour on the root as well as body, so no compositor
    layer can show the browser's default backdrop (a flat grey seam) through a gap. */
@@ -23,7 +34,7 @@ body {
      content then show as a darker strip, whose edge moves with the window height. A gradient
      1/255 apart, invisible, means no tile is ever flat. Found by pixel sampling and bisecting in
      the console: hiding the content made the whole page the darker colour. */
-  background-image: linear-gradient(var(--bg), #0d0c13);
+  background-image: linear-gradient(var(--bg), var(--bg-seam));
   color: var(--ink);
   font-family: Inter, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -84,7 +95,7 @@ h1 .year {
 }
 .hero::after {
   content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, rgba(13,12,18,.2), rgba(13,12,18,.75));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bg) 20%, transparent), color-mix(in srgb, var(--bg) 75%, transparent));
 }
 .hero > * { position: relative; z-index: 1; }
 .hero .art {
@@ -136,7 +147,7 @@ ol {
 .noart {
   display: grid; place-items: center; aspect-ratio: 1; width: 100%;
   container-type: inline-size;
-  background: linear-gradient(135deg, #3a2a55, var(--accent));
+  background: linear-gradient(135deg, var(--tile), var(--accent));
   font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
   color: rgba(255,255,255,.88);
 }
@@ -157,7 +168,7 @@ ol {
 .tile .noart { border-radius: 10px; }
 .tile-rank {
   position: absolute; left: 6px; top: 6px; min-width: 30px; padding: 3px 7px;
-  border-radius: 999px; background: rgba(13,12,18,.82);
+  border-radius: 999px; background: color-mix(in srgb, var(--bg) 82%, transparent);
   font: 600 13px Inter, system-ui, sans-serif; text-align: center;
 }
 .tile .album { font-weight: 600; font-size: 14px; line-height: 1.25; margin-top: 10px; }
@@ -175,7 +186,7 @@ ol {
   background: none; border: 0; border-radius: 999px; padding: 8px 18px; cursor: pointer;
 }
 .switch button[aria-pressed="true"] {
-  color: #1a1014; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  color: var(--on-accent); background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .switch button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 /* Group pages (AOTY-51): the member picker, right-aligned after the switches as in M0, and the
@@ -188,7 +199,7 @@ ol {
 }
 .who select:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 .dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #2c2937; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .dot.on { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
 .hero .dots { margin-top: 22px; }
 .hero .dot { width: 12px; height: 12px; }
@@ -232,7 +243,7 @@ ol {
 .fv-url { color: var(--ink); overflow-wrap: anywhere; }
 .fv-copy {
   font: 600 14px "DM Sans", system-ui, sans-serif; color: var(--ink); cursor: pointer;
-  background: transparent; border: 1px solid #2c2937; border-radius: 999px; padding: 10px 20px;
+  background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 10px 20px;
 }
 .fv-copy:hover { border-color: var(--muted); }
 .fv-copy:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
@@ -245,12 +256,12 @@ ol {
 .lookup-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .lookup input {
   flex: 1 1 220px; min-width: 0; font: 500 16px Inter, system-ui, sans-serif; color: var(--ink);
-  background: var(--bg); border: 1px solid #2c2937; border-radius: 999px; padding: 12px 18px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 12px 18px;
 }
 .lookup input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 .lookup input[aria-invalid="true"] { border-color: var(--accent); }
 .lookup button {
-  font: 600 14px "DM Sans", system-ui, sans-serif; color: #1a1014; cursor: pointer;
+  font: 600 14px "DM Sans", system-ui, sans-serif; color: var(--on-accent); cursor: pointer;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   border: 0; border-radius: 999px; padding: 12px 22px;
 }
@@ -282,7 +293,7 @@ ol {
 .inspired { margin: 0; font-size: 13px; line-height: 1.4; color: var(--muted); }
 .inspired a {
   color: var(--ink); font-weight: 500;
-  text-decoration: underline; text-decoration-color: rgba(244, 241, 234, .3); text-underline-offset: 3px;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--ink) 30%, transparent); text-underline-offset: 3px;
 }
 .inspired a:hover { text-decoration-color: currentColor; }
 .inspired a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px; }
@@ -298,7 +309,7 @@ ol {
 .account-msg { color: var(--accent-2); margin-top: 2px; }
 .account-link, .link-button {
   font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer;
-  text-decoration: underline; text-decoration-color: rgba(244, 241, 234, .3); text-underline-offset: 3px;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--ink) 30%, transparent); text-underline-offset: 3px;
 }
 .account-link:hover, .link-button:hover { text-decoration-color: currentColor; }
 .account-link:focus-visible, .link-button:focus-visible {
@@ -309,7 +320,7 @@ ol {
 .group-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .pill, .quiet {
   font: 600 13px "DM Sans", system-ui, sans-serif; color: var(--ink); cursor: pointer;
-  background: transparent; border: 1px solid #2c2937; border-radius: 999px; padding: 8px 16px;
+  background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
 }
 .pill:hover, .quiet:hover { border-color: var(--muted); }
 .pill:focus-visible, .quiet:focus-visible, .solid:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
@@ -318,7 +329,7 @@ ol {
 .share-url { color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
 .tool-msg { color: var(--muted); font-size: 13px; }
 .solid {
-  font: 600 14px "DM Sans", system-ui, sans-serif; color: #1a1014; cursor: pointer;
+  font: 600 14px "DM Sans", system-ui, sans-serif; color: var(--on-accent); cursor: pointer;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
   border: 0; border-radius: 999px; padding: 10px 20px;
 }
@@ -345,9 +356,9 @@ ol {
 /* Dialogs: your groups, and the confirmations. */
 .sheet {
   width: min(480px, calc(100vw - 32px)); box-sizing: border-box;
-  background: var(--panel); color: var(--ink); border: 1px solid #2c2937; border-radius: 20px; padding: 24px;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 20px; padding: 24px;
 }
-.sheet::backdrop { background: rgba(13, 12, 18, .72); }
+.sheet::backdrop { background: color-mix(in srgb, var(--bg) 72%, transparent); }
 .sheet-text { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 18px; }
 .sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .mygroups-list { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 8px; color: var(--muted); font-size: 14px; }
@@ -381,7 +392,7 @@ ol {
   /* Cap the stagger so the last row isn't left waiting two seconds to appear. */
   animation-delay: calc(min(var(--i), 12) * 40ms);
 }
-.row.first { box-shadow: inset 0 0 0 1px rgba(255,194,75,.45); }
+.row.first { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 45%, transparent); }
 .row-rank {
   font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
   font-size: 40px; letter-spacing: -.04em; text-align: center; color: var(--muted);

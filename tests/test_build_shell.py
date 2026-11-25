@@ -252,4 +252,6 @@ def test_both_seam_fixes_stay():
   # tiles and content tiles' near-black differently, so short pages showed a darker strip).
   css = (bs.SRC / "app.css").read_text()
   assert "html { background: var(--bg)" in css
-  assert "background-image: linear-gradient(var(--bg), #0d0c13)" in css
+  # AOTY-65: the gradient's other end is a token (themes set it 1/255 from their --bg), poster by default.
+  assert "background-image: linear-gradient(var(--bg), var(--bg-seam))" in css
+  assert "--bg: #0d0c12;" in css and "--bg-seam: #0d0c13;" in css
