@@ -14,7 +14,7 @@ detail, so read them rather than restating it here.
 | AOTY-1 | M0: Discord server AOTY page (this repo's scraper + page) |
 | AOTY-2 | M1: Single-user web app |
 | AOTY-3 | M2: Group charts with per-person filter (owned groups, Last.fm sign-in) <-- WE ARE HERE |
-| AOTY-4 | M3: Sharing graphics (4:3, 1:1) |
+| AOTY-4 | M3: Sharing, personalization and visual delight |
 | AOTY-5 | M4: Albums of any year |
 | AOTY-6 | M5: Monetization (Supporter tier) |
 | AOTY-7 | M6: Persistence (chart over time; saved groups moved to M2) |
@@ -102,7 +102,10 @@ Ranking: unique listeners first, then total plays. A single play counts as a lis
 The page has three rankings (pill switch next to Poster | List, persisted as `aoty-rank`),
 all computed in `build_page.py` from the CSV:
 - **By Track**: the CSV order above.
-- **By Album**: plays ÷ track count ("album plays").
+- **By Album**: unique listeners first, then plays ÷ track count ("album plays") (user decision
+  2026-11-25, AOTY-63: before, album plays led and listeners only broke ties, so one member
+  looping a short record beat an album the whole group shared). Same in `group_core`. On a
+  user page or a member's view there is one listener, so it's just album plays.
 - **Weighted**: plays ÷ tracks ÷ listeners (mean album plays per listener).
 
 User decisions (2026-11-20): singles are left out of By Album and Weighted only, because
