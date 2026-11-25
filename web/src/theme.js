@@ -4,8 +4,10 @@
 //
 // Presets are the poster look (the default) and kamp's dark palettes (kamp repo,
 // kamp_ui/src/shared/theme.ts: bg/surface/text/textDim/accent/border). The poster uses two
-// accents (its crown gradient), kamp one, so accent2 is picked per preset; muted is lifted where
-// kamp's textDim reads under 4.5:1 on the panel. "match1" (shown as "album of the year") derives
+// accents (its crown gradient), kamp one, so accent2 is picked per preset. Kamp's own values are
+// kept wherever they pass the contrast rules; measured 2026-11-25, textDim reads under 4.5:1 on
+// the panel in beach house (4.27), blackpink (4.46), deep purple (3.78) and golden smog (4.48),
+// and deep purple's accent is 4.48, so those are lifted. "match1" (shown as "album of the year") derives
 // a theme from the chart's #1 cover in the visitor's browser.
 (root => {
   "use strict";
@@ -13,10 +15,10 @@
   const THEMES = {
     "poster": {bg: "#0d0c12", panel: "#17151f", ink: "#f4f1ea", muted: "#9c97a8", accent: "#ff6b4a",
                accent2: "#ffc24b", line: "#2c2937", onAccent: "#1a1014", tile: "#3a2a55"},
-    "kamp": {bg: "#141414", panel: "#1e1e1e", ink: "#e0e0e0", muted: "#9a9a9a", accent: "#7c86e1",
+    "kamp": {bg: "#141414", panel: "#1e1e1e", ink: "#e0e0e0", muted: "#888888", accent: "#7c86e1",
              accent2: "#b8bef5", line: "#2e2e2e", onAccent: "#000000"},
-    "strawberry-switchblade": {bg: "#180107", panel: "#1f030c", ink: "#f0dde3", muted: "#b0939a",
-                               accent: "#ff4f76", accent2: "#ff9db2", line: "#3a2028", onAccent: "#1a0208"},
+    "strawberry-switchblade": {bg: "#180107", panel: "#1f030c", ink: "#f0dde3", muted: "#9a7a82",
+                               accent: "#e8305a", accent2: "#ff9db2", line: "#3a2028", onAccent: "#1a0208"},
     "beach-house": {bg: "#0c1014", panel: "#131a20", ink: "#d4dde8", muted: "#8aa0b0", accent: "#5fb3c4",
                     accent2: "#a8e0e8", line: "#243040", onAccent: "#000000"},
     "blackpink": {bg: "#000000", panel: "#1a1018", ink: "#f5e6ef", muted: "#b08aa0", accent: "#f72585",
@@ -25,7 +27,7 @@
                     accent2: "#d2b8ff", line: "#2c2848", onAccent: "#0a0414"},
     "green-day": {bg: "#0d100a", panel: "#141910", ink: "#dce8d0", muted: "#8fa676", accent: "#78d42a",
                   accent2: "#c8f07a", line: "#2a3020", onAccent: "#000000"},
-    "foxy-brown": {bg: "#100c08", panel: "#1c1510", ink: "#f0e2cc", muted: "#ad8f66", accent: "#d89634",
+    "foxy-brown": {bg: "#100c08", panel: "#1c1510", ink: "#f0e2cc", muted: "#9a7a50", accent: "#c8882a",
                    accent2: "#f0c070", line: "#3a2a1e", onAccent: "#000000"},
     "golden-smog": {bg: "#0f0e09", panel: "#1a1910", ink: "#ede8cc", muted: "#a39878", accent: "#c8a832",
                     accent2: "#f0dc7a", line: "#353320", onAccent: "#000000"},
