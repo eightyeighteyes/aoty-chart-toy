@@ -225,10 +225,10 @@ ol {
 .wall li {
   /* "backwards", not "both" (the seam lesson above): nothing is held on its own layer after. */
   animation: wall-in .6s backwards ease-out;
-  animation-delay: calc(var(--i) * 70ms);
+  /* --i is the cover's place in its burst of arrivals (AOTY-66), capped as the chart's cards are. */
+  animation-delay: calc(min(var(--i), 12) * 70ms);
 }
 .wall-art { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
-.wall-art.noart { display: grid; border-radius: 6px; }
 @keyframes wall-in { from { opacity: 0; transform: scale(.94); } }
 @media (prefers-reduced-motion: reduce) { .wall li { animation: none; } }
 /* The request line (AOTY-26): a new user's place in line while syncs are backed up. */
