@@ -650,7 +650,7 @@
       // In line, the banner carries the place (announced at most once a minute); after, progress.
       if (position) say(place.live, ""); else say(live, detail);
       document.title = fv.tabTitle(baseTitle, position, percent);
-      delay = inLine ? queuedDelay() : Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
+      delay = fv.inLine(s) ? queuedDelay() : Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
       schedule(delay);
       return true;
     }
@@ -680,7 +680,7 @@
         datingSince = datingSince || Date.now();
         if (!firstSession && Date.now() - datingSince > DATING_FOR_MS) return stop("");
         delay = POLL_DATING_MS;
-      } else if (s.stage === "queued") {
+      } else if (fv.inLine(s)) {
         delay = queuedDelay();
       } else {
         delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
