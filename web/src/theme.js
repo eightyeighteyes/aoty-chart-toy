@@ -249,8 +249,37 @@
     el.removeAttribute("data-font");
   }
 
+  // ---- whose theme (AOTY-76) ----------------------------------------------------------------
+  // A page theme belongs to a user's page or a group's: target = {kind: "user" | "group", id}.
+
+  // The remembered-theme key (app.js, AOTY-75). Groups get their own prefix, so a group slug
+  // that's also someone's username never shares a key with their page.
+  function themeKey(target) {
+    return target.kind === "group" ? `aoty-theme:group:${target.id}` : `aoty-theme:${target.id}`;
+  }
+  // Where the owner's pick is saved (the api, under <base>api/).
+  function savePath(target) {
+    return target.kind === "group" ? `groups/${target.id}/theme` : `users/${target.id}/theme`;
+  }
+  // Whether `me` (a signed-in username) owns the theme: their own user page, or a group whose
+  // owner they are (group.owner, not membership: an owner who left still owns it).
+  function ownsTheme(target, me, groupOwner) {
+    if (!target || !me) return false;
+    const lower = String(me).toLowerCase();
+    if (target.kind === "group") return !!groupOwner && String(groupOwner).toLowerCase() === lower;
+    return String(target.id).toLowerCase() === lower;
+  }
+  // The ranking "album of the year" takes its #1 from: a user chart's one ranking (By Play), a
+  // group's default (By Listener; charts built before AOTY-63 have "track", older ones "album").
+  // Never a member's re-rank: ?user= filters the page, and the theme stays the group's.
+  function topRanking(chart) {
+    const r = (chart && chart.rankings) || {};
+    if (chart && chart.kind === "group") return r.listener || r.track || r.album || [];
+    return r.album || [];
+  }
+
   const api = {THEMES, IDS, ORDER, LABELS, DEFAULT, MATCH, KAMP, LIGHT_KAMP, TEXT_MIN, contrast, seamOf,
-               failures, derive, tokens, complete, apply, reset, mix};
+               failures, derive, tokens, complete, apply, reset, mix, themeKey, savePath, ownsTheme, topRanking};
   root.aotyTheme = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

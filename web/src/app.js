@@ -426,7 +426,7 @@
       return;
     }
     profileLine(raw, "");  // the URL's casing until a chart brings Last.fm's
-    paintRememberedTheme(lower);  // no dark flash before a light page's chart arrives (AOTY-75)
+    paintRememberedTheme({kind: "user", id: lower});  // no dark flash before a light page's chart arrives (AOTY-75)
     let chart;
     try {
       chart = await loadChart(lower);
@@ -437,7 +437,7 @@
     loadedAt = chart ? chart.generated_at : null;
     if (fv.isFirstVisit(chart)) {
       showFirstVisit(raw);
-      themeForPage(lower, chart);  // the owner can pick while the chart is pressed (AOTY-65)
+      themeForPage({kind: "user", id: lower}, chart);  // the owner can pick while the chart is pressed (AOTY-65)
     } else {
       paint(chart, raw, lower);
     }
@@ -942,13 +942,14 @@
 
   async function showGroup(id) {
     stopAurora();
-    clearTheme();  // groups stay on the default (their own themes are AOTY-76)
+    clearTheme();
     heading(NAME, "");
     if (!grp.ID_RE.test(id)) {
       state("there's no group here", "check the link you were given.", false);
       return;
     }
     groupId = id;
+    paintRememberedTheme({kind: "group", id});  // no dark flash before a light group's chart (AOTY-76)
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && groupWake) { groupWake = false; refreshGroup(); }
     });
@@ -1014,9 +1015,12 @@
         groupHeading(groupInfo.name, YEAR);
         state("pressing this group's chart…", "it takes a few minutes for new members: we read each one's "
             + "year of scrobbles, then check every album's release year.", false);
+        themeForPage({kind: "group", id: groupId}, null);  // the owner can pick before the first chart
         if (!watch) startWatch(false);
       }
     }
+    // The group's record carries the owner (who gets the picker) and its stored theme.
+    if (info && themeTarget) { themeFromStatus(info); renderThemeTools(); }
     showGroupTools(first);
     let next = null;
     if (watch) {
@@ -1041,6 +1045,8 @@
   function paintGroup(chart) {
     const first = current === null;
     current = chart;
+    // The group's theme, on every view of it: a member's (?user=) only re-ranks the page.
+    themeForPage({kind: "group", id: groupId}, chart, !first);
     groupHeading(groupInfo && groupInfo.id === chart.id ? groupInfo.name : chart.name, chart.year);
     $("controls").hidden = false;
     groupPicklist(chart);
@@ -1399,6 +1405,7 @@
     const info = await loadGroupInfo(groupId);
     if (gen !== groupGen) return;
     if (info) groupInfo = info;
+    if (info && themeTarget) { themeFromStatus(info); renderThemeTools(); }  // an owner change moves the picker
     renderMembers();
     startWatch();
   }
@@ -1486,6 +1493,12 @@
         // The group moved: the old id's chart is deleted, so nothing may read it again.
         groupGen++;
         groupId = out.id;
+        // The theme moved with it (the meta carries it): follow it, keeping a pick not yet saved.
+        if (themeTarget && themeTarget.kind === "group") {
+          rememberTheme(themeTarget, th.DEFAULT);
+          themeTarget = {kind: "group", id: out.id};
+          rememberTheme(themeTarget, savedTheme);
+        }
         const url = new URL(location.href);
         url.pathname = `${BASE}group/${encodeURIComponent(out.id)}`;
         try { history.replaceState(null, "", url); } catch (_) {}
@@ -1532,8 +1545,11 @@
   // repaint, and the page mustn't flick back.
   const THEME_SAVE_MS = 800;
   const THEME_FADE_MS = 450;
-  let themeUser = null;  // the user chart on screen, lowercased; null on any other view
-  let themeChart = null;  // that chart, for the #1 cover
+  // Whose page's theme is on screen (AOTY-76): {kind: "user", id: lowercased name} or
+  // {kind: "group", id: slug}; null on any other view.
+  let themeTarget = null;
+  let themeChart = null;  // that page's chart, for the #1 cover
+  const sameTarget = (a, b) => !!a && !!b && a.kind === b.kind && a.id === b.id;
   let shownTheme = th.DEFAULT, savedTheme = th.DEFAULT, pickedTheme = null;
   let themeGen = 0, themeSaveTimer = 0, fadeTimer = 0;
 
@@ -1546,7 +1562,7 @@
 
   // The cover URLs to try for the #1 (the chart's art, then its fallbacks), or [] for none.
   function topCovers(chart) {
-    const top = chart && chart.rankings && (chart.rankings.album || [])[0];
+    const top = th.topRanking(chart)[0];
     const a = top ? chart.albums[top[0]] : null;
     return a && a.art ? [a.art, ...(a.fallbacks || [])] : [];
   }
@@ -1585,10 +1601,10 @@
     applyTheme(matchTokens);
   }
 
-  // Off a user chart (intro, a message, first visit, groups): the default, no picker.
+  // Off a themed page (intro, a message, "your groups"): the default, no picker.
   function clearTheme() {
     themeGen++;
-    themeUser = themeChart = pickedTheme = null;
+    themeTarget = themeChart = pickedTheme = null;
     shownTheme = savedTheme = th.DEFAULT;
     clearTimeout(themeSaveTimer);
     applyTheme(null);
@@ -1597,31 +1613,33 @@
 
   // A user chart was painted (first paint or in place).
   function themeForChart(chart, lower, repaint) {
-    themeForPage(lower, chart, repaint);
+    themeForPage({kind: "user", id: lower}, chart, repaint);
   }
 
-  // A user's page, whatever its chart's state (user, 2026-11-25: a theme doesn't wait for the
-  // chart). chart: the one on screen, or a first visit's (null, or one that ranks nothing yet),
-  // which may still carry the saved theme; "album of the year" has no #1 to read until a chart
-  // ranks something, and keeps the default until then.
-  function themeForPage(lower, chart, withFade = false) {
-    if (themeUser !== lower) pickedTheme = null;
-    themeUser = lower;
-    themeChart = chart && !fv.isFirstVisit(chart) ? chart : null;
+  // A user's or a group's page, whatever its chart's state (user, 2026-11-25: a theme doesn't
+  // wait for the chart). chart: the one on screen, or a first visit's (null, or one that ranks
+  // nothing yet), which may still carry the saved theme; "album of the year" has no #1 to read
+  // until a chart ranks something, and keeps the default until then. A group's member view
+  // (?user=) only re-ranks the page: the theme and its #1 stay the group's.
+  function themeForPage(target, chart, withFade = false) {
+    if (!sameTarget(themeTarget, target)) pickedTheme = null;
+    themeTarget = target;
+    themeChart = chart && !(target.kind === "user" && fv.isFirstVisit(chart)) ? chart : null;
     savedTheme = chart && th.IDS.includes(chart.theme) ? chart.theme : th.DEFAULT;
-    rememberTheme(lower, savedTheme);
+    rememberTheme(target, savedTheme);
     showTheme(pickedTheme || savedTheme, withFade);
     renderThemeTools();
   }
 
-  // The status API carries the row's theme too, which is newer than a chart.json the restyle
-  // hasn't reached, and the only source while there's no chart at all.
+  // The status API (a user) or GET api/groups/<id> (a group) carries the stored theme too, which
+  // is newer than a chart.json the restyle hasn't reached, and the only source while there's no
+  // chart at all.
   function themeFromStatus(s) {
-    if (!themeUser || pickedTheme) return;
+    if (!themeTarget || pickedTheme || !s) return;
     const id = th.IDS.includes(s.theme) ? s.theme : th.DEFAULT;
     if (id === savedTheme) return;
     savedTheme = id;
-    rememberTheme(themeUser, id);
+    rememberTheme(themeTarget, id);
     showTheme(id, true);
   }
 
@@ -1629,20 +1647,21 @@
   // light page doesn't open dark and then flip. A convenience only: chart.json and the status
   // stay the truth, and replace it as soon as they arrive. "album of the year" isn't painted early
   // (its colours need the #1 cover). Storage can be blocked: then there's just no head start.
-  const THEME_KEY = "aoty-theme:";
-  function rememberTheme(user, id) {
+  function rememberTheme(target, id) {
     try {
-      if (id === th.DEFAULT) localStorage.removeItem(THEME_KEY + user);
-      else localStorage.setItem(THEME_KEY + user, id);
+      if (id === th.DEFAULT) localStorage.removeItem(th.themeKey(target));
+      else localStorage.setItem(th.themeKey(target), id);
     } catch (_) { /* blocked storage: fine */ }
   }
-  function paintRememberedTheme(user) {
+  function paintRememberedTheme(target) {
     let id = null;
-    try { id = localStorage.getItem(THEME_KEY + user); } catch (_) { id = null; }
+    try { id = localStorage.getItem(th.themeKey(target)); } catch (_) { id = null; }
     if (id && id !== th.MATCH && th.IDS.includes(id)) applyTheme(th.tokens(id));
   }
 
-  const isThemeOwner = () => !!themeUser && canWrite() && me.username === themeUser;
+  // A group's owner is only known once GET api/groups/<id> answers; until then, no picker.
+  const isThemeOwner = () => !!themeTarget && canWrite()
+      && th.ownsTheme(themeTarget, me.username, themeTarget.kind === "group" && groupInfo ? groupInfo.owner : null);
 
   function renderThemeTools() {
     const owner = isThemeOwner();
@@ -1705,8 +1724,9 @@
     $("theme-msg").textContent = "";
     showTheme(id, true);
     clearTimeout(themeSaveTimer);
-    const user = themeUser;
-    themeSaveTimer = setTimeout(() => saveTheme(user, id), THEME_SAVE_MS);
+    // The target is read when the timer fires, not now: a group renamed in between has moved its
+    // slug, and themeTarget follows it (rename).
+    themeSaveTimer = setTimeout(() => saveTheme(id), THEME_SAVE_MS);
   }
 
   // By the answer's error word, not its status (as groupedit does): a 404 is also "no such route",
@@ -1716,13 +1736,23 @@
     not_owner: "only this page's owner can change its theme.",
     no_chart: "one moment: your page is still being set up. try again in a few seconds.",
     writes_off: "theme changes are switched off for now. your page keeps its theme.",
+    // a group's (AOTY-76): the group routes' own words
+    "not your group": "only this group's owner can change its theme.",
+    "no such group": "this group isn't here any more.",
+    groups_unavailable: "theme changes are switched off for now. the group keeps its theme.",
   };
-  async function saveTheme(user, id) {
-    const r = await apiCall("POST", `users/${user}/theme`, {theme: id});
-    if (user !== themeUser || id !== pickedTheme) return;  // the page or the pick moved on
+  async function saveTheme(id) {
+    const target = themeTarget;
+    if (!target || id !== pickedTheme) return;
+    const r = await apiCall("POST", th.savePath(target), {theme: id});
+    // The page or the pick moved on. A rename keeps the page (same kind, new slug), so a group
+    // matches on kind alone: themeTarget is the renamed one, which the theme moved with.
+    const moved = !themeTarget || themeTarget.kind !== target.kind
+        || (target.kind === "user" && themeTarget.id !== target.id);
+    if (moved || id !== pickedTheme) return;
     if (r.status === 200) {
       savedTheme = id;
-      rememberTheme(user, id);
+      rememberTheme(themeTarget, id);
       $("theme-msg").textContent = "saved. everyone sees it now.";
       track("event", "theme_set", {theme: id});
       return;

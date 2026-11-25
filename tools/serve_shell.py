@@ -34,7 +34,9 @@ It builds the shell (scripts/build_shell.py) for the base path, then serves:
                                         real sandbox session for NAME instead (admin credentials).
   <base>api/users/<u>/theme             the owner's page theme (AOTY-65): signed in as <u> (alice
                                         for --sample alice), POST sets the preview chart's theme
-                                        at once, as the chart builder's restyle would.
+                                        at once, as the chart builder's restyle would. A group's
+                                        (AOTY-76, groups/<id>/theme) works the same for its owner
+                                        (full-house is alice's, bobs-crew bob's).
   any other path under <base>           index.html, as kamp.fm's shell function does
 with kamp.fm's Content-Security-Policy, so CSP violations show in the browser console.
 data/ is git-ignored, so real charts copied there stay local.
