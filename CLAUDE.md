@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -689,6 +689,41 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     readable), drawn at 32×32. A tainted canvas or a grey cover keeps the default.
 - Preview: `tools/serve_shell.py --sample alice --port 8001`, then "sign in with last.fm" (alice)
   shows the picker; the stand-in API writes the theme into the preview chart at once.
+
+## Borealis (AOTY-67, 2026-11-25)
+
+- User decisions:
+  - **kamp's Now Playing "Borealis"** (aurora curtains) fills the viewport behind a **first visit
+    only**, coloured by the wall's covers.
+  - Ported: the flow, the 1 s palette crossfade, and the **surge band** when a new cover shifts
+    the palette. Not kamp's cursor lean, rare flicker or title mask.
+  - **The repo is GPLv3**, as kamp is (`LICENSE`). Every ported file has the same single author.
+  - More backgrounds, picked at random, are AOTY-77.
+- **`web/src/borealis.js`** is the port. Its header lists the kamp files and commit, and the pure
+  parts are node-tested.
+  - The engine is WebGL 1, low-power, `failIfMajorPerformanceCaveat`. It runs at a quarter of the
+    resolution with DPR capped at 1.5, and at 30 fps.
+  - **There's no GLSL compiler in CI.** `web/test/borealis.test.mjs` checks statically that every
+    declared uniform is set by `draw()`, and that the palette is indexed only by the loop counter.
+    The shader was compiled and drawn once by hand in Chromium (kamp's Electron, offscreen). Do
+    that again after shader edits.
+  - `mount()` returns null without WebGL. The page then stays exactly as before.
+  - kamp rules kept:
+    - A stopped loop (reduced motion, a hidden tab) lands a new palette directly.
+    - A resize clears the buffer, so same-size resizes are skipped and real ones redrawn.
+    - `destroy()` calls `WEBGL_lose_context`, because browsers cap live contexts at about 16.
+- **On the page** (`app.js` "the aurora"):
+  - It mounts 1.5 s into a first visit, so a chart that's already there never flashes it.
+  - The canvas is fixed at `z-index: -1`, and `html.has-aurora` makes body's background transparent:
+    negative z-index paints over the root's background but under body's. **The class stays until
+    the 0.6 s fade-out ends**, or the canvas vanishes at once.
+  - The first 6 wall covers load once, with CORS. A CORS failure still puts the cover on the
+    wall, through a plain load, without colouring the aurora.
+  - The palette is recomputed once per arrival burst and set only on a real change
+    (`paletteChanged`), so a warm cache makes one surge, not six.
+  - A theme change repaints its background (`applyTheme` → `auroraColors`).
+  - Text gets a halo in the page colour. A panel would shift the layout when the aurora mounts.
+- Preview: `tools/serve_shell.py --port 8001`, then a fresh `user/newbieN`.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
