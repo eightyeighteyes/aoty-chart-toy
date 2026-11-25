@@ -410,6 +410,7 @@
     loadedAt = chart ? chart.generated_at : null;
     if (fv.isFirstVisit(chart)) {
       showFirstVisit(raw);
+      themeForPage(lower, chart);  // the owner can pick while the chart is pressed (AOTY-65)
     } else {
       paint(chart, raw, lower);
     }
@@ -619,6 +620,7 @@
     }
 
     async function handle(s) {
+      themeFromStatus(s);
       if (watchFrom === null && s.stage !== "queued") watchFrom = Date.now();
       await maybeRefresh(s);
       if (s.stage === "error") { gaveUp(s.reason); return current ? quiet() : stop(""); }
@@ -1423,12 +1425,30 @@
 
   // A user chart was painted (first paint or in place).
   function themeForChart(chart, lower, repaint) {
+    themeForPage(lower, chart, repaint);
+  }
+
+  // A user's page, whatever its chart's state (user, 2026-11-25: a theme doesn't wait for the
+  // chart). chart: the one on screen, or a first visit's (null, or one that ranks nothing yet),
+  // which may still carry the saved theme; "album of the year" has no #1 to read until a chart
+  // ranks something, and keeps the default until then.
+  function themeForPage(lower, chart, withFade = false) {
     if (themeUser !== lower) pickedTheme = null;
     themeUser = lower;
-    themeChart = chart;
-    savedTheme = th.IDS.includes(chart.theme) ? chart.theme : th.DEFAULT;
-    showTheme(pickedTheme || savedTheme, repaint);
+    themeChart = chart && !fv.isFirstVisit(chart) ? chart : null;
+    savedTheme = chart && th.IDS.includes(chart.theme) ? chart.theme : th.DEFAULT;
+    showTheme(pickedTheme || savedTheme, withFade);
     renderThemeTools();
+  }
+
+  // The status API carries the row's theme too, which is newer than a chart.json the restyle
+  // hasn't reached, and the only source while there's no chart at all.
+  function themeFromStatus(s) {
+    if (!themeUser || pickedTheme) return;
+    const id = th.IDS.includes(s.theme) ? s.theme : th.DEFAULT;
+    if (id === savedTheme) return;
+    savedTheme = id;
+    showTheme(id, true);
   }
 
   const isThemeOwner = () => !!themeUser && canWrite() && me.username === themeUser;
@@ -1503,7 +1523,7 @@
   const THEME_ERRORS = {
     signed_out: "you're signed out. sign in again to change your theme.",
     not_owner: "only this page's owner can change its theme.",
-    no_chart: "your chart isn't ready yet. try again once it's pressed.",
+    no_chart: "one moment: your page is still being set up. try again in a few seconds.",
     writes_off: "theme changes are switched off for now. your page keeps its theme.",
   };
   async function saveTheme(user, id) {

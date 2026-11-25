@@ -660,8 +660,14 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     theme (never the event's: async events repeat) into the published chart.json, without a build.
   - Full builds carry it as well. The default is left out of chart.json.
 - **On the page:**
-  - The theme is applied in `paint()`. `clearTheme()` runs on every other view: state, intro, first
-    visit, groups.
+  - **A theme doesn't wait for the chart** (user, 2026-11-25). The owner's picker and the saved
+    theme show on their page in every state, the first-visit screen included (`themeForPage`).
+    - The saved theme comes from chart.json or, with no chart yet, from the status API's `theme`.
+    - "album of the year" stays on the default until a chart has a #1 to read.
+    - The api's one remaining need is a users row (404 `no_chart`, "still being set up"). A
+      visit's sync request creates it, so it's only a moment. The check stays because a bare
+      theme-only row would read as a known user and skip the new-user guards.
+  - `clearTheme()` runs on every view that isn't a user's page: state, intro, groups.
   - Once the owner picks in a page session, their pick wins over a re-fetched chart.json, which
     may not be restyled yet.
   - "album of the year" uses its own `new Image()` with `crossOrigin` (the chart's `<img>`s aren't

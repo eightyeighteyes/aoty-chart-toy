@@ -315,6 +315,14 @@ def test_status_body():
   }
 
 
+def test_status_carries_the_owners_theme_whatever_the_charts_state():
+  # AOTY-65: a first visit has no chart to carry it, so the status does.
+  assert core.status({"state": "syncing", "theme": "beach-house"}, NOW, COOL)["theme"] == "beach-house"
+  assert core.status(done(theme="match1"), NOW, COOL)["theme"] == "match1"
+  for theme in ("poster", "nope", None):
+    assert "theme" not in core.status(done(theme=theme), NOW, COOL), theme
+
+
 def test_status_extras_for_queued_and_error():
   row = {"state": "queued", "sync_requested_at": NOW - 5, "queue_ticket": 50}
   queued = core.status(row, NOW, COOL, queue_depth=70, queue={"started": 40})

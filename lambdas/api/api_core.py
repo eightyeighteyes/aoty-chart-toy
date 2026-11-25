@@ -28,6 +28,8 @@ import math
 import re
 from urllib.parse import parse_qsl, unquote, urlencode
 
+from common import themes
+
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
 ACTIVE = frozenset({"queued", "syncing", "retrying"})
 FAILED = frozenset({"error", "not_found", "private"})
@@ -360,6 +362,11 @@ def status(row, now, cooldown, queue_depth=None, queue=None, concurrency=2):
     out["wall"] = wall
   if out["stage"] == "error":
     out["reason"] = row.get("state")
+  # The owner's page theme (AOTY-65), so a page with no chart to carry it yet (a first visit)
+  # still shows it. Left out for the default or anything that isn't an allowlisted id.
+  theme = row.get("theme")
+  if themes.valid(theme) and theme != themes.DEFAULT:
+    out["theme"] = theme
   ticket = row.get("queue_ticket")
   if out["stage"] == "queued" and ticket is not None and queue is not None:
     out["queue"] = queue_place(ticket, queue_depth, queue, concurrency)
