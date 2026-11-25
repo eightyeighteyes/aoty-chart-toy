@@ -90,7 +90,8 @@ def test_app_js_has_no_inline_handlers_or_eval():
 # The polite live regions. Only the sync banner speaks on its own (chart pages); every other one
 # is empty until it answers something the visitor just did: a form's message (the intro's, and
 # AOTY-52's create, rename and add) or an action's (sign in or out, copy link).
-LIVE_REGIONS = {"banner-msg", "intro-msg", "account-msg", "share-msg", "create-msg", "rename-msg", "add-msg"}
+LIVE_REGIONS = {"banner-msg", "intro-msg", "account-msg", "share-msg", "create-msg", "rename-msg", "add-msg",
+                "theme-msg"}  # fmt: skip
 
 
 def test_the_shell_has_one_live_region_that_speaks_on_its_own(tmp_path):
@@ -252,4 +253,6 @@ def test_both_seam_fixes_stay():
   # tiles and content tiles' near-black differently, so short pages showed a darker strip).
   css = (bs.SRC / "app.css").read_text()
   assert "html { background: var(--bg)" in css
-  assert "background-image: linear-gradient(var(--bg), #0d0c13)" in css
+  # AOTY-65: the gradient's other end is a token (themes set it 1/255 from their --bg), poster by default.
+  assert "background-image: linear-gradient(var(--bg), var(--bg-seam))" in css
+  assert "--bg: #0d0c12;" in css and "--bg-seam: #0d0c13;" in css

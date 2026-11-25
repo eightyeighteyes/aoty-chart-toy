@@ -202,6 +202,21 @@ def test_edition_suffixes_show_as_the_root_album():
   assert chart["albums"][0]["album"] == "Singin' to an Empty Chair"
 
 
+def test_the_owners_theme_is_published_unless_its_the_default_or_unknown():
+  store = make_store({("A", "One"): 4})
+  items = {key("A", "One"): item()}
+  assert build(store, items, theme="deep-purple")[0]["theme"] == "deep-purple"
+  assert build(store, items, theme="match1")[0]["theme"] == "match1"
+  for theme in (None, "poster", "nope", 7):
+    assert "theme" not in build(store, items, theme=theme)[0], theme
+
+
+def test_with_theme_sets_and_clears_in_place():
+  chart = {"version": 1, "theme": "kamp"}
+  assert core.with_theme(chart, "blackpink") is chart and chart["theme"] == "blackpink"
+  assert "theme" not in core.with_theme(chart, "poster")
+
+
 def test_display_name_falls_back_to_the_username():
   chart, _ = core.build_chart(sync_core.new_store(2026), {}, username="alice", display_name=None, now=NOW)
   assert chart["display_name"] == "alice"

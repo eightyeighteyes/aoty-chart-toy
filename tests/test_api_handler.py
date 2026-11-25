@@ -77,7 +77,10 @@ class FakeDDB:
     name = Key["username"]["S"]
     names = ExpressionAttributeNames or {}
     values = dynamo.from_item(ExpressionAttributeValues or {})
-    if ConditionExpression:
+    if ConditionExpression == "attribute_exists(username)":  # a theme write (AOTY-65)
+      if name not in self.rows:
+        raise ConditionFailed()
+    elif ConditionExpression:
       if self.race:
         self.race(self.rows)
       row = self.rows.get(name, {})

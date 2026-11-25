@@ -35,6 +35,9 @@
     control_change: {control: ["view", "rank", "filter"],
                      value: ["poster", "list", "listener", "album", "weighted", "member", "everyone"]},
     share_copy: {},
+    // An owner saved their page's theme (AOTY-65): the theme id only, never whose page.
+    theme_set: {theme: ["poster", "kamp", "strawberry-switchblade", "beach-house", "blackpink", "deep-purple",
+                        "green-day", "foxy-brown", "golden-smog", "match1"]},
     sign_in: {},
     group_create: {},
     member_add: {},

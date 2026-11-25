@@ -228,6 +228,73 @@ def test_a_sync_event_writes_the_chart_with_no_cache(h, world):
   assert ddb.users["alice"]["chart_pending"] == 1
 
 
+# ---- page themes (AOTY-65) ------------------------------------------------------------------
+
+
+def test_a_build_carries_the_owners_theme(h, world):
+  s3, ddb = world
+  ddb.users["alice"]["theme"] = "beach-house"
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  assert s3.json(CHART)["theme"] == "beach-house"
+
+
+def test_restyle_copies_the_rows_theme_into_the_published_chart_without_a_build(h, world):
+  s3, ddb = world
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  built = s3.json(CHART)
+  assert "theme" not in built
+  ddb.users["alice"]["theme"] = "golden-smog"
+  # The event's own fields never matter: only the row's theme is copied.
+  out = h.handler(
+    {"username": "alice", "restyle": True, "theme": "kamp"}, None, Deps(s3, ddb, clock=NOW + 60)
+  )
+  assert out == {"built": 1, "skipped": 0, "failed": 0, "checked": 0}
+  chart = s3.json(CHART)
+  assert chart == {**built, "theme": "golden-smog"}  # nothing else changed: no rebuild
+  assert s3.meta[CHART]["CacheControl"] == "no-cache"
+  assert ddb.users["alice"]["chart_built_at"] == NOW  # not a build
+
+
+def test_restyle_back_to_the_default_removes_the_theme(h, world):
+  s3, ddb = world
+  ddb.users["alice"]["theme"] = "kamp"
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  ddb.users["alice"]["theme"] = "poster"
+  h.handler({"username": "alice", "restyle": True}, None, Deps(s3, ddb))
+  assert "theme" not in s3.json(CHART)
+
+
+def test_a_repeated_or_late_restyle_changes_nothing(h, world):
+  s3, ddb = world
+  ddb.users["alice"]["theme"] = "kamp"
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  out = h.handler({"username": "alice", "restyle": True}, None, Deps(s3, ddb))
+  assert out["built"] == 0 and out["skipped"] == 1 and out["failed"] == 0
+
+
+def test_restyle_with_no_chart_yet_is_a_no_op(h, world):
+  s3, ddb = world
+  ddb.users["alice"]["theme"] = "kamp"  # signed in and picked, but no chart built yet
+  out = h.handler({"username": "alice", "restyle": True}, None, Deps(s3, ddb))
+  assert out["skipped"] == 1 and out["failed"] == 0 and CHART not in s3.objects
+
+
+def test_an_unknown_theme_on_the_row_is_never_published(h, world):
+  s3, ddb = world
+  ddb.users["alice"]["theme"] = "</style><script>"
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  assert "theme" not in s3.json(CHART)
+
+
+def test_restyle_never_builds_the_users_groups(h):
+  s3, ddb = group_world()
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  group_before = s3.objects.get(GROUP_CHART)
+  ddb.users["alice"]["theme"] = "kamp"
+  h.handler({"username": "alice", "restyle": True}, None, Deps(s3, ddb, clock=NOW + 60))
+  assert s3.objects.get(GROUP_CHART) == group_before
+
+
 def test_a_repeat_sync_event_is_skipped(h, world):
   s3, ddb = world
   ddb.users["alice"]["chart_built_at"] = NOW - 1

@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const {EVENTS, NOOP, template, templateReferrer, pageFields, clean, outcomeCode, signInDone, create} =
     require("../src/kampstats.js");
 const {MESSAGES} = require("../src/intro.js");
+const {IDS} = require("../src/theme.js");
 
 const BASE = "/toys/aoty/";
 const ORIGIN = "https://kamp.fm";
@@ -55,6 +56,13 @@ test("events keep only listed params and values", () => {
   assert.deepEqual(clean("group_loaded", {group_size: "25"}), {});
   assert.deepEqual(clean("group_loaded", {group_size: -1}), {});
   assert.deepEqual(clean("share_copy", {url: "https://kamp.fm/toys/aoty/user/alice"}), {});
+});
+
+test("theme_set sends only a theme id the page knows (AOTY-65)", () => {
+  assert.deepEqual(EVENTS.theme_set.theme, IDS);
+  assert.deepEqual(clean("theme_set", {theme: "beach-house"}), {theme: "beach-house"});
+  assert.deepEqual(clean("theme_set", {theme: "alice"}), {});
+  assert.deepEqual(clean("theme_set", {theme: "kamp", user: "alice"}), {theme: "kamp"});
 });
 
 test("the intro's answers map to outcome codes", () => {
@@ -169,7 +177,7 @@ test("a username anywhere on the page never reaches a hit", () => {
   p.stats.setPage();
   for (const event of Object.keys(EVENTS)) {
     p.stats.event(event, {outcome: name, result: name, control: name, value: name, group_size: name,
-                          name, username: name, url: `${ORIGIN}${BASE}user/${name}`});
+                          theme: name, name, username: name, url: `${ORIGIN}${BASE}user/${name}`});
   }
   p.stats.event("not_listed", {name});
   p.stats.markSignIn();

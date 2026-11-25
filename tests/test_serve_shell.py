@@ -81,3 +81,20 @@ def test_refusal_names_answer_like_the_api(ss):
   assert ss.fake_outcome("too-many") == (429, {"error": "too_many_new"})
   assert ss.fake_outcome("throttled")[0] == 429
   assert ss.first_visit_kind("crowded-1") == "crowded"
+
+
+def test_the_preview_theme_route_answers_like_the_api(ss, tmp_path):
+  import json
+
+  f = tmp_path / "users" / "alice" / "chart.json"
+  f.parent.mkdir(parents=True)
+  f.write_text(json.dumps(ss.sample_chart("alice")))
+  ok = ss.fake_theme("POST", "alice", {"theme": "beach-house"}, "alice", tmp_path)
+  assert ok[0] == 200 and json.loads(f.read_text())["theme"] == "beach-house"
+  ss.fake_theme("POST", "alice", {"theme": "poster"}, "alice", tmp_path)
+  assert "theme" not in json.loads(f.read_text())
+  assert ss.fake_theme("POST", "alice", {"theme": "kamp"}, None, tmp_path)[0] == 401
+  assert ss.fake_theme("POST", "alice", {"theme": "kamp"}, "bob", tmp_path)[0] == 403
+  assert ss.fake_theme("POST", "alice", {"theme": "nope"}, "alice", tmp_path)[0] == 400
+  assert ss.fake_theme("POST", "carol", {"theme": "kamp"}, "carol", tmp_path)[0] == 404
+  assert ss.fake_theme("GET", "alice", {}, "alice", tmp_path)[0] == 405
