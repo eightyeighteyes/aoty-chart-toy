@@ -35,8 +35,9 @@
   const DEFAULT = "poster";
   const MATCH = "match1";
   const IDS = [...Object.keys(THEMES), MATCH];  // lambdas/common/themes.py must match (a test checks)
+  // The default's id stays "poster" (stored ids never change); it reads "oranger" (user, 2026-11-25).
   const LABELS = {
-    "poster": "poster", "kamp": "kamp", "strawberry-switchblade": "strawberry switchblade",
+    "poster": "oranger", "kamp": "kamp", "strawberry-switchblade": "strawberry switchblade",
     "beach-house": "beach house", "blackpink": "blackpink", "deep-purple": "deep purple",
     "green-day": "green day", "foxy-brown": "foxy brown", "golden-smog": "golden smog",
     [MATCH]: "album of the year",  // user, 2026-11-25
@@ -170,6 +171,14 @@
     return {...t, tile: t.tile || mix(t.panel, t.accent, 0.35), seam: seamOf(t.bg)};
   }
 
+  // The picker's order (user, 2026-11-25): "album of the year" first, then the presets in rainbow
+  // order by their accent's hue, starting at red (the wheel is cut at RAINBOW_START, so a
+  // red-pink like strawberry switchblade's 346 degrees leads and magenta-pinks close the row).
+  const RAINBOW_START = 340;
+  const hueOf = hex => rgb2hsl(...rgb(hex))[0];
+  const ORDER = [MATCH, ...Object.keys(THEMES).sort((a, b) =>
+    (hueOf(THEMES[a].accent) - RAINBOW_START + 360) % 360 - (hueOf(THEMES[b].accent) - RAINBOW_START + 360) % 360)];
+
   // Paint a theme's tokens onto <html>, or the default with null.
   function apply(t, el = root.document && root.document.documentElement) {
     if (!el) return;
@@ -183,7 +192,7 @@
     for (const prop of [...Object.values(PROPS), "--bg-seam"]) el.style.removeProperty(prop);
   }
 
-  const api = {THEMES, IDS, LABELS, DEFAULT, MATCH, KAMP, TEXT_MIN, contrast, seamOf, failures,
+  const api = {THEMES, IDS, ORDER, LABELS, DEFAULT, MATCH, KAMP, TEXT_MIN, contrast, seamOf, failures,
                derive, tokens, apply, reset, mix};
   root.aotyTheme = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

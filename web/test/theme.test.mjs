@@ -4,7 +4,7 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {THEMES, IDS, LABELS, MATCH, contrast, seamOf, failures, derive, tokens} = require("../src/theme.js");
+const {THEMES, IDS, ORDER, LABELS, MATCH, contrast, seamOf, failures, derive, tokens} = require("../src/theme.js");
 
 // A cover's pixels: n of each [r, g, b], opaque.
 function cover(...parts) {
@@ -26,6 +26,13 @@ test("the ids are the presets plus match1, each with a lowercase label", () => {
   assert.deepEqual(IDS, [...Object.keys(THEMES), "match1"]);
   for (const id of IDS) assert.match(LABELS[id], /^[a-z ]+$/, id);
   assert.equal(LABELS[MATCH], "album of the year");
+});
+
+test("the picker leads with album of the year, then the presets in rainbow order", () => {
+  assert.deepEqual(ORDER, ["match1", "strawberry-switchblade", "poster", "foxy-brown", "golden-smog",
+                           "green-day", "beach-house", "kamp", "deep-purple", "blackpink"]);
+  assert.deepEqual([...ORDER].sort(), [...IDS].sort());  // every theme, once
+  assert.equal(LABELS.poster, "oranger");
 });
 
 test("the seam colour is one step of blue away, and never wraps", () => {

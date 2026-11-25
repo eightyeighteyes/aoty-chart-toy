@@ -1449,7 +1449,7 @@
     const row = $("theme-row");
     if (!swatchesBuilt) {
       swatchesBuilt = true;
-      for (const id of th.IDS) {
+      for (const id of th.ORDER) {
         const b = row.appendChild(document.createElement("button"));
         b.type = "button";
         b.className = "pill swatch";

@@ -631,6 +631,8 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   - The choices are the poster look (the default), kamp's 8 dark palettes, and a theme from the
     chart's #1 cover, labelled **"album of the year"** (id `match1`; "match my #1" was only the
     ticket's working name).
+  - The picker lists **"album of the year" first, then the presets in rainbow order** by accent hue
+    (`theme.ORDER`, red first). The default's id stays `poster`, but it reads **"oranger"**.
   - Visitors see a new pick **within seconds** (a restyle, not the next build).
   - "album of the year" **fades in** once the #1 cover loads, with no fade under reduced motion.
   - Groups (AOTY-76) and light themes (AOTY-75) are their own stories.
