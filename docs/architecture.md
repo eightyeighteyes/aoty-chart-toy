@@ -432,9 +432,9 @@ and the next day's run starts over.
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
 | `guard` table | api (`ip#` new-name sets, the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
 | `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`, the owner's `theme` and `theme_set_at` (AOTY-65)), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
-| `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
+| `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`; the owner's `theme` and `theme_set_at` on meta, AOTY-76), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
 | site bucket `data/users/*/chart.json` | chart builder (builds, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-65) |
-| site bucket `data/groups/*/chart.json` | chart builder (writes and deletes) | browsers, through CloudFront |
+| site bucket `data/groups/*/chart.json` | chart builder (writes, deletes, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-76) |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 | SSM `session_key`, `session_key_previous`, `lastfm_api_secret` (AOTY-47) | the admin, by hand | api only |
@@ -517,3 +517,9 @@ sequenceDiagram
 Every full build also copies the row's theme, so a restyle that was lost costs nothing after the
 next build. The theme is always an id from an allowlist, never CSS, so nothing a visitor's page
 applies comes from the owner as free text.
+
+A group's theme (AOTY-76) takes the same path with `POST api/groups/<id>/theme`: the owner check
+(`group.owner`) and the write are one conditional update on the group's meta item, and the chart
+Lambda's `{"group": id, "restyle": true}` copies the meta's theme into `data/groups/<id>/chart.json`.
+A rename copies the meta, theme included; a theme saved during a rename cancels its transaction,
+which retries with the new value.
