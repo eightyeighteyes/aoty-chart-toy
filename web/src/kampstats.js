@@ -37,7 +37,9 @@
     share_copy: {},
     // An owner saved their page's theme (AOTY-65): the theme id only, never whose page.
     theme_set: {theme: ["poster", "kamp", "strawberry-switchblade", "beach-house", "blackpink", "deep-purple",
-                        "green-day", "foxy-brown", "golden-smog", "match1"]},
+                        "green-day", "foxy-brown", "golden-smog", "white-stripes", "tangerine-dream",
+                        "yellow-magic-orchestra", "mint-royale", "the-blue-nile", "lavender-diamond", "gabbie",
+                        "match1"]},
     sign_in: {},
     group_create: {},
     member_add: {},

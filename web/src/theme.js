@@ -31,7 +31,29 @@
                    accent2: "#f0c070", line: "#3a2a1e", onAccent: "#000000"},
     "golden-smog": {bg: "#0f0e09", panel: "#1a1910", ink: "#ede8cc", muted: "#a39878", accent: "#c8a832",
                     accent2: "#f0dc7a", line: "#353320", onAccent: "#000000"},
+    // Light presets (AOTY-75, user 2026-11-25): named after bands and musicians, one per hue, like
+    // the dark set. Accents are deep enough to be text on the light page; "a kamp toy"'s periwinkle
+    // darkens to LIGHT_KAMP to stay legible on them.
+    "white-stripes": {scheme: "light", bg: "#fbf7f3", panel: "#f1e9e2", ink: "#141010", muted: "#5e5450",
+                      accent: "#b8122b", accent2: "#1c1414", line: "#e2d8cf", onAccent: "#ffffff"},
+    "tangerine-dream": {scheme: "light", bg: "#fff6ec", panel: "#fbe7d2", ink: "#1f140a", muted: "#6a5442",
+                        accent: "#a84500", accent2: "#7f3812", line: "#ecd6bd", onAccent: "#ffffff"},
+    "yellow-magic-orchestra": {scheme: "light", bg: "#fffbe8", panel: "#f7efcc", ink: "#1c1a0e", muted: "#5c573a",
+                               accent: "#6e5800", accent2: "#a8241b", line: "#e8dfb4", onAccent: "#ffffff"},
+    "mint-royale": {scheme: "light", bg: "#f2faf5", panel: "#e1f1e7", ink: "#0f1a14", muted: "#4a5e52",
+                    accent: "#146637", accent2: "#2b6200", line: "#cbe3d4", onAccent: "#ffffff"},
+    "the-blue-nile": {scheme: "light", bg: "#f4f7fc", panel: "#e5ecf7", ink: "#0e1420", muted: "#4c586c",
+                      accent: "#1d56a8", accent2: "#0a6573", line: "#d2dcec", onAccent: "#ffffff"},
+    "lavender-diamond": {scheme: "light", bg: "#f8f5fd", panel: "#ece5f8", ink: "#16111f", muted: "#5a526c",
+                         accent: "#6438ad", accent2: "#952870", line: "#ddd2ef", onAccent: "#ffffff"},
+    // New Bands for Old Heads' RIYL Old Heads palette (white, #050505, pink #ec4899, soft pink
+    // #fce7f3, #5f5f5f). Its #ec4899 is ~3.5:1 on white, too light for text, so the accents are its
+    // deeper pinks and #ec4899 colours the artist-name tiles; headings are Arial (user, 2026-11-25).
+    "gabbie": {scheme: "light", font: "display-arial", bg: "#ffffff", panel: "#fce7f3", ink: "#050505",
+               muted: "#5f5f5f", accent: "#c0186a", accent2: "#8a1450", line: "#efefef", onAccent: "#ffffff",
+               tile: "#ec4899", tileInk: "#050505"},
   };
+  const LIGHT_KAMP = "#4c55b8";  // the endorsement's periwinkle on a light page (user, 2026-11-25)
   const DEFAULT = "poster";
   const MATCH = "match1";
   const IDS = [...Object.keys(THEMES), MATCH];  // lambdas/common/themes.py must match (a test checks)
@@ -40,9 +62,13 @@
     "poster": "oranger", "kamp": "kamp", "strawberry-switchblade": "strawberry switchblade",
     "beach-house": "beach house", "blackpink": "blackpink", "deep-purple": "deep purple",
     "green-day": "green day", "foxy-brown": "foxy brown", "golden-smog": "golden smog",
+    "white-stripes": "white stripes", "tangerine-dream": "tangerine dream",
+    "yellow-magic-orchestra": "yellow magic orchestra", "mint-royale": "mint royale",
+    "the-blue-nile": "the blue nile", "lavender-diamond": "lavender diamond", "gabbie": "gabbie",
     [MATCH]: "album of the year",  // user, 2026-11-25
   };
-  const KAMP = "#7c86e1";  // app.css --kamp: the endorsement chrome keeps it in every theme
+  const KAMP = "#7c86e1";  // app.css --kamp: the endorsement chrome (darker on light pages)
+  const TILE_INK = "#f4f1ea";  // app.css --tile-ink: the artist-name tile's text on a dark page
   const TEXT_MIN = 4.5;  // WCAG AA for normal text
 
   // ---- colour arithmetic ------------------------------------------------------------------
@@ -103,7 +129,10 @@
       [t.accent, t.bg, "accent on bg"], [t.accent, t.panel, "accent on panel"],
       [t.accent2, t.bg, "accent-2 on bg"], [t.accent2, t.panel, "accent-2 on panel"],
       [t.onAccent, t.accent, "on-accent on accent"], [t.onAccent, t.accent2, "on-accent on accent-2"],
-      [KAMP, t.bg, "kamp on bg"],
+      [t.kamp || KAMP, t.bg, "kamp on bg"],
+      // The artist-name tile (.noart): its centred name over the gradient's start and middle.
+      ...(t.tile ? [[t.tileInk || TILE_INK, t.tile, "tile-ink on tile"],
+                    [t.tileInk || TILE_INK, mix(t.tile, t.tileEnd || t.accent, 0.5), "tile-ink on the tile's middle"]] : []),
     ];
   }
   // The rules a theme breaks: [] when it's legible everywhere.
@@ -159,7 +188,8 @@
   // ---- the page -----------------------------------------------------------------------------
 
   const PROPS = {bg: "--bg", panel: "--panel", ink: "--ink", muted: "--muted", accent: "--accent",
-                 accent2: "--accent-2", line: "--line", onAccent: "--on-accent", tile: "--tile"};
+                 accent2: "--accent-2", line: "--line", onAccent: "--on-accent", tile: "--tile",
+                 kamp: "--kamp", tileInk: "--tile-ink", tileEnd: "--tile-end", seam: "--bg-seam"};
 
   // The tokens a preset id stands for (with the derived ones filled in), or null for the
   // default, match1 (derived later) and anything unknown.
@@ -167,33 +197,60 @@
     const t = id !== DEFAULT && Object.prototype.hasOwnProperty.call(THEMES, id) ? THEMES[id] : null;
     return t ? complete(t) : null;
   }
+  // Every token filled in: the tile from the panel and accent (fainter on a light page), the seam,
+  // and for presets that don't set them (dark ones, derived ones) the dark-page defaults.
   function complete(t) {
-    return {...t, tile: t.tile || mix(t.panel, t.accent, 0.35), seam: seamOf(t.bg)};
+    const light = t.scheme === "light";
+    const tile = t.tile || mix(t.panel, t.accent, light ? 0.25 : 0.35);
+    const tileInk = t.tileInk || (light ? t.ink : TILE_INK);
+    // The tile's gradient runs to the accent, unless the name in its middle wouldn't read there: then
+    // the end eases back toward the tile until it does (a light accent under light text, AOTY-75).
+    let tileEnd = t.accent;
+    for (let i = 0; i < 12 && contrast(tileInk, mix(tile, tileEnd, 0.5)) < TEXT_MIN; i++) tileEnd = mix(tileEnd, tile, 0.2);
+    return {
+      ...t,
+      scheme: light ? "light" : "dark",
+      kamp: t.kamp || (light ? LIGHT_KAMP : KAMP),
+      tile, tileInk, tileEnd,
+      font: t.font || "",
+      seam: seamOf(t.bg),
+    };
   }
 
   // The picker's order (user, 2026-11-25): "album of the year" first, then the presets in rainbow
   // order by their accent's hue, starting at red (the wheel is cut at RAINBOW_START, so a
   // red-pink like strawberry switchblade's 346 degrees leads and magenta-pinks close the row).
+  // Dark presets first, then light (AOTY-75), each in rainbow order.
   const RAINBOW_START = 340;
   const hueOf = hex => rgb2hsl(...rgb(hex))[0];
-  const ORDER = [MATCH, ...Object.keys(THEMES).sort((a, b) =>
-    (hueOf(THEMES[a].accent) - RAINBOW_START + 360) % 360 - (hueOf(THEMES[b].accent) - RAINBOW_START + 360) % 360)];
+  const byHue = (a, b) =>
+    (hueOf(THEMES[a].accent) - RAINBOW_START + 360) % 360 - (hueOf(THEMES[b].accent) - RAINBOW_START + 360) % 360;
+  const isLight = id => THEMES[id].scheme === "light";
+  const ORDER = [MATCH, ...Object.keys(THEMES).filter(id => !isLight(id)).sort(byHue),
+                 ...Object.keys(THEMES).filter(isLight).sort(byHue)];
 
-  // Paint a theme's tokens onto <html>, or the default with null.
+  // Paint a theme's tokens onto <html>, or the default with null. A light theme also switches the
+  // page's color-scheme (form controls, scrollbars) and sets data-scheme / data-font, which
+  // app.css keys its light-page and gabbie's Arial rules on.
   function apply(t, el = root.document && root.document.documentElement) {
     if (!el) return;
     if (!t) return reset(el);
     const full = complete(t);
     for (const [key, prop] of Object.entries(PROPS)) el.style.setProperty(prop, full[key]);
-    el.style.setProperty("--bg-seam", full.seam);
+    el.style.setProperty("color-scheme", full.scheme);
+    el.setAttribute("data-scheme", full.scheme);
+    if (full.font) el.setAttribute("data-font", full.font);
+    else el.removeAttribute("data-font");
   }
   function reset(el = root.document && root.document.documentElement) {
     if (!el) return;
-    for (const prop of [...Object.values(PROPS), "--bg-seam"]) el.style.removeProperty(prop);
+    for (const prop of [...Object.values(PROPS), "color-scheme"]) el.style.removeProperty(prop);
+    el.removeAttribute("data-scheme");
+    el.removeAttribute("data-font");
   }
 
-  const api = {THEMES, IDS, ORDER, LABELS, DEFAULT, MATCH, KAMP, TEXT_MIN, contrast, seamOf, failures,
-               derive, tokens, apply, reset, mix};
+  const api = {THEMES, IDS, ORDER, LABELS, DEFAULT, MATCH, KAMP, LIGHT_KAMP, TEXT_MIN, contrast, seamOf,
+               failures, derive, tokens, complete, apply, reset, mix};
   root.aotyTheme = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

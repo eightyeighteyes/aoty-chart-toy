@@ -426,6 +426,7 @@
       return;
     }
     profileLine(raw, "");  // the URL's casing until a chart brings Last.fm's
+    paintRememberedTheme(lower);  // no dark flash before a light page's chart arrives (AOTY-75)
     let chart;
     try {
       chart = await loadChart(lower);
@@ -1608,6 +1609,7 @@
     themeUser = lower;
     themeChart = chart && !fv.isFirstVisit(chart) ? chart : null;
     savedTheme = chart && th.IDS.includes(chart.theme) ? chart.theme : th.DEFAULT;
+    rememberTheme(lower, savedTheme);
     showTheme(pickedTheme || savedTheme, withFade);
     renderThemeTools();
   }
@@ -1619,7 +1621,25 @@
     const id = th.IDS.includes(s.theme) ? s.theme : th.DEFAULT;
     if (id === savedTheme) return;
     savedTheme = id;
+    rememberTheme(themeUser, id);
     showTheme(id, true);
+  }
+
+  // The theme a page last had, per viewer (AOTY-75): painted before chart.json arrives, so a
+  // light page doesn't open dark and then flip. A convenience only: chart.json and the status
+  // stay the truth, and replace it as soon as they arrive. "album of the year" isn't painted early
+  // (its colours need the #1 cover). Storage can be blocked: then there's just no head start.
+  const THEME_KEY = "aoty-theme:";
+  function rememberTheme(user, id) {
+    try {
+      if (id === th.DEFAULT) localStorage.removeItem(THEME_KEY + user);
+      else localStorage.setItem(THEME_KEY + user, id);
+    } catch (_) { /* blocked storage: fine */ }
+  }
+  function paintRememberedTheme(user) {
+    let id = null;
+    try { id = localStorage.getItem(THEME_KEY + user); } catch (_) { id = null; }
+    if (id && id !== th.MATCH && th.IDS.includes(id)) applyTheme(th.tokens(id));
   }
 
   const isThemeOwner = () => !!themeUser && canWrite() && me.username === themeUser;
@@ -1702,6 +1722,7 @@
     if (user !== themeUser || id !== pickedTheme) return;  // the page or the pick moved on
     if (r.status === 200) {
       savedTheme = id;
+      rememberTheme(user, id);
       $("theme-msg").textContent = "saved. everyone sees it now.";
       track("event", "theme_set", {theme: id});
       return;

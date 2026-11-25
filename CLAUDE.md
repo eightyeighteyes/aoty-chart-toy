@@ -701,6 +701,34 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     readable), drawn at 32×32. A tainted canvas or a grey cover keeps the default.
 - Preview: `tools/serve_shell.py --sample alice --port 8001`, then "sign in with last.fm" (alice)
   shows the picker; the stand-in API writes the theme into the preview chart at once.
+- **Light themes (AOTY-75, 2026-11-25).** User decisions:
+  - Seven light presets, named after bands and musicians, one per hue like the dark set: white
+    stripes, tangerine dream, yellow magic orchestra, mint royale, the blue nile, lavender diamond,
+    and **gabbie** (New Bands for Old Heads' RIYL Old Heads palette; the name is cleared).
+  - gabbie's headings are **Arial**. The first visit goes light too, aurora included, and the
+    periwinkle darkens on light pages (`LIGHT_KAMP` `#4c55b8`).
+  - The picker lists dark presets, then light ones, each group in rainbow order.
+- **Tokens they added** (`theme.complete` fills defaults for dark and derived themes):
+  - `scheme`: `apply` sets `color-scheme` and `data-scheme` on `<html>`. app.css keys light-page
+    rules on `html[data-scheme="light"]`: a lighter hero shadow, and a wall mask at 0.85, because a
+    0.5 mask over white washes covers out where over black it only dims.
+  - `kamp`: the periwinkle, per theme.
+  - `tileInk` and `tileEnd`: the artist-name tile's text and its gradient's end, which eases back
+    toward the tile until the name reads in the middle. For beach house, green day and golden smog
+    that slightly tames a light accent under light text.
+  - `font`: gabbie's `display-arial`. Every display rule reads `--font-display`, `--display-weight`
+    and `--display-track`. Arial is 700, because it has no 800, and tracked looser, because its
+    glyphs collide at Bricolage's tight spacing.
+- **gabbie's own `#ec4899` is ~3.5:1 on white**, too light for text. It colours the tiles, and the
+  accents are deeper pinks.
+- Rank numbers over covers keep a fixed light ink, whatever `--ink` is.
+- A theme fade drops body's Seam fix 2 gradient while it runs, so the background fades instead of
+  snapping, since gradients can't transition.
+- **The last theme a page had is remembered per viewer** (`localStorage` `aoty-theme:<user>`) and
+  painted before chart.json arrives, so a light page doesn't open dark. It's a convenience only:
+  the chart and status replace it, and "album of the year" isn't painted early.
+- Offscreen captures: every light page's background samples are exactly its `--bg`, white
+  included (Seam fix 2's `#fffffe`).
 
 ## Borealis (AOTY-67, 2026-11-25)
 
