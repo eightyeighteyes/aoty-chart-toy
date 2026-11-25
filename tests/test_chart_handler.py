@@ -220,7 +220,7 @@ def test_a_sync_event_writes_the_chart_with_no_cache(h, world):
   assert out["built"] == 1 and out["failed"] == 0
   chart = s3.json(CHART)
   assert chart["display_name"] == "AliCe" and chart["username"] == "alice"
-  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]] == ["Known"]
+  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["album"]] == ["Known"]
   assert chart["pending"] == 1
   assert s3.meta[CHART] == {"ContentType": "application/json", "CacheControl": "no-cache"}
   assert s3.json(PENDING) == {"keys": [key("B", "Waiting")]}
@@ -272,7 +272,7 @@ def test_pending_pass_rebuilds_only_users_with_newly_resolved_albums(h, world):
   out = h.handler({"pending": True}, None, Deps(s3, ddb))
   assert out == {"built": 1, "skipped": 1, "failed": 0, "checked": 2}
   chart = s3.json(CHART)
-  assert chart["pending"] == 0 and len(chart["rankings"]["track"]) == 2
+  assert chart["pending"] == 0 and len(chart["rankings"]["album"]) == 2
   assert ddb.users["alice"]["chart_pending"] == 0
 
   # Settled: alice drops out of the pending scan.
@@ -295,7 +295,7 @@ def test_unprocessed_keys_are_retried(h, world):
   ddb.add_album("A", "Known")
   out = h.handler({"username": "alice"}, None, Deps(s3, ddb))
   assert out["built"] == 1 and ddb.batch_gets == 2
-  assert s3.json(CHART)["rankings"]["track"]
+  assert s3.json(CHART)["rankings"]["album"]
 
 
 def test_batch_gets_are_split_in_hundreds(h):
@@ -467,11 +467,14 @@ def test_a_group_event_writes_the_group_chart_with_m0s_rules(h):
   assert chart["kind"] == "group" and chart["name"] == "the server"
   assert chart["members"] == ["alice", "bob", "carol"]
   assert (chart["waiting"], chart["unavailable"]) == (1, 1)
-  names = [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]]
+  names = [chart["albums"][i]["album"] for i, _ in chart["rankings"]["listener"]]
   assert names == ["Shared", "Mine"]  # 3 listeners beat 50 plays from one
-  shared = chart["albums"][chart["rankings"]["track"][0][0]]
+  shared = chart["albums"][chart["rankings"]["listener"][0][0]]
   assert shared["listeners"] == 3 and shared["by"] == {"0": 5, "1": 1, "2": 2}
   assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["weighted"]] == ["Shared"]  # 3+ only
+  # By Play: album plays first, so Mine's 50 plays from one listener lead (AOTY-63).
+  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["album"]] == ["Mine", "Shared"]
+  assert set(chart["rankings"]) == {"listener", "album", "weighted"}
 
 
 def test_a_members_sync_rebuilds_their_groups(h):
@@ -502,7 +505,7 @@ def test_the_pending_pass_rebuilds_each_group_of_a_rebuilt_member_once(h):
   h.handler({"pending": True}, None, Deps(s3, ddb))
   assert puts.count(GROUP_CHART[1]) == 1  # both members rebuilt, the group once
   chart = s3.json(GROUP_CHART)
-  assert "Later" in [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]]
+  assert "Later" in [chart["albums"][i]["album"] for i, _ in chart["rankings"]["listener"]]
 
 
 def test_a_group_build_is_skipped_once_its_chart_covers_the_request(h):
@@ -572,7 +575,7 @@ def test_a_removed_member_drops_out_of_the_group_chart(h):
   h.handler({"group": GROUP}, None, Deps(s3, ddb))
   chart = s3.json(GROUP_CHART)
   assert chart["members"] == ["bob", "carol"]
-  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["track"]] == ["Shared"]
+  assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["listener"]] == ["Shared"]
 
 
 def test_a_deleted_groups_chart_is_removed_unless_the_slug_is_back(h):

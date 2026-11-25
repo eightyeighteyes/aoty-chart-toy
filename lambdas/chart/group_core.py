@@ -1,14 +1,17 @@
 """A group's chart (AOTY-50, beta): members' stores + albums items -> one group chart.json.
 
-No I/O here (handler.py does it). The rules are M0's (aoty.aggregate_plays / rank_albums,
-build_page.score_rankings / page_data), so a group of M0's members ranks as M0's page did:
-  - Only albums whose albums item says year == the year are ranked.
-  - By Track: unique listeners, then total plays (one play makes a listener).
-  - By Album: plays / tracks, singles out (common.mbmatch.is_single). Ties: listeners.
+No I/O here (handler.py does it). By Play and Weighted are M0's rules
+(build_page.score_rankings), so a group of M0's members ranks as M0's page did there. Modes
+(user decision 2026-11-25, AOTY-63: By Track is gone, and with it singles; one play makes a
+listener):
+  - Only albums whose albums item says year == the year are ranked; singles never are
+    (common.mbmatch.is_single).
+  - By Listener ("listener"): unique listeners, then plays / tracks.
+  - By Play ("album"): plays / tracks, then listeners.
   - Weighted: plays / tracks / listeners, only with at least WEIGHTED_MIN_LISTENERS listeners.
-  - Each ranking is the top n. A member's own view is ranked in the page, so the chart also
-    keeps every album in any member's top n by their plays or plays per track (ties at the
-    cutoff kept, as M0's page_data did).
+  - Each ranking is the top n. A member's own view is ranked in the page (their plays /
+    tracks, whatever the mode), so the chart also keeps every album in any member's top n by
+    that (ties at the cutoff kept, as M0's page_data did).
   Ties after the score go to the key, so a build is deterministic.
 
 Only members whose sync has finished are ranked ("ready"); the rest are counted, so the page
@@ -21,7 +24,8 @@ group chart.json (version 1):
    "weighted_min_listeners",
    "albums": [{"artist", "album", "plays", "listeners", "by": {member index: plays}, "tracks",
                "single", "art", "fallbacks": [...]}],
-   "rankings": {"track" | "album" | "weighted": [[album index, score]]}}
+   "rankings": {"listener" | "album" | "weighted": [[album index, score]]}}
+Charts built before AOTY-63 have "track" instead of "listener"; the page falls back to "album".
 """
 
 import time
@@ -35,7 +39,7 @@ from common.mbmatch import is_single
 
 GROUP_VERSION = 1
 WEIGHTED_MIN_LISTENERS = 3  # as M0 (build_page.WEIGHTED_MIN_LISTENERS)
-MODES = ("track", "album", "weighted")
+MODES = ("listener", "album", "weighted")
 
 
 def aggregate(stores, items, year):
@@ -60,8 +64,8 @@ def rank(stats, items, n=chart_core.TOP_N):
   albums = [k for k in stats if not is_single(chart_core.track_info(items[k]))]
   per_track = {k: stats[k]["plays"] / items[k]["tracks"] for k in albums}
   ranked = {
-    "track": sorted(
-      ((k, stats[k]["plays"]) for k in stats), key=lambda kv: (-listeners(kv[0]), -kv[1], kv[0])
+    "listener": sorted(
+      ((k, per_track[k]) for k in albums), key=lambda kv: (-listeners(kv[0]), -kv[1], kv[0])
     ),
     "album": sorted(((k, per_track[k]) for k in albums), key=lambda kv: (-kv[1], -listeners(kv[0]), kv[0])),
     "weighted": sorted(
@@ -73,18 +77,18 @@ def rank(stats, items, n=chart_core.TOP_N):
 
 
 def member_keys(stats, items, members, n=chart_core.TOP_N):
-  """Every album in some member's top n by their plays or plays per track, ties kept."""
+  """Every album in some member's top n by their plays per track, ties kept."""
   albums = {k for k in stats if not is_single(chart_core.track_info(items[k]))}
   keep = set()
   for who in members:
-    played = [k for k in stats if who in stats[k]["by"]]
-    for pool, score in (
-      (played, lambda k: stats[k]["by"][who]),
-      ([k for k in played if k in albums], lambda k: stats[k]["by"][who] / items[k]["tracks"]),
-    ):
-      ordered = sorted(pool, key=score, reverse=True)
-      cutoff = score(ordered[n - 1]) if len(ordered) > n else float("-inf")
-      keep.update(k for k in ordered if score(k) >= cutoff)
+    pool = [k for k in stats if who in stats[k]["by"] and k in albums]
+
+    def score(k, who=who):
+      return stats[k]["by"][who] / items[k]["tracks"]
+
+    ordered = sorted(pool, key=score, reverse=True)
+    cutoff = score(ordered[n - 1]) if len(ordered) > n else float("-inf")
+    keep.update(k for k in ordered if score(k) >= cutoff)
   return keep
 
 
@@ -98,7 +102,7 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
   stats = aggregate(stores, items, year)
   rankings = rank(stats, items, n)
   shown = {k for pairs in rankings.values() for k, _ in pairs} | member_keys(stats, items, members, n)
-  order = sorted(shown, key=lambda k: (-len(stats[k]["by"]), -stats[k]["plays"], k))  # By Track order
+  order = sorted(shown, key=lambda k: (-len(stats[k]["by"]), -stats[k]["plays"], k))  # listeners, then plays
   index = {k: i for i, k in enumerate(order)}
   member_index = {m: i for i, m in enumerate(members)}
   meta = {}

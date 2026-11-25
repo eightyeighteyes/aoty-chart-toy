@@ -169,12 +169,39 @@ def test_group_core_ranks_exactly_as_m0s_score_rankings():
     stats[k] = {"plays": sum(by.values()), "by": by}
     items[k] = {"year": YEAR, "tracks": releases[k]["tracks"], "tracks_type": releases[k]["type"]}
   ours = group_core.rank(stats, items)
-  # M0's By Track is the CSV order, which aoty.rank_albums makes (this fixture's rows aren't in it).
-  m0_track = aoty.rank_albums(
-    {k: {"key": k, "listeners": s["by"], "plays": s["plays"]} for k, s in stats.items()}
-  )
-  assert [k for k, _ in ours["track"]] == [s["key"] for s in m0_track]
+  # By Play ("album") and Weighted are M0's; M0 (frozen) has no By Listener, and the app no By
+  # Track (AOTY-63).
+  assert set(ours) == {"listener", "album", "weighted"}
   for mode in ("album", "weighted"):
     m0_keys = [aoty.cache_key(r["Artist"], r["Album"]) for r, _ in m0[mode]]
     assert [k for k, _ in ours[mode]] == m0_keys, mode
     assert [round(s, 6) for _, s in ours[mode]] == [round(s, 6) for _, s in m0[mode]], mode
+
+
+def test_group_core_by_listener_ranks_listeners_then_album_plays():
+  import group_core
+
+  stats = {
+    "loop": {"plays": 90, "by": {"u1": 90}},  # 30 album plays, one listener
+    "short": {"plays": 20, "by": {"u1": 10, "u2": 10}},  # 5
+    "long": {"plays": 60, "by": {"u1": 30, "u2": 30}},  # 3
+    "single": {"plays": 99, "by": {"u1": 33, "u2": 33, "u3": 33}},  # a single: on no chart
+  }
+  tracks = {"loop": (3, "Album"), "short": (4, "Album"), "long": (20, "Album"), "single": (1, "Single")}
+  items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
+  ranked = group_core.rank(stats, items)
+  assert [k for k, _ in ranked["listener"]] == ["short", "long", "loop"]
+  assert [k for k, _ in ranked["album"]] == ["loop", "short", "long"]  # By Play: album plays first
+
+
+def test_group_member_views_keep_each_members_top_albums_by_plays_per_track():
+  import group_core
+
+  stats = {
+    "a": {"plays": 60, "by": {"u1": 60}},  # 60 / 20 = 3
+    "b": {"plays": 10, "by": {"u1": 10}},  # 10 / 2 = 5: u1's top by plays per track
+    "s": {"plays": 90, "by": {"u1": 90}},  # a single: never kept
+  }
+  tracks = {"a": (20, "Album"), "b": (2, "Album"), "s": (1, "Single")}
+  items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
+  assert group_core.member_keys(stats, items, ["u1"], n=1) == {"b"}

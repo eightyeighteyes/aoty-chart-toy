@@ -33,7 +33,7 @@
     first_visit_end: {result: ["painted", "none", "stalled", "private", "error"]},
     group_loaded: {group_size: "count"},
     control_change: {control: ["view", "rank", "filter"],
-                     value: ["poster", "list", "track", "album", "weighted", "member", "everyone"]},
+                     value: ["poster", "list", "listener", "album", "weighted", "member", "everyone"]},
     share_copy: {},
     sign_in: {},
     group_create: {},

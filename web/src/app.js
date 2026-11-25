@@ -27,9 +27,13 @@
   const USERNAME_RE = intro.USERNAME_RE;
   const LOOKUP_TIMEOUT_MS = 10000;
   const CHART_VERSION = 1;
-  const MODES = {
-    track: "ranked by plays",
-    album: "ranked by album plays: track plays divided by the album's track count (singles left out)",
+  // Rankings (user decision 2026-11-25, AOTY-63): By Track is gone. A user page, and a member's
+  // view of a group, is By Play only (album plays); a group's everyone view picks By Listener
+  // (the default), By Play or Weighted.
+  const BY_PLAY = "ranked by album plays: track plays divided by the album's track count (singles left out)";
+  const GROUP_MODES = {
+    listener: "ranked by how many members played them, then album plays (singles left out)",
+    album: BY_PLAY,
     weighted: "ranked by album plays per listener (albums with 3 or more listeners, singles left out)",
   };
 
@@ -77,10 +81,8 @@
     return `<div class="${cls} noart"><span style="--fs:${nameSize(a.artist)}">${esc(a.artist)}</span></div>`;
   }
 
-  // The number this ranking sorts by, plus the plays behind it.
-  function score(a, mode) {
-    if (mode === "track") return `<b>${num(a.score)}</b> plays`;
-    if (mode === "weighted") return `<b>${num(a.score, 2)}</b> album plays per listener · ${num(a.plays)} plays`;
+  // A user page's one ranking (By Play): the album plays it sorts by, plus the plays behind them.
+  function score(a) {
     return `<b>${num(a.score, 1)}</b> album plays · ${num(a.plays)} plays`;
   }
 
@@ -94,16 +96,16 @@
     for (let i = 0; i < groupTotal; i++) s += `<span class="dot${i < a.listeners ? " on" : ""}"></span>`;
     return `<div class="dots" title="${a.listeners} of ${groupTotal} listeners">${s}</div>`;
   }
-  // M0's score words: for one member it's their own plays, not the group's.
+  // M0's score words: for one member it's their own album plays, not the group's. By Listener's
+  // score is album plays too: the listeners it sorts by first lead the stats line.
   function groupScore(a, mode) {
-    const by = groupWho ? ` by ${esc(groupWho)}` : "";
-    if (mode === "track") return `<b>${num(a.score)}</b> plays${by}`;
-    if (mode === "album" || groupWho) return `<b>${num(a.score, 1)}</b> album plays${by}`;
-    return `<b>${num(a.score, 1)}</b> plays per listener`;
+    if (groupWho) return `<b>${num(a.score, 1)}</b> album plays by ${esc(groupWho)}`;
+    if (mode === "weighted") return `<b>${num(a.score, 1)}</b> plays per listener`;
+    return `<b>${num(a.score, 1)}</b> album plays`;
   }
   // The stats line: user pages as before; group pages lead with listeners, worded per place.
   function stats(a, mode, place) {
-    if (!groupTotal) return score(a, mode);
+    if (!groupTotal) return score(a);
     const t = groupTotal, n = `<b>${a.listeners}</b>`;
     const lead = place === "hero" ? `${n} of ${t} listeners` : place === "card" ? `${n} listeners`
         : place === "tile" ? `${n}/${t}` : `${n}/${t} listeners`;
@@ -146,10 +148,12 @@
 
   function renderChart(chart) {
     if (chart.kind === "group") return renderGroup(chart);
-    const mode = chart.rankings[poster.dataset.rank] ? poster.dataset.rank : "track";
-    const rows = chart.rankings[mode].map(([i, s], k) => ({...chart.albums[i], score: s, rank: k + 1}));
+    // One ranking, By Play: no switch (charts built before AOTY-63 also carry "track", unused).
+    const mode = "album";
+    $("rank-switch").hidden = true;
+    const rows = (chart.rankings.album || []).map(([i, s], k) => ({...chart.albums[i], score: s, rank: k + 1}));
     const who = chart.display_name;
-    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${who} played, ${MODES[mode]}.`;
+    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${who} played, ${BY_PLAY}.`;
     const checking = grp.checkingLine(chart);
     if (checking) {
       const p = $("sub").appendChild(document.createElement("span"));
@@ -695,13 +699,16 @@
   }
 
   function renderGroup(chart) {
-    const mode = grp.MODES.includes(poster.dataset.rank) ? poster.dataset.rank : "track";
+    const mode = grp.MODES.includes(poster.dataset.rank) ? poster.dataset.rank : "listener";
     const who = grp.memberIndex(chart, $("who").value);
     const rows = grp.rows(chart, mode, who);
     groupTotal = chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0);
     groupWho = who < 0 ? "" : chart.members[who];
+    // A member's view has one listener, so every mode is By Play: no switch (AOTY-63).
+    $("rank-switch").hidden = who >= 0;
     const whose = who < 0 ? `${chart.name}'s members` : chart.members[who];
-    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${MODES[mode]}.`;
+    const how = who < 0 ? GROUP_MODES[mode] : BY_PLAY;
+    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${how}.`;
     const extra = [grp.loadingLine(chart), grp.checkingLine(chart)].filter(Boolean).join(" · ");
     if (extra) {
       const p = $("sub").appendChild(document.createElement("span"));
@@ -843,7 +850,6 @@
     current = chart;
     groupHeading(groupInfo && groupInfo.id === chart.id ? groupInfo.name : chart.name, chart.year);
     $("controls").hidden = false;
-    $("rank-weighted").hidden = false;
     groupPicklist(chart);
     // Each member's Last.fm profile, as Last.fm's API terms (2.7) ask; built node by node.
     const line = $("footer-user");

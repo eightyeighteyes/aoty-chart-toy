@@ -53,17 +53,17 @@ def test_only_target_year_albums_rank():
   store = make_store({("A", "New"): 5, ("B", "Old"): 50, ("C", "Missed"): 9})
   items = {key("A", "New"): item(), key("B", "Old"): item(year=1994), key("C", "Missed"): item(year=None)}
   chart, pending = build(store, items)
-  assert ranked_names(chart, "track") == ["New"]
+  assert ranked_names(chart, "album") == ["New"]
   assert pending == []
   assert chart["pending"] == 0
 
 
-def test_by_track_is_plays_then_key():
+def test_by_play_ties_go_to_plays_then_key():
   store = make_store({("B", "Bee"): 5, ("A", "Ay"): 5, ("C", "Sea"): 9})
   items = {k: item() for k in core.year_plays(store)}
   chart, _ = build(store, items)
-  assert ranked_names(chart, "track") == ["Sea", "Ay", "Bee"]
-  assert [s for _, s in chart["rankings"]["track"]] == [9, 5, 5]
+  assert ranked_names(chart, "album") == ["Sea", "Ay", "Bee"]
+  assert [s for _, s in chart["rankings"]["album"]] == [0.9, 0.5, 0.5]
 
 
 def test_by_album_divides_by_tracks_and_leaves_singles_out():
@@ -89,10 +89,9 @@ def test_by_album_divides_by_tracks_and_leaves_singles_out():
   # Long and Untyped9 tie on 2.0: more plays first.
   assert ranked_names(chart, "album") == ["Short", "Necks", "Long", "Untyped9"]
   assert [s for _, s in chart["rankings"]["album"]] == [6.0, 3.0, 2.0, 2.0]
-  # By Track keeps singles and uncounted albums.
-  assert "Single" in ranked_names(chart, "track") and "NoCount" in ranked_names(chart, "track")
-  single = {a["album"]: a["single"] for a in chart["albums"]}
-  assert single["Single"] and single["NoCount"] and single["Untyped3"] and not single["Necks"]
+  # No By Track since AOTY-63: singles and uncounted albums aren't on the chart at all.
+  assert {a["album"] for a in chart["albums"]} == {"Short", "Necks", "Long", "Untyped9"}
+  assert not any(a["single"] for a in chart["albums"])
 
 
 def test_album_scores_are_rounded_like_m0():
@@ -105,7 +104,6 @@ def test_each_ranking_is_a_strict_top_n():
   store = make_store({("A", f"Album {i:02d}"): 50 - i for i in range(12)})
   items = {k: item() for k in core.year_plays(store)}
   chart, _ = build(store, items, n=5)
-  assert len(chart["rankings"]["track"]) == 5
   assert len(chart["rankings"]["album"]) == 5
   assert chart["top"] == 5
 
@@ -114,19 +112,18 @@ def test_ties_at_the_cutoff_are_dropped_by_key():
   store = make_store({("A", "X"): 9, ("B", "Y"): 4, ("C", "Z"): 4})
   items = {k: item() for k in core.year_plays(store)}
   chart, _ = build(store, items, n=2)
-  assert ranked_names(chart, "track") == ["X", "Y"]  # Y and Z tie; Y's key sorts first
+  assert ranked_names(chart, "album") == ["X", "Y"]  # Y and Z tie; Y's key sorts first
 
 
 def test_albums_appear_once_and_only_if_shown():
   store = make_store({("A", f"Album {i:02d}"): 50 - i for i in range(8)})
   items = {k: item() for k in core.year_plays(store)}
-  items[key("A", "Album 00")] = item(ttype="Single")  # track-only
+  items[key("A", "Album 00")] = item(ttype="Single")  # the most played, but a single: not shown
   chart, _ = build(store, items, n=3)
   names = [a["album"] for a in chart["albums"]]
   assert len(names) == len(set(names))
-  shown = set(ranked_names(chart, "track")) | set(ranked_names(chart, "album"))
-  assert set(names) == shown
-  assert names == sorted(names)  # By Track order (plays desc here = name order)
+  assert set(names) == set(ranked_names(chart, "album")) == {"Album 01", "Album 02", "Album 03"}
+  assert names == sorted(names)  # by plays (plays desc here = name order)
 
 
 def test_pending_counts_played_albums_without_an_item():
@@ -166,7 +163,7 @@ def test_empty_store_and_no_target_year_albums_still_make_a_chart():
   ):
     chart, pending = build(store, items)
     assert chart["albums"] == []
-    assert chart["rankings"] == {"track": [], "album": []}
+    assert chart["rankings"] == {"album": []}
     assert pending == []
 
 
@@ -181,7 +178,7 @@ def test_chart_shape():
   assert (chart["username"], chart["display_name"], chart["year"]) == ("alice", "Alice", 2026)
   assert chart["generated_at"] == "2026-11-22T12:00:00Z"
   assert chart["featured"] == core.FEATURED_N
-  assert set(chart["rankings"]) == {"track", "album"}  # no Weighted for one user
+  assert set(chart["rankings"]) == {"album"}  # By Play only: no By Track (AOTY-63), no Weighted for one user
   assert chart["albums"][0] == {
     "artist": "Artist", "album": "Title", "plays": 4, "tracks": 4, "single": False,
     "art": caa_url("rg-1"), "fallbacks": [],

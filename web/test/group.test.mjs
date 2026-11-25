@@ -15,22 +15,33 @@ const chart = {
     {album: "Loop", listeners: 1, tracks: 2, single: false, by: {1: 40}},
     {album: "Single", listeners: 2, tracks: 1, single: true, by: {0: 9, 1: 30}},
   ],
-  rankings: {track: [[0, 8], [2, 39], [1, 40]], album: [[1, 20], [0, 0.8]], weighted: [[0, 0.267]]},
+  rankings: {listener: [[0, 0.8], [1, 20]], album: [[1, 20], [0, 0.8]], weighted: [[0, 0.267]]},
 };
 const names = rs => rs.map(r => r.album);
 
 test("everyone's rankings come straight from the chart", () => {
-  assert.deepEqual(names(rows(chart, "track")), ["Shared", "Single", "Loop"]);
+  assert.deepEqual(names(rows(chart, "listener")), ["Shared", "Loop"]);
+  assert.deepEqual(names(rows(chart, "album")), ["Loop", "Shared"]);
   assert.deepEqual(rows(chart, "weighted").map(r => r.rank), [1]);
-  assert.deepEqual(names(rows(chart, "nonsense")), ["Shared", "Single", "Loop"]);
 });
 
-test("a member re-ranks by their own plays, singles out of album modes", () => {
+test("By Listener is the default, and a saved By Track falls back to it", () => {
+  assert.deepEqual(names(rows(chart, "nonsense")), ["Shared", "Loop"]);
+  assert.deepEqual(names(rows(chart, "track")), ["Shared", "Loop"]);
+});
+
+test("a chart built before By Listener shows By Play until it's rebuilt", () => {
+  const old = {...chart, rankings: {track: [[0, 8], [2, 39], [1, 40]], album: [[1, 20], [0, 0.8]]}};
+  assert.deepEqual(names(rows(old, "listener")), ["Loop", "Shared"]);
+});
+
+test("a member re-ranks by their own album plays in every mode, singles out", () => {
   const bob = memberIndex(chart, "BOB");
   assert.equal(bob, 1);
-  assert.deepEqual(names(rows(chart, "track", bob)), ["Loop", "Single", "Shared"]);
-  assert.deepEqual(names(rows(chart, "album", bob)), ["Loop", "Shared"]);
-  assert.deepEqual(rows(chart, "weighted", bob).map(r => r.score), [20, 0.1]);
+  for (const mode of ["listener", "album", "weighted"]) {
+    assert.deepEqual(names(rows(chart, mode, bob)), ["Loop", "Shared"], mode);
+    assert.deepEqual(rows(chart, mode, bob).map(r => r.score), [20, 0.1], mode);
+  }
 });
 
 test("ties go to the group's listeners", () => {
@@ -38,7 +49,7 @@ test("ties go to the group's listeners", () => {
     {album: "Few", listeners: 1, tracks: 1, single: false, by: {0: 5}},
     {album: "Many", listeners: 3, tracks: 1, single: false, by: {0: 5}},
   ]};
-  assert.deepEqual(names(rows(tie, "track", 0)), ["Many", "Few"]);
+  assert.deepEqual(names(rows(tie, "listener", 0)), ["Many", "Few"]);
 });
 
 test("unknown names are everyone", () => {

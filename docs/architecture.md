@@ -140,7 +140,7 @@ outcomes are log fields rather than metrics, so they cost nothing until queried.
 A visit, as built (AOTY-21, 22, 24). `GET /api/health` reports the env and the deployed commit's
 SHA, read from the zip's `build.json` (AOTY-35).
 
-A first visit is a chart page with nothing ranked yet: no chart.json, or one whose By Track
+A first visit is a chart page with nothing ranked yet: no chart.json, or one whose By Play
 ranking is empty. The first build runs before the mb lane has dated anything, so that empty
 chart is the usual case. The page shows a dim wall of the user's recent covers (the status's
 `wall`, from sync's `preview`) and the running stats (`so_far`). The banner carries a progress

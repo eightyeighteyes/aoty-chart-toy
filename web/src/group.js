@@ -1,15 +1,14 @@
 // The group page's pure rules (AOTY-51), ported from M0's build_page.py PAGE_SCRIPT. No DOM.
 //
-// A group chart.json (lambdas/chart/group_core.py) has everyone's three rankings. Picking a
-// member re-ranks here, by M0's rules:
-//   By Track   their plays
-//   By Album   their plays / tracks, singles out
-//   Weighted   the same as By Album: one listener
-// Ties go to the group's listeners, then the chart's own order (By Track for everyone).
+// A group chart.json (lambdas/chart/group_core.py) has everyone's three rankings: By Listener
+// ("listener", the default), By Play ("album") and Weighted (AOTY-63: By Track is gone). Picking
+// a member re-ranks here by their plays / tracks, singles out, whatever the mode: with one
+// listener all three are the same. Ties go to the group's listeners, then the chart's own order
+// (listeners, then plays).
 (root => {
   "use strict";
 
-  const MODES = ["track", "album", "weighted"];
+  const MODES = ["listener", "album", "weighted"];
   const GROUP_VERSION = 1;
   const ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;  // the group's slug, as the chart builder's
 
@@ -23,18 +22,17 @@
 
   // [{...album, score, rank}] for one mode, for everyone (who < 0) or one member.
   function rows(chart, mode, who = -1) {
-    if (!MODES.includes(mode)) mode = "track";
+    if (!MODES.includes(mode)) mode = "listener";
     let pairs;
     if (who < 0) {
-      pairs = chart.rankings[mode] || [];
+      // A chart built before AOTY-63 has no "listener" ranking until it's rebuilt: show By Play.
+      pairs = chart.rankings[mode] || (mode === "listener" && chart.rankings.album) || [];
     } else {
       const key = String(who);
       const pool = [];
       chart.albums.forEach((a, i) => {
         const plays = (a.by || {})[key];
-        if (!plays) return;
-        if (mode === "track") pool.push([i, plays]);
-        else if (!a.single && a.tracks) pool.push([i, plays / a.tracks]);
+        if (plays && !a.single && a.tracks) pool.push([i, plays / a.tracks]);
       });
       pool.sort((x, y) => y[1] - x[1] || chart.albums[y[0]].listeners - chart.albums[x[0]].listeners || x[0] - y[0]);
       pairs = pool.slice(0, chart.top || 100);

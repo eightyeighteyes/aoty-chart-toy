@@ -225,7 +225,7 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   _update_user(deps, username, {
     "chart_built_at": now, "chart_pending": len(pending), "chart_plays": sum(plays.values()),
     "chart_albums": len(plays), "chart_hits": core.year_hits(plays, items, year),
-  }, remove=("preview",) if chart["rankings"]["track"] else ())  # fmt: skip
+  }, remove=("preview",) if chart["rankings"]["album"] else ())  # fmt: skip
   log.info("chart %s: %d albums shown, %d pending", _tag(username), len(chart["albums"]), len(pending))
   return True
 
