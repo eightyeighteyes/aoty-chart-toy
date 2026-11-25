@@ -714,7 +714,7 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     - `destroy()` calls `WEBGL_lose_context`, because browsers cap live contexts at about 16.
 - **On the page** (`app.js` "the aurora"):
   - It mounts 1.5 s into a first visit, so a chart that's already there never flashes it.
-  - The canvas is fixed at `z-index: -1`, and `html.aurora` makes body's background transparent:
+  - The canvas is fixed at `z-index: -1`, and `html.has-aurora` makes body's background transparent:
     negative z-index paints over the root's background but under body's. **The class stays until
     the 0.6 s fade-out ends**, or the canvas vanishes at once.
   - The first 6 wall covers load once, with CORS. A CORS failure still puts the cover on the

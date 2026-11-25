@@ -230,24 +230,24 @@ ol {
 }
 .wall-art { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
 /* The first visit's aurora (AOTY-67, web/src/borealis.js): a fixed, opaque WebGL canvas behind
-   everything. z-index -1 paints it over the root's background but under body's, so html.aurora
+   everything. z-index -1 paints it over the root's background but under body's, so html.has-aurora
    makes body transparent while it's up; html keeps painting --bg (Seam fix), and the opaque canvas
    covers every pixel, so Seam fix 2's near-flat gradient isn't needed meanwhile. lvh: a phone's
    URL bar showing and hiding mustn't resize it. */
-.aurora {
+canvas.aurora {
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100lvh;
   z-index: -1; pointer-events: none; display: block;
   opacity: 0; transition: opacity .6s ease;
 }
-.aurora.on { opacity: 1; }
-html.aurora body { background: transparent; }
+canvas.aurora.on { opacity: 1; }
+html.has-aurora body { background: transparent; }
 /* Text over the curtains: a soft halo in the page colour, so it reads on the brightest frames
    without a panel (which would shift the layout when the aurora mounts). */
-html.aurora header, html.aurora .firstvisit, html.aurora .credits, html.aurora .kampbar,
-html.aurora .account {
+html.has-aurora header, html.has-aurora .firstvisit, html.has-aurora .credits, html.has-aurora .kampbar,
+html.has-aurora .account {
   text-shadow: 0 0 6px var(--bg), 0 0 14px var(--bg), 0 0 24px var(--bg);
 }
-@media (prefers-reduced-motion: reduce) { .aurora { transition: none; } }
+@media (prefers-reduced-motion: reduce) { canvas.aurora { transition: none; } }
 @keyframes wall-in { from { opacity: 0; transform: scale(.94); } }
 @media (prefers-reduced-motion: reduce) { .wall li { animation: none; } }
 /* The request line (AOTY-26): a new user's place in line while syncs are backed up. */

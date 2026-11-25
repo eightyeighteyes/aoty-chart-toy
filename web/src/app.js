@@ -618,7 +618,7 @@
   // it, and it fades out when the chart paints or the page leaves the first visit.
   //
   // The canvas sits at z-index -1, under body's in-flow content but over the root's background,
-  // and html.aurora makes body's own background transparent so it shows. That class stays until
+  // and html.has-aurora makes body's own background transparent so it shows. That class stays until
   // the fade-out ends: removed earlier, body's background would hide the canvas at once.
   const bo = globalThis.aotyBorealis;  // web/src/borealis.js, loaded first
   const AURORA_DELAY_MS = 1500, AURORA_FADE_MS = 600;
@@ -647,7 +647,7 @@
     if (!a) { canvas.remove(); return; }  // no WebGL: the page stays as it always was
     aurora = a;
     auroraCanvas = canvas;
-    document.documentElement.classList.add("aurora");
+    document.documentElement.classList.add("has-aurora");
     requestAnimationFrame(() => canvas.classList.add("on"));  // fades in
     feedAurora();  // covers that arrived before it mounted
   }
@@ -694,7 +694,7 @@
       done = true;
       a.destroy();
       canvas.remove();
-      if (!auroraCanvas) document.documentElement.classList.remove("aurora");
+      if (!auroraCanvas) document.documentElement.classList.remove("has-aurora");
     };
     if (lost) return finish();
     canvas.addEventListener("transitionend", finish, {once: true});
