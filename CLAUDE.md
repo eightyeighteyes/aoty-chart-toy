@@ -462,6 +462,18 @@ not daily totals from paging scrobbles (the story text was revised to match).
     - It has no `data-artist`, so the global `coverFallback` never touches it.
     - `decode()` rejecting after `load` (Firefox) still counts as loaded.
     - SVGs need `width`/`height`, or Firefox's `naturalWidth` is 0.
+- **The wall drifts in rows** (user decision 2026-11-25, AOTY-68: slow drift, rows at slightly
+  different speeds).
+  - Up to four rows of fixed-size covers (`firstvisit.wallRows`). Loaded covers go round-robin, so
+    rows grow evenly, and new covers land at a row's end.
+  - Each row sways ±28 px (±20 on phones) with its own period, 46/59/72/85 s, and neighbours go
+    opposite ways (`firstvisit.drift`). Reduced motion: still.
+  - Rows are wider than the wall by the sway on both sides and the wall clips them, so a sway never
+    shows a bare edge or scrolls the page sideways. The edges fade by `mask-image`, which also
+    carries the old 0.5 opacity: one effect, not two.
+  - The rows' infinite transforms keep them on their own layers (Seam fix 1's condition).
+    Offscreen pixel samples with and without WebGL found the background exactly `--bg`; redo
+    that after changing the wall's layering.
 - Preview with `serve_shell.py`: `newbie*` (the whole flow, about 40 s) and `nothing*`. The fake
   status goes through `api_core.status()` from fake rows. The fake wall mixes ready, slow
   (`<base>preview/slow-cover`, up to 10 s), broken and missing covers.
