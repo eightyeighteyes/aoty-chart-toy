@@ -15,6 +15,10 @@ read older data can never overwrite a newer chart. Two events:
       From the api after a group change (AOTY-48). Skipped when the group's chart_built_at is at
       or after requested_at. A group is also rebuilt after each member's own build, unless a group
       build since that member's sync finished already read them (chart_read_at, AOTY-55).
+  {"username": "alice", "restyle": true}
+      From the api after the owner picked a page theme (AOTY-65): copies the users row's theme
+      into the published chart.json, without rebuilding anything (restyle). Full builds carry the
+      row's theme too.
   {"group": "<slug>", "deleted": true}
       From the api after a group was deleted or moved to a new slug: removes its chart, unless a
       group with that slug exists again by now (then it's rebuilt). Coming through here orders the
@@ -119,6 +123,8 @@ def handler(event, context, deps=None):
     if not USERNAME_RE.match(username):
       log.warning("invalid username in event; dropped")
       totals["skipped"] += 1
+    elif event.get("restyle"):
+      _guarded(deps, username, totals, lambda: _count(totals, restyle(deps, username)))
     else:
       requested_at = int(event.get("requested_at") or 0)
       year = int(event.get("year") or TARGET_YEAR)
@@ -211,8 +217,9 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   items = _get_items(deps, sorted(plays))
   images = _cover_images(deps, username, year, store, items, now, totals)
   chart, pending = core.build_chart(
-    store, items, username=username, display_name=row.get("display_name"), now=now, images=images
-  )
+    store, items, username=username, display_name=row.get("display_name"), now=now, images=images,
+    theme=row.get("theme"),
+  )  # fmt: skip
   _put_json(
     deps, deps.env["SITE_BUCKET"], chart_key(deps.env.get("SITE_PREFIX", ""), username), chart,
     CacheControl="no-cache",
@@ -227,6 +234,30 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
     "chart_albums": len(plays), "chart_hits": core.year_hits(plays, items, year),
   }, remove=("preview",) if chart["rankings"]["album"] else ())  # fmt: skip
   log.info("chart %s: %d albums shown, %d pending", _tag(username), len(chart["albums"]), len(pending))
+  return True
+
+
+def restyle(deps, username):
+  """Copy the users row's theme into the published chart.json (AOTY-65). False when nothing
+  changed: no chart yet, or it already carries that theme.
+
+  The theme comes from the row, never the event: async events repeat and arrive out of order, so a
+  late one for an older pick must not undo a newer one. No chart_built_at means no chart to read
+  (and without s3:ListBucket a missing object answers 403, not 404). Nothing is rebuilt: no store,
+  no Last.fm, no groups."""
+  row = _get_user(deps, username)
+  if not row.get("chart_built_at"):
+    return False
+  key = chart_key(deps.env.get("SITE_PREFIX", ""), username)
+  body = _get_object(deps, deps.env["SITE_BUCKET"], key)
+  if body is None:
+    return False
+  chart = json.loads(body)
+  before = chart.get("theme")
+  if core.with_theme(chart, row.get("theme")).get("theme") == before:
+    return False
+  _put_json(deps, deps.env["SITE_BUCKET"], key, chart, CacheControl="no-cache")
+  log.info("chart %s restyled", _tag(username))
   return True
 
 

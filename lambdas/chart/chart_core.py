@@ -22,7 +22,8 @@ Rules (M0's, CLAUDE.md; user decisions 2026-11-22):
 chart.json (CHART_VERSION 1):
   {"version", "username", "display_name", "year", "generated_at", "pending", "pending_top", "top", "featured",
    "albums": [{"artist", "album", "plays", "tracks", "single", "art", "fallbacks": [...]}],
-   "rankings": {"album": [[album index, album plays]]}}
+   "rankings": {"album": [[album index, album plays]]},
+   "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-65)}
 albums holds each album once, only if the ranking shows it, by plays. Charts built before
 AOTY-63 also carry a "track" ranking, which the page ignores.
 """
@@ -30,6 +31,7 @@ AOTY-63 also carry a "track" ranking, which the page ignores.
 import time
 from collections import Counter
 
+from common import themes
 from common.albumkey import base_title
 from common.covers import cover
 from common.mbmatch import is_single
@@ -113,10 +115,21 @@ def cover_lookups(shown, store, cache, now):
   return out
 
 
-def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=None):
+def with_theme(chart, theme):
+  """chart with its owner's page theme (AOTY-65) set, or removed for the default or anything that
+  isn't a common.themes id. Returns the chart (changed in place)."""
+  if themes.valid(theme) and theme != themes.DEFAULT:
+    chart["theme"] = theme
+  else:
+    chart.pop("theme", None)
+  return chart
+
+
+def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=None, theme=None):
   """(chart dict, pending keys) for one user. display_name falls back to the username.
 
   images: {key: cover URL} from album.getInfo, used when the store has no image for a key.
+  theme: the users row's theme (AOTY-65), published as "theme" unless it's the default.
   """
   year = store["year"]
   plays = year_plays(store)
@@ -152,4 +165,4 @@ def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=No
     "albums": albums,
     "rankings": {mode: [[index[k], round(s, 3)] for k, s in rankings[mode]] for mode in MODES},
   }
-  return chart, pending
+  return with_theme(chart, theme), pending
