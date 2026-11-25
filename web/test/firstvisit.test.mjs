@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const {isFirstVisit, describe, makeProgress, soFar, firstVisitEnd, endMessage, makeQueue, waitText, queueLines,
-       tabTitle, refusal} = require("../src/firstvisit.js");
+       tabTitle, refusal, wallSources, inLine} = require("../src/firstvisit.js");
 
 const reading = (done, total, scrobbles = 0) => ({stage: "reading", weeks: {done, total}, scrobbles});
 const dating = (checked, total, hits = 0) => ({stage: "dating", albums: {checked, total, hits}});
@@ -162,4 +162,36 @@ test("capacity refusals have their own words, and anything else is null", () => 
     assert.equal(title, title.toLowerCase());
     assert.equal(text, text.toLowerCase());
   }
+});
+
+test("the wall tries each cover's art then its fallbacks, and leaves out covers with no art", () => {
+  const wall = [
+    {artist: "A", album: "One", art: "https://x/1.jpg", fallbacks: ["https://x/1b.jpg", "https://caa/1"]},
+    {artist: "B", album: "Two", art: "", fallbacks: []},  // no cover: never a name tile on the wall
+    {artist: "C", album: "Three", art: "https://x/3.jpg"},  // no fallbacks field
+    null, "junk", {artist: "D", art: 7},
+  ];
+  assert.deepEqual(wallSources(wall), [
+    ["https://x/1.jpg", "https://x/1b.jpg", "https://caa/1"],
+    ["https://x/3.jpg"],
+  ]);
+});
+
+test("the wall fetches each URL once", () => {
+  const wall = [
+    {art: "https://x/1.jpg", fallbacks: ["https://x/1.jpg", "https://caa/1"]},  // repeats itself
+    {art: "https://x/1.jpg", fallbacks: []},  // the same album twice
+    {art: "https://x/2.jpg", fallbacks: ["https://caa/1", "https://caa/2"]},  // a shared fallback
+  ];
+  assert.deepEqual(wallSources(wall), [["https://x/1.jpg", "https://caa/1"], ["https://x/2.jpg", "https://caa/2"]]);
+  assert.deepEqual(wallSources(undefined), []);
+});
+
+test("only a status with a place in line polls at the in-line pace", () => {
+  assert.equal(inLine({stage: "queued", queue: {position: 37, wait_s: 600}}), true);
+  // Just queued, nobody ahead or the counters unreadable: the sync is about to start.
+  assert.equal(inLine({stage: "queued"}), false);
+  assert.equal(inLine({stage: "queued", queue: {position: 0}}), false);
+  assert.equal(inLine({stage: "reading", queue: {position: 3}}), false);
+  assert.equal(inLine(null), false);
 });

@@ -82,6 +82,29 @@
     return `<div class="${cls} noart"><span style="--fs:${nameSize(a.artist)}">${esc(a.artist)}</span></div>`;
   }
 
+  // One cover, loaded off-screen (AOTY-66): the first of urls that loads, as the <img> itself (so
+  // it's fetched once and can go straight on the page), or null when every URL failed. cors: a CORS
+  // request, so its pixels can be read (AOTY-65's theme). Shared with AOTY-67's cover palette.
+  function loadCover(urls, {cors = false} = {}) {
+    return new Promise(resolve => {
+      const next = i => {
+        if (i >= urls.length) return resolve(null);
+        const img = new Image();
+        if (cors) img.crossOrigin = "anonymous";
+        img.decoding = "async";
+        img.onerror = () => next(i + 1);
+        img.onload = async () => {
+          img.onload = img.onerror = null;
+          // decode() can reject for an image that loaded fine (Firefox): loaded is loaded.
+          if (img.decode) { try { await img.decode(); } catch (_) { /* still shown */ } }
+          if (img.naturalWidth > 0) resolve(img); else next(i + 1);
+        };
+        img.src = urls[i];
+      };
+      next(0);
+    });
+  }
+
   // A user page's one ranking (By Play): the album plays it sorts by, plus the plays behind them.
   function score(a) {
     return `<b>${num(a.score, 1)}</b> album plays · ${num(a.plays)} plays`;
@@ -448,6 +471,7 @@
     const wall = box.appendChild(document.createElement("ul"));
     wall.className = "wall";
     wall.setAttribute("aria-hidden", "true");  // decoration: the numbers above carry the meaning
+    wall.hidden = true;  // until its first cover has loaded (fillWall)
     $("ranking").replaceChildren(box);
     firstView = {box, queue, sofar, note, wall, walled: false};
   }
@@ -526,9 +550,32 @@
     firstView.note.hidden = !text;
     if (!firstView.walled && Array.isArray(s.wall) && s.wall.length) {
       firstView.walled = true;
-      firstView.wall.innerHTML = s.wall
-          .map((a, i) => `<li style="--i:${i}">${cover({...a, fallbacks: a.fallbacks || []}, "wall-art")}</li>`)
-          .join("");
+      fillWall(firstView.wall, s.wall);
+    }
+  }
+
+  // Only covers that loaded go on the wall (AOTY-66, user decision 2026-11-25): each is added at
+  // the end as it arrives, so the tiles already there never move, and fades in with wall-in. Covers
+  // that fail every URL, and albums with no cover, never show: no blanks, no broken images, no
+  // artist-name tiles. The wall stays hidden until its first cover lands. A burst of arrivals (a
+  // warm cache) staggers by its place in the burst, as the chart's cards do.
+  const WALL_BURST_MS = 400;
+  function fillWall(wall, entries) {
+    let burst = 0, last = -Infinity;
+    for (const urls of fv.wallSources(entries)) {
+      loadCover(urls).then(img => {
+        if (!img || !wall.isConnected) return;  // a newer first-visit view, or the chart, replaced it
+        const now = performance.now();
+        if (now - last > WALL_BURST_MS) burst = 0;
+        last = now;
+        img.className = "wall-art";
+        img.alt = "";  // decoration: the wall is aria-hidden
+        const li = document.createElement("li");
+        li.style.setProperty("--i", String(burst++));
+        li.appendChild(img);
+        wall.appendChild(li);
+        wall.hidden = false;
+      });
     }
   }
 
@@ -603,7 +650,7 @@
       // In line, the banner carries the place (announced at most once a minute); after, progress.
       if (position) say(place.live, ""); else say(live, detail);
       document.title = fv.tabTitle(baseTitle, position, percent);
-      delay = inLine ? queuedDelay() : Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
+      delay = fv.inLine(s) ? queuedDelay() : Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
       schedule(delay);
       return true;
     }
@@ -633,7 +680,7 @@
         datingSince = datingSince || Date.now();
         if (!firstSession && Date.now() - datingSince > DATING_FOR_MS) return stop("");
         delay = POLL_DATING_MS;
-      } else if (s.stage === "queued") {
+      } else if (fv.inLine(s)) {
         delay = queuedDelay();
       } else {
         delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
@@ -1366,30 +1413,20 @@
     return a && a.art ? [a.art, ...(a.fallbacks || [])] : [];
   }
 
-  // The #1 cover's colours as a theme, or null. Resolves once the cover loaded or every URL failed.
-  function coverTheme(urls) {
-    return new Promise(resolve => {
-      const next = i => {
-        if (i >= urls.length) return resolve(null);
-        const img = new Image();
-        img.crossOrigin = "anonymous";  // its own CORS request: the chart's <img>s aren't readable
-        img.decoding = "async";
-        img.onerror = () => next(i + 1);
-        img.onload = () => {
-          try {
-            const c = document.createElement("canvas");
-            c.width = c.height = 32;
-            const ctx = c.getContext("2d", {willReadFrequently: true});
-            ctx.drawImage(img, 0, 0, 32, 32);
-            resolve(th.derive(ctx.getImageData(0, 0, 32, 32).data));
-          } catch (_) {
-            resolve(null);  // a tainted canvas: the host didn't allow it after all
-          }
-        };
-        img.src = urls[i];
-      };
-      next(0);
-    });
+  // The #1 cover's colours as a theme, or null. Its own CORS request: the chart's <img>s aren't
+  // readable.
+  async function coverTheme(urls) {
+    const img = await loadCover(urls, {cors: true});
+    if (!img) return null;
+    try {
+      const c = document.createElement("canvas");
+      c.width = c.height = 32;
+      const ctx = c.getContext("2d", {willReadFrequently: true});
+      ctx.drawImage(img, 0, 0, 32, 32);
+      return th.derive(ctx.getImageData(0, 0, 32, 32).data);
+    } catch (_) {
+      return null;  // a tainted canvas: the host didn't allow it after all
+    }
   }
 
   let matchKey = "", matchTokens = null;  // the cover the "album of the year" colours came from

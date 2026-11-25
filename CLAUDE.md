@@ -448,8 +448,23 @@ not daily totals from paging scrobbles (the story text was revised to match).
 - Counts say "plays", not "scrobbles": charts leave out album-less scrobbles.
 - Ends: every album checked and none from the year ("none"); the chart stopped rebuilding with
   albums unchecked, or 10 minutes passed ("stalled").
+- **The wall shows only covers that loaded** (user decision 2026-11-25, AOTY-66).
+  - Never a blank, half-loaded or broken cover, and never an artist-name tile; the chart keeps its
+    tiles.
+  - Each cover loads off-screen (`app.js` `loadCover`, shared with AOTY-65's theme and AOTY-67).
+  - It's added at the end **in arrival order**, not most recent first, so tiles already there
+    never move.
+  - It fades in staggered by its place in a burst. Under reduced motion covers just appear.
+  - Covers that fail every URL, and albums with no art, are dropped (`firstvisit.wallSources`), so
+    the wall may be smaller. The wall stays hidden until its first cover lands.
+  - Gotchas:
+    - The loaded `<img>` itself goes on the wall, so each cover is fetched once.
+    - It has no `data-artist`, so the global `coverFallback` never touches it.
+    - `decode()` rejecting after `load` (Firefox) still counts as loaded.
+    - SVGs need `width`/`height`, or Firefox's `naturalWidth` is 0.
 - Preview with `serve_shell.py`: `newbie*` (the whole flow, about 40 s) and `nothing*`. The fake
-  status goes through `api_core.status()` from fake rows.
+  status goes through `api_core.status()` from fake rows. The fake wall mixes ready, slow
+  (`<base>preview/slow-cover`, up to 10 s), broken and missing covers.
 
 ## Sync on visit (AOTY-22, 2026-11-23)
 
