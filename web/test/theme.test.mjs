@@ -4,7 +4,8 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {THEMES, IDS, ORDER, LABELS, MATCH, contrast, seamOf, failures, derive, tokens} = require("../src/theme.js");
+const {THEMES, IDS, ORDER, LABELS, MATCH, KAMP, LIGHT_KAMP, contrast, seamOf, failures, derive, tokens, complete,
+       apply, reset} = require("../src/theme.js");
 
 // A cover's pixels: n of each [r, g, b], opaque.
 function cover(...parts) {
@@ -18,8 +19,49 @@ test("contrast is the WCAG ratio", () => {
   assert.equal(contrast("#777777", "#777777"), 1);
 });
 
-test("every preset is legible everywhere app.css uses its colours, kamp's periwinkle included", () => {
-  for (const [id, t] of Object.entries(THEMES)) assert.deepEqual(failures(t), [], id);
+test("every preset is legible everywhere app.css uses its colours, kamp's periwinkle and the tiles included", () => {
+  // As painted: complete() fills the periwinkle, the tile, its ink and its gradient's end.
+  for (const [id, t] of Object.entries(THEMES)) assert.deepEqual(failures(complete(t)), [], id);
+});
+
+test("light presets switch the page to light, with the darker periwinkle and page-ink tiles", () => {
+  const light = Object.keys(THEMES).filter(id => THEMES[id].scheme === "light");
+  assert.deepEqual(light.sort(), ["gabbie", "lavender-diamond", "mint-royale", "tangerine-dream", "the-blue-nile",
+                                  "white-stripes", "yellow-magic-orchestra"]);
+  for (const id of light) {
+    const c = complete(THEMES[id]);
+    assert.equal(c.scheme, "light", id);
+    assert.equal(c.kamp, LIGHT_KAMP, id);
+    assert.ok(contrast(c.ink, c.bg) > 12, `${id}: a light page with dark ink`);
+  }
+  assert.equal(complete(THEMES.kamp).scheme, "dark");
+  assert.equal(complete(THEMES.kamp).kamp, KAMP);
+  assert.equal(complete(THEMES.gabbie).font, "display-arial");
+  assert.equal(complete(THEMES.gabbie).tile, "#ec4899");  // New Bands for Old Heads' own pink, on the tiles
+});
+
+test("a tile's gradient end eases back only when the name in its middle wouldn't read", () => {
+  assert.equal(complete(THEMES.poster).tileEnd, THEMES.poster.accent);  // unchanged where it reads
+  const c = complete(THEMES["green-day"]);  // a light green under light ink
+  assert.notEqual(c.tileEnd, THEMES["green-day"].accent);
+  assert.deepEqual(failures(c), []);
+});
+
+test("apply and reset round-trip every property, the colour scheme and the page flags", () => {
+  const props = new Map(), attrs = new Map();
+  const el = {style: {setProperty: (k, v) => props.set(k, v), removeProperty: k => props.delete(k)},
+              setAttribute: (k, v) => attrs.set(k, v), removeAttribute: k => attrs.delete(k)};
+  apply(THEMES.gabbie, el);
+  assert.equal(props.get("--bg"), "#ffffff");
+  assert.equal(props.get("--kamp"), LIGHT_KAMP);
+  assert.equal(props.get("--bg-seam"), "#fffffe");
+  assert.equal(props.get("color-scheme"), "light");
+  assert.deepEqual(Object.fromEntries(attrs), {"data-scheme": "light", "data-font": "display-arial"});
+  apply(THEMES["beach-house"], el);  // a dark preset after a light one: the font flag goes
+  assert.deepEqual(Object.fromEntries(attrs), {"data-scheme": "dark"});
+  reset(el);
+  assert.equal(props.size, 0);
+  assert.equal(attrs.size, 0);
 });
 
 test("the ids are the presets plus match1, each with a lowercase label", () => {
@@ -28,9 +70,11 @@ test("the ids are the presets plus match1, each with a lowercase label", () => {
   assert.equal(LABELS[MATCH], "album of the year");
 });
 
-test("the picker leads with album of the year, then the presets in rainbow order", () => {
+test("the picker leads with album of the year, then dark presets, then light, each in rainbow order", () => {
   assert.deepEqual(ORDER, ["match1", "strawberry-switchblade", "poster", "foxy-brown", "golden-smog",
-                           "green-day", "beach-house", "kamp", "deep-purple", "blackpink"]);
+                           "green-day", "beach-house", "kamp", "deep-purple", "blackpink",
+                           "white-stripes", "tangerine-dream", "yellow-magic-orchestra", "mint-royale",
+                           "the-blue-nile", "lavender-diamond", "gabbie"]);
   assert.deepEqual([...ORDER].sort(), [...IDS].sort());  // every theme, once
   assert.equal(LABELS.poster, "oranger");
 });
@@ -38,6 +82,7 @@ test("the picker leads with album of the year, then the presets in rainbow order
 test("the seam colour is one step of blue away, and never wraps", () => {
   assert.equal(seamOf("#0d0c12"), "#0d0c13");  // the poster's: app.css's Seam fix 2 value
   assert.equal(seamOf("#0000ff"), "#0000fe");
+  assert.equal(seamOf("#ffffff"), "#fffffe");  // a white page (gabbie)
   assert.equal(seamOf("#000000"), "#000001");
 });
 

@@ -18,6 +18,14 @@ PRESETS = (
   "green-day",
   "foxy-brown",
   "golden-smog",
+  # Light presets (AOTY-75), named after bands and musicians like the dark ones.
+  "white-stripes",
+  "tangerine-dream",
+  "yellow-magic-orchestra",
+  "mint-royale",
+  "the-blue-nile",
+  "lavender-diamond",
+  "gabbie",
 )
 IDS = frozenset((*PRESETS, MATCH))
 
