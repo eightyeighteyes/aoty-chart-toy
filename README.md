@@ -109,3 +109,7 @@ folder `tools/mb_index_dump.py rg` downloaded:
 
 It builds the shards locally with the job's own code (about 15 minutes the first time), then
 exits non-zero if any trusted answer disagrees with M0's year.
+
+## Licence
+
+GPL-3.0 (see `LICENSE`), the same as kamp, which `web/src/borealis.js` is ported from.
