@@ -56,7 +56,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `tools/mb_parity.py` | AOTY-19 acceptance: runs `mb_core` on the laptop over `data/mb_bench/candidates.json` and diffs against M0's year and track caches into `data/mb_parity/run-<ts>/report.md`. A MusicBrainz client: run it alone. |
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
-| `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Track / By Album, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
+| `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52) and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
@@ -99,13 +99,26 @@ The pure ranking cores are `aoty.aggregate_plays`, `aoty.rank_albums` and
 Ranking: unique listeners first, then total plays. A single play counts as a listener
 (user decision, 2026-11-19 — no minimum-plays threshold, same as fmbot).
 
-The page has three rankings (pill switch next to Poster | List, persisted as `aoty-rank`),
-all computed in `build_page.py` from the CSV:
+**The live app's rankings (user decision 2026-11-25, AOTY-63; M0 is frozen and keeps its own,
+below).** By Track is gone everywhere, and with it singles: every ranking divides by track count.
+- **User pages: one ranking, By Play** (`album` in chart.json): plays ÷ tracks. There is no
+  ranking switch.
+- **Group pages** have a switch, By Listener | By Play | Weighted. By Listener is the default; a
+  saved `aoty-rank` that isn't one of these (such as the old `track`) falls back to it.
+  - **By Listener** (`listener`): unique listeners, then album plays. Without it, one member
+    looping a short record beat an album the whole group shared.
+  - **By Play** (`album`): album plays, then listeners. This is M0's By Album.
+  - **Weighted**: unchanged.
+- **A member's view of a group** hides the switch. With one listener, all three are their album
+  plays.
+- **Charts built before this** keep their old shape until they rebuild. User charts have
+  `album`, so they're fine. Group charts have no `listener`, so `group.js` shows `album` for
+  By Listener until the next build. No version bump.
+
+M0's page (frozen) has three rankings (pill switch next to Poster | List, persisted as
+`aoty-rank`), all computed in `build_page.py` from the CSV:
 - **By Track**: the CSV order above.
-- **By Album**: unique listeners first, then plays ÷ track count ("album plays") (user decision
-  2026-11-25, AOTY-63: before, album plays led and listeners only broke ties, so one member
-  looping a short record beat an album the whole group shared). Same in `group_core`. On a
-  user page or a member's view there is one listener, so it's just album plays.
+- **By Album**: plays ÷ track count ("album plays").
 - **Weighted**: plays ÷ tracks ÷ listeners (mean album plays per listener).
 
 User decisions (2026-11-20): singles are left out of By Album and Weighted only, because
@@ -422,8 +435,8 @@ not daily totals from paging scrobbles (the story text was revised to match).
 - User decisions: the progress visual is the **crate-dig cover wall**, not a tonearm or VU
   meters. **Cut:** phase labels (corny), liner-notes lines, and a "record of the year" reveal:
   the #1 can still change while albums are dated, so a reveal would be a false moment.
-- **A first visit = nothing ranked yet**: no chart.json, *or* a chart whose By Track ranking is
-  empty. The first build runs before the mb lane dates anything, so that empty chart is the usual
+- **A first visit = nothing ranked yet**: no chart.json, *or* a chart whose By Play (`album`)
+  ranking is empty (By Track until AOTY-63). The first build runs before the mb lane dates anything, so that empty chart is the usual
   first chart, not an edge case. The first chart that ranks anything paints with its animation.
 - Data: a first sync fetches **one** getRecentTracks page before the weeks and writes the users
   row's `preview` (a JSON string, because `dynamo.from_item` drops lists). The cover harvest reuses
@@ -613,11 +626,11 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
-- User decisions: **Weighted is hidden** on single-user pages (it equals By Album for one
-  listener; it returns with M2). **No analytics** yet (AOTY-38). The route is
-  **`<base>user/<name>`**, so bare `<base><x>` stays free for other pages.
-- Ranking: By Track = plays, ties by key; By Album = plays ÷ tracks, singles out by
-  `is_single`, ties by plays then key. A strict top 100 (ties at the cutoff dropped).
+- User decisions: the route is **`<base>user/<name>`**, so bare `<base><x>` stays free for other
+  pages. Since AOTY-63 a user page has **one ranking and no switch** (see "The live app's
+  rankings").
+- Ranking: By Play (`album`) = plays ÷ tracks, singles out by `is_single`, ties by plays then
+  key. A strict top 100 (ties at the cutoff dropped).
   `tools/chart_check.py` checks a deployed chart against M0's code.
 - Covers: the scrobbles' Last.fm image, else `album.getInfo`'s → its other sizes → Cover Art
   Archive `front-250` by `rg_mbid` → the artist-name tile (`common/covers.py`). Sync's harvest

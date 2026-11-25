@@ -389,7 +389,7 @@ metrics, because each metric name costs about $0.30/month per env: query them in
 ## Charts (AOTY-21)
 
 After each sync the worker starts the chart Lambda, which writes
-`<prefix>data/users/<u>/chart.json`: the top 100 By Track and By Album, covers with fallbacks
+`<prefix>data/users/<u>/chart.json`: the top 100 By Play (album plays, AOTY-63), covers with fallbacks
 (the scrobbles' Last.fm image or else `album.getInfo`'s, its other sizes, then the Cover Art
 Archive), and how many of the user's albums the mb lane hasn't answered yet. The getInfo
 answers are cached in the store's `users/<u>/<year>/chart_covers.json`. While any are pending, the mb lane's pokes rebuild the chart as they
