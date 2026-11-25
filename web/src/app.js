@@ -1498,10 +1498,13 @@
     themeSaveTimer = setTimeout(() => saveTheme(user, id), THEME_SAVE_MS);
   }
 
+  // By the answer's error word, not its status (as groupedit does): a 404 is also "no such route",
+  // which an api without the theme route (an older deploy) answers.
   const THEME_ERRORS = {
-    401: "you're signed out. sign in again to change your theme.",
-    403: "only this page's owner can change its theme.",
-    404: "your chart isn't ready yet. try again once it's pressed.",
+    signed_out: "you're signed out. sign in again to change your theme.",
+    not_owner: "only this page's owner can change its theme.",
+    no_chart: "your chart isn't ready yet. try again once it's pressed.",
+    writes_off: "theme changes are switched off for now. your page keeps its theme.",
   };
   async function saveTheme(user, id) {
     const r = await apiCall("POST", `users/${user}/theme`, {theme: id});
@@ -1514,8 +1517,10 @@
     }
     pickedTheme = null;
     showTheme(savedTheme, true);
-    $("theme-msg").textContent = THEME_ERRORS[r.status] || "couldn't save your theme. try again in a minute.";
-    if (r.status === 401) { me = null; renderAccount(); }
+    const word = r.body && typeof r.body.error === "string" ? r.body.error : "";
+    $("theme-msg").textContent = (Object.hasOwn(THEME_ERRORS, word) && THEME_ERRORS[word])
+        || "couldn't save your theme. try again in a minute.";
+    if (word === "signed_out") { me = null; renderAccount(); }
   }
 
   // ---- routing ---------------------------------------------------------------------------------
