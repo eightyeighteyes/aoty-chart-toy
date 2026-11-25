@@ -15,6 +15,9 @@ answer, errors included, is Cache-Control: no-store.
   POST <base>api/auth/signout         sign in with Last.fm (AOTY-47; see "sign-in" below)
   <base>api/groups..., GET <base>api/me/groups
                                       owned groups (AOTY-48; see "groups" below)
+  POST <base>api/users/<name>/theme   the signed-in owner's page theme (AOTY-65; see "page
+                                      themes" below): 200 {theme} | 400 unknown_theme |
+                                      401 | 403 not_owner | 404 no_chart | 415 | 503
 
 POST sync, in order:
   1. A user with no row (or an expired not_found one) is new. Unless new users are paused, the
@@ -60,7 +63,7 @@ from pathlib import Path
 import api_core as core
 import groups_store
 
-from common import dynamo, emf, guardrails, lastfm, session
+from common import dynamo, emf, guardrails, lastfm, session, themes
 from common import groups as grp
 
 log = logging.getLogger()
@@ -255,6 +258,8 @@ def _dispatch(event, context, deps, info):
     ip = core.client_ip(headers, source_ip, trusted)
     if action in core.GROUP_ACTIONS:
       return _group_dispatch(deps, event, headers, action, arg, ip, trusted, info)
+    if action == "theme":
+      return post_theme(deps, event, headers, arg, info)
     return post_sync(deps, arg, headers, ip, trusted, info)
   except groups_store.Changed:
     info["group"] = "changed"
@@ -850,6 +855,67 @@ def member_remove(deps, user, slug, name, info):
     log.info("group %s: removed %s", slug, _tag(name))
     _request_chart(deps, slug, int(deps.clock()))
   return _response(204, None)
+
+
+# ---- page themes (AOTY-65) ----------------------------------------------------------------
+#
+# POST <base>api/users/<name>/theme {"theme": <common.themes id>}: the signed-in owner of <name>
+# sets their chart page's theme. group_writes is the kill switch for this write too (it gates
+# every signed-in write). The row's theme is the truth; the chart builder's restyle event copies
+# it into the published chart.json within seconds, and every full build carries it after that.
+
+
+def post_theme(deps, event, headers, name, info):
+  if deps.env.get("GROUP_WRITES") != "true":
+    info["theme"] = "disabled"
+    return _response(503, {"error": "writes_off"})
+  if not headers.get("content-type", "").lower().startswith("application/json"):
+    info["theme"] = "not_json"
+    return _response(415, {"error": "send content-type: application/json"})
+  keys = _auth_keys(deps)
+  if not keys:  # not 401: an SSM outage mustn't read as signed out
+    info["theme"] = "signin_unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  try:
+    user, word = session_user(deps, event, keys)
+  except SessionUnavailable:
+    info["theme"] = "signin_unavailable"
+    return _response(503, {"error": "signin_unavailable"})
+  if not user:
+    info["theme"] = word
+    return _response(401, {"error": "signed_out"})
+  if user != name:
+    info["theme"] = "not_owner"
+    return _response(403, {"error": "not_owner"})
+  body = _json_body(event)
+  if body is None or not themes.valid(body.get("theme")):
+    info["theme"] = "unknown_theme"
+    return _response(400, {"error": "unknown_theme", "themes": sorted(themes.IDS)})
+  theme, now = body["theme"], int(deps.clock())
+  try:
+    # Only an existing row: a theme alone mustn't make a users row (it would read as a known user).
+    deps.ddb.update_item(TableName=deps.env["USERS_TABLE"], Key={"username": {"S": name}},
+                         UpdateExpression="SET theme = :t, theme_set_at = :n",
+                         ConditionExpression="attribute_exists(username)",
+                         ExpressionAttributeValues={":t": {"S": theme}, ":n": {"N": str(now)}})  # fmt: skip
+  except Exception as e:
+    if _error_code(e) != "ConditionalCheckFailedException":
+      raise
+    info["theme"] = "no_chart"
+    return _response(404, {"error": "no_chart"})
+  _request_restyle(deps, name)
+  info["theme"] = "set"
+  return _response(200, {"theme": theme})
+
+
+def _request_restyle(deps, name):
+  """Ask the chart builder to copy the row's theme into the published chart. Async; a failure is
+  logged and the next build carries the theme, so the write still succeeds."""
+  try:
+    deps.lam.invoke(FunctionName=deps.env["CHART_FUNCTION"], InvocationType="Event",
+                    Payload=json.dumps({"username": name, "restyle": True}).encode())  # fmt: skip
+  except Exception:
+    log.exception("could not ask the chart builder to restyle %s", _tag(name))
 
 
 def _request_chart(deps, slug, requested_at=None, deleted=False):

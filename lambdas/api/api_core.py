@@ -17,6 +17,8 @@ The users row (written by api, sync and the chart builder) carries:
   display_name       Last.fm's casing (sync, or api on a new user)
   queue_ticket       the place in line handed out when the api queued the sync (AOTY-26); the
                      sync worker removes it when the sync starts (queue_place)
+  theme, theme_set_at  the owner's page theme, a common.themes id, and when they set it (api,
+                     AOTY-65); the chart builder copies theme into chart.json
 """
 
 import hashlib
@@ -32,9 +34,10 @@ FAILED = frozenset({"error", "not_found", "private"})
 STUCK_AFTER = 30 * 60  # a sync that hasn't moved this long is dead (OOM, timeout, lost message)
 BUILDING_MAX = 5 * 60  # the chart builder runs within seconds of a sync; past this, give up waiting
 DATING_FRESH = 10 * 60  # charts rebuild about once a minute while albums resolve
-_USER_ROUTE = re.compile(r"api/users/([^/]+)/(sync|status)/?")
+_USER_ROUTE = re.compile(r"api/users/([^/]+)/(sync|status|theme)/?")
 _CALLBACK_ROUTE = re.compile(r"api/auth/callback/([A-Za-z0-9_-]{1,64})/?")
-USER_ACTIONS = frozenset({"sync", "status"})
+USER_ACTIONS = frozenset({"sync", "status", "theme"})
+_USER_METHODS = {"sync": "POST", "status": "GET", "theme": "POST"}  # theme: the owner's, AOTY-65
 # Groups (AOTY-48): path -> {method: action}. <id> is the group's slug; <name> a member.
 _GROUP_ROUTE = re.compile(r"api/groups/([^/]+)/?")
 _MEMBERS_ROUTE = re.compile(r"api/groups/([^/]+)/members/?")
@@ -54,10 +57,10 @@ _AUTH_ROUTES = {
 
 
 def route(method, path, base):
-  """(action, arg) for a request. action is health, sync, status, auth_start, auth_callback, me,
-  auth_signout, one of GROUP_ACTIONS, method or not_found.
+  """(action, arg) for a request. action is health, sync, status, theme, auth_start,
+  auth_callback, me, auth_signout, one of GROUP_ACTIONS, method or not_found.
 
-  For sync and status, arg is the username, lowercased but not yet validated (the caller answers
+  For sync, status and theme, arg is the username, lowercased but not yet validated (the caller answers
   400 for a bad one). For auth_callback it's the state nonce from the path. For a group route
   it's the group id (lowercased, unvalidated: the caller answers 404 for a bad one), and for
   member_remove (id, username). Otherwise None.
@@ -79,7 +82,7 @@ def route(method, path, base):
   if not m:
     return "not_found", None
   action = m.group(2)
-  if method != ("POST" if action == "sync" else "GET"):
+  if method != _USER_METHODS[action]:
     return "method", None
   return action, unquote(m.group(1)).strip().lower()
 
