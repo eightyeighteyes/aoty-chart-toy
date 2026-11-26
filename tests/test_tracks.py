@@ -79,9 +79,16 @@ def test_exact_title_beats_an_edition_stripped_match():
 @pytest.mark.parametrize(
   "info, single",
   [
-    ({"tracks": 1, "type": "Album"}, False),  # Dopesmoker / The Necks: the type decides
+    ({"tracks": 1, "type": "Album"}, False),  # Dopesmoker / The Necks: an Album at any length
     ({"tracks": 4, "type": "Single"}, True),
+    ({"tracks": 10, "type": "Single"}, True),
     ({"tracks": 6, "type": "EP"}, False),
+    ({"tracks": build_page.MIN_ALBUM_TRACKS, "type": "EP"}, False),
+    ({"tracks": 3, "type": "EP"}, True),
+    ({"tracks": 1, "type": "EP"}, True),  # a 1-track remix EP (AOTY-82)
+    ({"tracks": 1, "type": "Other"}, True),  # a 1-track "(acoustic)" typed Other (AOTY-82)
+    ({"tracks": 1, "type": "Broadcast"}, True),
+    ({"tracks": 8, "type": "Other"}, False),
     ({"tracks": 3, "type": None}, True),  # untyped (Last.fm count): under MIN_ALBUM_TRACKS
     ({"tracks": build_page.MIN_ALBUM_TRACKS, "type": None}, False),
     ({"tracks": None, "type": None}, True),  # no count: can't be scored per album

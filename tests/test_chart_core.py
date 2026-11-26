@@ -75,6 +75,9 @@ def test_by_album_divides_by_tracks_and_leaves_singles_out():
     ("E", "Untyped3"): 60,  # no type, under MIN_ALBUM_TRACKS (Last.fm count): out
     ("F", "Untyped9"): 18,  # no type, 9 tracks: in, 18 / 9 = 2
     ("G", "NoCount"): 80,  # no track count at all: out
+    ("H", "RemixEP"): 70,  # a 1-track EP: out (AOTY-82)
+    ("I", "Acoustic"): 50,  # a 1-track Other: out (AOTY-82)
+    ("J", "FullEP"): 8,  # a 4-track EP: in, 8 / 4 = 2
   })  # fmt: skip
   items = {
     key("A", "Long"): item(tracks=20),
@@ -84,13 +87,16 @@ def test_by_album_divides_by_tracks_and_leaves_singles_out():
     key("E", "Untyped3"): item(tracks=3, ttype=None),
     key("F", "Untyped9"): item(tracks=9, ttype=None),
     key("G", "NoCount"): {"year": 2026, "tracks": None, "tracks_type": None, "rg_mbid": None},
+    key("H", "RemixEP"): item(tracks=1, ttype="EP"),
+    key("I", "Acoustic"): item(tracks=1, ttype="Other"),
+    key("J", "FullEP"): item(tracks=4, ttype="EP"),
   }
   chart, _ = build(store, items)
-  # Long and Untyped9 tie on 2.0: more plays first.
-  assert ranked_names(chart, "album") == ["Short", "Necks", "Long", "Untyped9"]
-  assert [s for _, s in chart["rankings"]["album"]] == [6.0, 3.0, 2.0, 2.0]
+  # Long, Untyped9 and FullEP tie on 2.0: more plays first.
+  assert ranked_names(chart, "album") == ["Short", "Necks", "Long", "Untyped9", "FullEP"]
+  assert [s for _, s in chart["rankings"]["album"]] == [6.0, 3.0, 2.0, 2.0, 2.0]
   # No By Track since AOTY-63: singles and uncounted albums aren't on the chart at all.
-  assert {a["album"] for a in chart["albums"]} == {"Short", "Necks", "Long", "Untyped9"}
+  assert {a["album"] for a in chart["albums"]} == {"Short", "Necks", "Long", "Untyped9", "FullEP"}
   assert not any(a["single"] for a in chart["albums"])
 
 
