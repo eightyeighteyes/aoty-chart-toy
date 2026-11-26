@@ -68,6 +68,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/common/groups.py`, `lambdas/api/groups_store.py` | AOTY-48 owned groups: the table layout and pure rules (slugs, names, `member_state`), and the api's transactional writes (cap of 25, owner checks), plus a visit's sync claim (AOTY-55). Routes in `api/handler.py` ("groups"); tests in `tests/test_api_groups.py`. |
 | `tools/prewarm.py` | AOTY-42: pre-warms the shared `albums` table. Candidates under Last.fm's names: `tag.getTopAlbums` for the year's tag (listeners tag albums by release year) and the top artists' `artist.getTopAlbums`. The undated ones go to **mb-cold** in sync's message format, so the lane stays the only writer and hot work is never delayed. No local index check: the lane does it, and old albums with a trusted index hit cost no MusicBrainz request. `--dry-run` sizes it. First prod run (2026-11-23): 2,315 candidates, 411 already dated, 1,904 queued, 214 Last.fm calls. Re-run weekly as the year fills. |
 | `tools/chart_check.py` | AOTY-21 acceptance: a deployed chart.json vs M0's rules (`score_rankings` plus the page script's member re-rank, transcribed) on the same store; `--env`, `--user`, prints `--label`. aws CLI, admin credentials. |
+| `tools/rebuild_charts.py` | AOTY-82: force-rebuilds every chart in an env (users with a chart, then each group, since a forced member build skips its groups), one synchronous chart invoke at a time; `--dry-run` counts. Users printed by hash. Run after a ranking-rule deploy; it writes, so ask before prod. Admin credentials. |
 | `tools/sync_check.py` | AOTY-18 acceptance check: chart year total vs counted scrobbles for one member (default the heaviest; labels `m01`.., never usernames). `--dotenv` points a worktree at the main `.env`. |
 | `release-please-config.json`, `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | release-please state. Don't edit the version or changelog by hand. |
 | `pyproject.toml`, `requirements-dev.txt` | ruff (2-space indent, 110 columns, `tools/` excluded until AOTY-12 merges) and pytest config; pinned dev tools. |
@@ -114,6 +115,17 @@ below).** By Track is gone everywhere, and with it singles: every ranking divide
 - **Charts built before this** keep their old shape until they rebuild. User charts have
   `album`, so they're fine. Group charts have no `listener`, so `group.js` shows `album` for
   By Listener until the next build. No version bump.
+- **What counts as a single (`mbmatch.is_single`, AOTY-82, 2026-11-26).**
+  - Typed `Album`: in at any length (Dopesmoker, The Necks).
+  - Typed `Single`: out.
+  - **Anything else** (`EP`, `Other`, `Broadcast`, or untyped): out under `MIN_ALBUM_TRACKS` (4).
+  - This replaced "the type decides, whatever the length", which let a 1-track remix EP
+    (New Order "Blue Monday (Hawtin Mix…)") and a 1-track "(acoustic)" typed `Other` score a whole
+    album's plays from one play.
+  - Not covered: secondary types (Remix, Live) aren't stored, so a 1-track remix typed `Album`
+    still ranks.
+- **A ranking-rule change reaches a chart only when it rebuilds.** Run
+  `tools/rebuild_charts.py --env <env>` after the deploy (it writes; ask before prod).
 
 M0's page (frozen) has three rankings (pill switch next to Poster | List, persisted as
 `aoty-rank`), all computed in `build_page.py` from the CSV:
@@ -124,8 +136,9 @@ M0's page (frozen) has three rankings (pill switch next to Poster | List, persis
 User decisions (2026-11-20): singles are left out of By Album and Weighted only, because
 dividing by 1 track put them on top. MusicBrainz's release-group type decides,
 whatever the length: gladie "I Want That For You" is a 4-track `Single` (out); a 1-track
-`Album` like Dopesmoker or The Necks is in (user's call). `MIN_ALBUM_TRACKS` (4) applies
-only to untyped releases (Last.fm fallback counts). The track cache stores
+`Album` like Dopesmoker or The Necks is in (user's call). `MIN_ALBUM_TRACKS` (4) applied
+only to untyped releases (Last.fm fallback counts) until AOTY-82, which extended it to every
+type except Album and Single; M0 shares `is_single`, so it follows. The track cache stores
 `{"tracks", "type"}` per album.
 **Member filter** (added 2026-11-20): a `<select>` right-aligned after the switches. It lists
 "Everyone" (the default), then members by Last.fm username (the public name people will type
