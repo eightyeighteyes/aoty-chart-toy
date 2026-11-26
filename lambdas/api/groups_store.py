@@ -209,14 +209,48 @@ def _owned(deps, slug, owner):
   return (meta, members), None
 
 
-def _meta_delete(slug, owner, count):
-  """Delete the meta only if nothing changed since it was read (the owner and the count)."""
+def _meta_delete(slug, owner, count, theme_set_at=False):
+  """Delete the meta only if nothing changed since it was read (the owner and the count).
+
+  theme_set_at (a rename, AOTY-76): also only if no theme was saved since; None when the meta had
+  none. A rename copies the meta it read to the new slug, so a theme saved in between would
+  otherwise be lost. The default (False) leaves the theme out of the condition."""
+  condition, values = "#o = :me AND member_count = :n", {":me": owner, ":n": count}
+  if theme_set_at is None:
+    condition += THEME_UNSET
+  elif theme_set_at is not False:
+    condition += THEME_SAME
+    values[":ts"] = theme_set_at
   return {"Delete": {
     "TableName": None, "Key": _key(slug, g.META),
-    "ConditionExpression": "#o = :me AND member_count = :n",
+    "ConditionExpression": condition,
     "ExpressionAttributeNames": {"#o": "owner"},
-    "ExpressionAttributeValues": dynamo.to_item({":me": owner, ":n": count}),
+    "ExpressionAttributeValues": dynamo.to_item(values),
   }}  # fmt: skip
+
+
+THEME_UNSET = " AND attribute_not_exists(theme_set_at)"
+THEME_SAME = " AND theme_set_at = :ts"
+
+
+def set_theme(deps, slug, owner, theme, now):
+  """set, missing or forbidden (AOTY-76): the owner's page theme on the group's meta. theme is a
+  common.themes id the caller has checked."""
+  try:
+    deps.ddb.update_item(
+      TableName=_table(deps), Key=_key(slug, g.META),
+      UpdateExpression="SET theme = :t, theme_set_at = :now",
+      ConditionExpression="attribute_exists(pk) AND #o = :me",
+      ExpressionAttributeNames={"#o": "owner"},
+      ExpressionAttributeValues=dynamo.to_item({":t": theme, ":now": now, ":me": owner}),
+      ReturnValuesOnConditionCheckFailure="ALL_OLD",
+    )  # fmt: skip
+  except Exception as e:
+    if _code(e) != "ConditionalCheckFailedException":
+      raise
+    old = (getattr(e, "response", None) or {}).get("Item")
+    return "forbidden" if old else "missing"
+  return "set"
 
 
 def delete(deps, slug, owner):
@@ -265,7 +299,8 @@ def rename(deps, slug, new_slug, name, owner, now):
     # sync_requested_at stays: it's the same members, synced just as recently.
     fields = {k: v for k, v in meta.items() if k not in ("pk", "sk", "chart_built_at", "chart_read_at")}
     fields |= {"name": name, "updated_at": now, "chart_requested_at": now}
-    items = [_meta_put(new_slug, fields), _meta_delete(slug, owner, meta.get("member_count", 0))]
+    items = [_meta_put(new_slug, fields),
+             _meta_delete(slug, owner, meta.get("member_count", 0), meta.get("theme_set_at"))]  # fmt: skip
     for m in members:
       items.append(_member_put(new_slug, m, now, condition=False))
       items.append({"Delete": {"TableName": None, "Key": _key(slug, g.member_sk(m))}})

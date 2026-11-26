@@ -180,10 +180,14 @@ locals {
         ]
       },
       {
-        # A theme restyle (AOTY-65) reads a user's published chart.json to set its theme. Only
-        # after a build (chart_built_at), so no ListBucket: a missing chart would answer 403.
-        actions   = ["s3:GetObject"]
-        resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/users/*"]
+        # A theme restyle (AOTY-65, groups AOTY-76) reads a published chart.json to set its theme.
+        # Only after a build (chart_built_at), so no ListBucket: a missing chart answers 403, which
+        # the restyle treats as nothing to do.
+        actions = ["s3:GetObject"]
+        resources = [
+          "${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/users/*",
+          "${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/groups/*",
+        ]
       },
       {
         # A deleted or renamed group's chart (AOTY-48): the builder removes it, so its single

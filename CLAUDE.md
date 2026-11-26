@@ -572,7 +572,7 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   failed; `TransactionConflict` is retried.
 - **Renaming moves the slug** (user decision 2026-11-24): one transaction moves the meta and members
   to the new pk (at most 52 items, under the 100 limit); the old URL then 404s, and its chart is
-  deleted.
+  deleted. The meta's theme moves with it, guarded by `theme_set_at` (AOTY-76, "User themes").
 - **Chart deletes go through the chart Lambda** (`{"group", "deleted": true}`), not the api, so the
   Lambda's single concurrency orders them after any build in flight; a delete on a slug that's a
   group again by then rebuilds it instead.
@@ -662,7 +662,7 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     (`theme.ORDER`, red first). The default's id stays `poster`, but it reads **"oranger"**.
   - Visitors see a new pick **within seconds** (a restyle, not the next build).
   - "album of the year" **fades in** once the #1 cover loads, with no fade under reduced motion.
-  - Groups (AOTY-76) and light themes (AOTY-75) are their own stories.
+  - Groups (AOTY-76) and light themes (AOTY-75) are their own stories (both below).
 - **The ids are an allowlist.**
   - Two copies: `lambdas/common/themes.py` and `web/src/theme.js` (`tests/test_themes.py` keeps them
     the same), plus `kampstats` `theme_set`, which a JS test keeps in step.
@@ -694,13 +694,28 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     - The api's one remaining need is a users row (404 `no_chart`, "still being set up"). A
       visit's sync request creates it, so it's only a moment. The check stays because a bare
       theme-only row would read as a known user and skip the new-user guards.
-  - `clearTheme()` runs on every view that isn't a user's page: state, intro, groups.
+  - `clearTheme()` runs on every view that isn't a themed page: state, intro.
   - Once the owner picks in a page session, their pick wins over a re-fetched chart.json, which
     may not be restyled yet.
   - "album of the year" uses its own `new Image()` with `crossOrigin` (the chart's `<img>`s aren't
     readable), drawn at 32×32. A tainted canvas or a grey cover keeps the default.
 - Preview: `tools/serve_shell.py --sample alice --port 8001`, then "sign in with last.fm" (alice)
   shows the picker; the stand-in API writes the theme into the preview chart at once.
+- **Group themes (AOTY-76, 2026-11-25).** The group's owner (`group.owner`, not membership) picks,
+  with the same choices and picker. Decisions:
+  - **A member's view (`?user=`) keeps the group's theme**: the filter only re-ranks the page.
+  - **"album of the year" on a group reads its By Listener #1** (then `track`, then `album` on
+    older charts), never a member's re-ranked #1 (`theme.topRanking`).
+  - Stored on the group's **meta item** (`theme`, `theme_set_at`) by `POST api/groups/<id>/theme`,
+    one conditional update that is also the owner check. `GET api/groups/<id>` carries it, like the
+    status API does for a user. The restyle event is `{"group", "restyle": true}`.
+  - **Rename vs save:** rename copies the meta, and its delete of the old meta requires
+    `theme_set_at` unchanged, so a save in between cancels the transaction and the retry re-reads.
+    The page reads the target when its save timer fires, so it posts to the new slug.
+  - The page code keys on a **target** `{kind, id}`, not a username (`theme.themeKey`, `savePath`,
+    `ownsTheme`). A group's remembered theme is `aoty-theme:group:<slug>`, so a slug equal to a
+    username never shares its key.
+  - Preview: `group/full-house` signed in as alice (its owner); `bobs-crew` is bob's.
 - **Light themes (AOTY-75, 2026-11-25).** User decisions:
   - Seven light presets, named after bands and musicians, one per hue like the dark set: white
     stripes, tangerine dream, yellow magic orchestra, mint royale, the blue nile, lavender diamond,

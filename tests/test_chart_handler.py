@@ -667,3 +667,61 @@ def test_a_build_for_a_group_deleted_mid_build_doesnt_recreate_its_meta(h):
   s3.put_object = delete_mid_build
   assert h.handler({"group": GROUP}, None, Deps(s3, ddb))["failed"] == 0
   assert ddb.groups == {}
+
+
+# ---- group themes (AOTY-76) -----------------------------------------------------------------
+
+
+def group_meta(ddb):
+  return ddb.groups[(f"group#{GROUP}", "meta")]
+
+
+def test_a_group_build_carries_the_owners_theme(h):
+  s3, ddb = group_world(theme="lavender-diamond")
+  h.handler({"group": GROUP}, None, Deps(s3, ddb))
+  assert s3.json(GROUP_CHART)["theme"] == "lavender-diamond"
+
+
+def test_a_group_restyle_copies_the_metas_theme_without_a_build(h):
+  s3, ddb = group_world()
+  h.handler({"group": GROUP}, None, Deps(s3, ddb))
+  built = s3.json(GROUP_CHART)
+  read_at = group_meta(ddb).get("chart_read_at")
+  group_meta(ddb)["theme"] = "gabbie"
+  out = h.handler({"group": GROUP, "restyle": True, "theme": "kamp"}, None, Deps(s3, ddb, clock=NOW + 60))
+  assert out == {"built": 1, "skipped": 0, "failed": 0, "checked": 0}
+  assert s3.json(GROUP_CHART) == {
+    **built,
+    "theme": "gabbie",
+  }  # the meta's, never the event's; nothing rebuilt
+  assert group_meta(ddb).get("chart_read_at") == read_at  # no build read the stores
+  group_meta(ddb)["theme"] = "poster"
+  h.handler({"group": GROUP, "restyle": True}, None, Deps(s3, ddb))
+  assert "theme" not in s3.json(GROUP_CHART)
+
+
+def test_a_group_restyle_with_nothing_to_restyle_is_a_no_op(h):
+  s3, ddb = group_world(theme="kamp")  # never built: no chart_built_at
+  out = h.handler({"group": GROUP, "restyle": True}, None, Deps(s3, ddb))
+  assert out["skipped"] == 1 and out["failed"] == 0 and GROUP_CHART not in s3.objects
+  out = h.handler({"group": "gone", "restyle": True}, None, Deps(s3, ddb))  # deleted, or moved by a rename
+  assert out["skipped"] == 1 and out["failed"] == 0
+
+
+def test_a_group_restyle_reads_access_denied_as_no_chart(h):
+  # The chart role has no s3:ListBucket on the site bucket, so a missing chart answers 403.
+  s3, ddb = group_world(theme="kamp", chart_built_at=NOW - 60)
+
+  class Denied(Exception):
+    response = {"Error": {"Code": "AccessDenied"}}
+
+  real = s3.get_object
+
+  def get_object(Bucket, Key):
+    if (Bucket, Key) == GROUP_CHART:
+      raise Denied()
+    return real(Bucket=Bucket, Key=Key)
+
+  s3.get_object = get_object
+  out = h.handler({"group": GROUP, "restyle": True}, None, Deps(s3, ddb))
+  assert out["skipped"] == 1 and out["failed"] == 0

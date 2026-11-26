@@ -25,6 +25,7 @@ import zlib
 import group_core
 from api_core import USERNAME_RE
 from common import groups as grp
+from common import themes
 from common.albumkey import album_key, join_key
 
 COOKIE = "aoty_preview_session"
@@ -147,6 +148,11 @@ class FakeGroups:
       return 204, None, []
     if method == "POST" and parts[1:] == ["members"]:
       return (*self.add(g, user, body, now), [])
+    if method == "POST" and parts[1:] == ["theme"]:  # AOTY-76; the restyle is immediate here
+      if not themes.valid(body.get("theme")):
+        return 400, {"error": "unknown_theme", "themes": sorted(themes.IDS)}, []
+      g["theme"] = body["theme"]
+      return 200, {"theme": body["theme"]}, []
     if method == "DELETE" and len(parts) == 3 and parts[1] == "members":
       if g["members"].pop(parts[2].lower(), None) is not None:
         g["changed_at"] = now
@@ -164,7 +170,8 @@ class FakeGroups:
     now = self.clock()
     syncing = len(members) if now < g.get("resync_until", 0) else 0
     return 200, {"id": slug, "name": g["name"], "owner": g["owner"], "members": members,
-                 "ready": len(self._ready(g, now)), "total": len(members), "syncing": syncing}  # fmt: skip
+                 "ready": len(self._ready(g, now)), "total": len(members), "syncing": syncing,
+                 **({"theme": g["theme"]} if g.get("theme", themes.DEFAULT) != themes.DEFAULT else {})}  # fmt: skip
 
   def visit(self, slug):
     """POST groups/<slug>/sync: every member re-syncs for RESYNC_S (ready members stay ready),
@@ -242,5 +249,6 @@ class FakeGroups:
     ready = [m for m, at in g["members"].items() if at + MEMBER_READY_S <= built]
     stores = {m: _store(m) for m in ready}
     chart, _ = group_core.build_group_chart(stores, self.items, group_id=slug, name=g["name"], year=YEAR,
-                                            waiting=len(g["members"]) - len(ready), now=int(built))  # fmt: skip
+                                            waiting=len(g["members"]) - len(ready), now=int(built),
+                                            theme=g.get("theme"))  # fmt: skip
     return chart

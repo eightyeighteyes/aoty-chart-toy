@@ -414,6 +414,15 @@ chart once `chart_built_at` says one exists. Full builds carry the theme too. To
 send the same payload. `group_writes` (below) is the kill switch for theme writes as well: off,
 they answer 503 `writes_off` and the page hides the picker.
 
+**Group themes (AOTY-76):** a group's owner saves with `POST api/groups/<id>/theme`, which sets
+`theme` and `theme_set_at` on the group's meta item (owner check in the same conditional update).
+The api then sends `{"group": "<id>", "restyle": true}`, which copies the meta's theme into
+`<prefix>data/groups/<id>/chart.json` without a build. The chart role reads `data/groups/*` for
+this. Group restyles have no `chart_built_at` gate: a missing chart reads as AccessDenied (no
+ListBucket), which the restyle treats as nothing to do. Group builds carry the theme too, and a
+rename moves it with the meta. To restyle by hand, send the same payload. With `group_writes` off
+the route answers 503 `groups_unavailable`.
+
 **Group charts (AOTY-50):** the chart Lambda takes `{"group": "<id>", "requested_at"?}` and
 writes `<prefix>data/groups/<id>/chart.json` with M0's rules (`lambdas/chart/group_core.py`),
 from the groups table (see "Groups"). After each member's own chart build it rebuilds their

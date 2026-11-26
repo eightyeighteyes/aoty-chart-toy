@@ -131,3 +131,34 @@ test("derived themes stay legible across the hue wheel", () => {
     assert.deepEqual(failures(t), [], `hue ${h}`);
   }
 });
+
+// ---- whose theme (AOTY-76) ------------------------------------------------------------------
+const whose = require("../src/theme.js");
+
+test("a theme's key and save path depend on whose page it is", () => {
+  assert.equal(whose.themeKey({kind: "user", id: "alice"}), "aoty-theme:alice");
+  assert.equal(whose.themeKey({kind: "group", id: "alice"}), "aoty-theme:group:alice");  // never the user's key
+  assert.equal(whose.savePath({kind: "user", id: "alice"}), "users/alice/theme");
+  assert.equal(whose.savePath({kind: "group", id: "the-crew"}), "groups/the-crew/theme");
+});
+
+test("a user owns their page's theme; a group's owner, not a member, owns the group's", () => {
+  assert.equal(whose.ownsTheme({kind: "user", id: "alice"}, "Alice"), true);
+  assert.equal(whose.ownsTheme({kind: "user", id: "alice"}, "bob"), false);
+  assert.equal(whose.ownsTheme({kind: "group", id: "the-crew"}, "alice", "alice"), true);
+  assert.equal(whose.ownsTheme({kind: "group", id: "the-crew"}, "bob", "alice"), false);
+  // A group slug equal to a username doesn't make that user the group's owner.
+  assert.equal(whose.ownsTheme({kind: "group", id: "bob"}, "bob", "alice"), false);
+  assert.equal(whose.ownsTheme({kind: "group", id: "g"}, "alice", undefined), false);  // record not loaded
+  assert.equal(whose.ownsTheme(null, "alice"), false);
+  assert.equal(whose.ownsTheme({kind: "user", id: "alice"}, null), false);
+});
+
+test("album of the year reads a user's By Play #1, a group's By Listener #1 with older fallbacks", () => {
+  assert.deepEqual(whose.topRanking({rankings: {album: [[3, 9]], track: [[1, 50]]}}), [[3, 9]]);
+  const g = rankings => ({kind: "group", rankings});
+  assert.deepEqual(whose.topRanking(g({listener: [[2, 1]], album: [[0, 5]]})), [[2, 1]]);
+  assert.deepEqual(whose.topRanking(g({track: [[1, 8]], album: [[0, 5]]})), [[1, 8]]);  // before AOTY-63
+  assert.deepEqual(whose.topRanking(g({album: [[0, 5]]})), [[0, 5]]);
+  assert.deepEqual(whose.topRanking(null), []);
+});

@@ -45,8 +45,10 @@ _GROUP_ROUTE = re.compile(r"api/groups/([^/]+)/?")
 _MEMBERS_ROUTE = re.compile(r"api/groups/([^/]+)/members/?")
 _MEMBER_ROUTE = re.compile(r"api/groups/([^/]+)/members/([^/]+)/?")
 _GROUP_SYNC_ROUTE = re.compile(r"api/groups/([^/]+)/sync/?")
+_GROUP_THEME_ROUTE = re.compile(r"api/groups/([^/]+)/theme/?")  # the owner's page theme, AOTY-76
 _GROUP_METHODS = {"GET": "group_get", "PATCH": "group_rename", "DELETE": "group_delete"}
-GROUP_WRITES = frozenset({"group_create", "group_rename", "group_delete", "member_add", "member_remove"})
+GROUP_WRITES = frozenset({"group_create", "group_rename", "group_delete", "member_add", "member_remove",
+                          "group_theme"})  # fmt: skip
 # group_sync (AOTY-55) is public like group_get: a visit to a group page syncs its members.
 GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups", "group_sync"}
 # Sign-in (AOTY-47): path -> (action, method). Only the callback changes anything on a GET, and
@@ -107,6 +109,9 @@ def _group_route(method, rest):
   m = _GROUP_SYNC_ROUTE.fullmatch(rest)
   if m:
     return ("group_sync", _part(m.group(1))) if method == "POST" else ("method", None)
+  m = _GROUP_THEME_ROUTE.fullmatch(rest)
+  if m:
+    return ("group_theme", _part(m.group(1))) if method == "POST" else ("method", None)
   m = _MEMBERS_ROUTE.fullmatch(rest)
   if m:
     return ("member_add", _part(m.group(1))) if method == "POST" else ("method", None)

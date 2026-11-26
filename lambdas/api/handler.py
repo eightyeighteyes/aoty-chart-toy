@@ -649,7 +649,7 @@ def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
   if action != "group_create" and not grp.SLUG_RE.match(slug or ""):
     info["group"] = "missing"
     return _response(404, {"error": "no such group"})
-  body = _json_body(event) if action in ("group_create", "group_rename", "member_add") else {}
+  body = _json_body(event) if action in ("group_create", "group_rename", "member_add", "group_theme") else {}
   if body is None:
     info["group"] = "bad_json"
     return _response(400, {"error": "send a JSON object"})
@@ -661,7 +661,34 @@ def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
     return group_delete(deps, user, slug, info)
   if action == "member_add":
     return member_add(deps, user, slug, body, headers, ip, trusted, info)
+  if action == "group_theme":
+    return group_theme(deps, user, slug, body, info)
   return member_remove(deps, user, slug, arg[1], info)
+
+
+def group_theme(deps, user, slug, body, info):
+  """POST groups/<id>/theme {theme} (AOTY-76): the group owner's page theme, then a restyle of the
+  published chart. Owner means group.owner, not membership (AOTY-52)."""
+  theme = body.get("theme")
+  if not themes.valid(theme):
+    info["group"] = "unknown_theme"
+    return _response(400, {"error": "unknown_theme", "themes": sorted(themes.IDS)})
+  word = groups_store.set_theme(deps, slug, user, theme, int(deps.clock()))
+  if word != "set":
+    return _refused(word, info)
+  info["group"] = "theme"
+  _request_group_restyle(deps, slug)
+  return _response(200, {"theme": theme})
+
+
+def _request_group_restyle(deps, slug):
+  """Ask the chart builder to copy the meta's theme into the group's published chart. Async; a
+  failure is logged and the next build carries the theme."""
+  try:
+    deps.lam.invoke(FunctionName=deps.env["CHART_FUNCTION"], InvocationType="Event",
+                    Payload=json.dumps({"group": slug, "restyle": True}).encode())  # fmt: skip
+  except Exception:
+    log.exception("could not ask the chart builder to restyle group %s", slug)
 
 
 # Store words -> answers, for the ones every write shares.
@@ -686,9 +713,13 @@ def group_get(deps, slug):
   ready = sum(1 for m in members if grp.member_state(rows.get(m, {})) == "ready")
   # syncing (AOTY-55): members with a sync queued or running, so the page knows to look again.
   syncing = sum(1 for m in members if core.decide_sync(rows.get(m, {}), now, 0) == "in_progress")
-  return _response(200, {"id": slug, "name": meta.get("name", ""), "owner": meta.get("owner"),
-                         "members": members, "ready": ready, "total": len(members),
-                         "syncing": syncing})  # fmt: skip
+  out = {"id": slug, "name": meta.get("name", ""), "owner": meta.get("owner"), "members": members,
+         "ready": ready, "total": len(members), "syncing": syncing}  # fmt: skip
+  # The owner's page theme (AOTY-76): fresher than a chart.json the restyle hasn't reached.
+  theme = meta.get("theme")
+  if themes.valid(theme) and theme != themes.DEFAULT:
+    out["theme"] = theme
+  return _response(200, out)
 
 
 def group_sync(deps, slug, info):
