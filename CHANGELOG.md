@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.7.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.6.0...v1.7.0) (2026-11-26)
+
+
+### Features
+
+* a page's theme doesn't wait for its chart ([bf4a695](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bf4a6950b89495d8452167ee808ed549432cba6a))
+* **api:** group owners save their page's theme ([127f539](https://github.com/eightyeighteyes/aoty-chart-toy/commit/127f5396f12bb3482b613f2e50540267d3e17f89))
+* **api:** owners save their page's theme ([65005a1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/65005a197b31a286a61ce1ae4f08931bdb65fdbb))
+* By Listener / By Play / Weighted rankings; By Track and singles go (AOTY-63) ([48dcac8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/48dcac89fcc9c6440e544129128c0a05c493b879))
+* **chart:** charts carry their owner's theme; a restyle event ([9605589](https://github.com/eightyeighteyes/aoty-chart-toy/commit/960558974cfe4f6180a31e07eabb2defd47a37cc))
+* **chart:** group By Album ranks listeners first, then album plays ([0251bcc](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0251bcccec51ba32163760bf4816dcf4df989424))
+* **chart:** group charts carry their theme; a group restyle ([e5dcf01](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e5dcf0109563ace457b5a2319148b51c9b766900))
+* **chart:** rankings are By Listener, By Play and Weighted; no By Track ([ece8b42](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ece8b425a7043183174b710c1160434c69ddd670))
+* group owners pick their group page's theme (AOTY-76) ([b589d0e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b589d0ed857d7e9ff89094c36105dfdbcfe3b210))
+* owners pick their chart page's theme, kamp palettes and "album of the year" (AOTY-65) ([842e896](https://github.com/eightyeighteyes/aoty-chart-toy/commit/842e8961031445b403e7e43087c76fae17db8968))
+* **web:** album of the year first, presets in rainbow order, poster reads "oranger" ([db87cb0](https://github.com/eightyeighteyes/aoty-chart-toy/commit/db87cb0a748922f0307ffb7280cc11558fa7c754))
+* **web:** borealis.js, ported from kamp ([cd1c1be](https://github.com/eightyeighteyes/aoty-chart-toy/commit/cd1c1be26cb276e77d6f49fa9869fc0a214ef2c5))
+* **web:** By Listener / By Play / Weighted switch on groups; user pages lose it ([003f1a1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/003f1a1191088d6181321c4387d5752c5cc0435e))
+* **web:** group ranking copy names listeners first ([154d720](https://github.com/eightyeighteyes/aoty-chart-toy/commit/154d720c32456939cb1cab94b9e3299a6aee5e39))
+* **web:** kamp's Borealis behind the first visit; GPLv3 (AOTY-67) ([f198800](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f198800081d2d8001fbfa8605ace04555da1a153))
+* **web:** light themes, gabbie among them (AOTY-75) ([9b589ec](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9b589ecc9581f83dfebae7e6409cc90a43d1b514))
+* **web:** remember a page's theme to avoid a dark flash ([c3e5ef6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c3e5ef6094b9858f510e10e99616d0d117936f8f))
+* **web:** seven light themes, gabbie among them ([33566e8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/33566e86a8e59c7e1b64d45e0c0448bdd0d3776c))
+* **web:** the aurora behind the first visit ([429d79c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/429d79cd37956b75bd6f05934da0f2cc27feb557))
+* **web:** the cover wall drifts in rows ([c3d9afb](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c3d9afb95263dc92b7aa4701a6fdecaa23b3eb0f))
+* **web:** the cover wall drifts in rows (AOTY-68) ([e3d46cb](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e3d46cb72e4fc916ca1521014261c5f36b61d3bb))
+* **web:** the cover wall shows only covers that loaded ([fe74553](https://github.com/eightyeighteyes/aoty-chart-toy/commit/fe745537d584dd4d3780c3dc7704f30cfdc9fb3a))
+* **web:** the cover wall shows only covers that loaded (AOTY-66) ([8619145](https://github.com/eightyeighteyes/aoty-chart-toy/commit/861914548d1d07828fef993996cc740090ac7722))
+* **web:** the theme picker on group pages ([304a2a4](https://github.com/eightyeighteyes/aoty-chart-toy/commit/304a2a459d77a01c902dc553ad69ae2553a52b26))
+* **web:** theme picker and "album of the year" colours ([08c7032](https://github.com/eightyeighteyes/aoty-chart-toy/commit/08c7032e4b33ac217c2f1d22589f76b00902af4d))
+* **web:** theme tokens and a pure theme module ([3edfe36](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3edfe361291505f30bdc053cdeb6b0e0e1b71fab))
+
+
+### Bug Fixes
+
+* **api:** give Last.fm 10 s to answer a new user's check ([26fe40d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/26fe40d324880df715a0c4bb04391bedbb7e0a7f))
+* new users refused when Last.fm answers slower than 3 s (AOTY-81) ([cbd0068](https://github.com/eightyeighteyes/aoty-chart-toy/commit/cbd0068fe8efb3d040319c0e9578c94466e286b6))
+* **web:** a just-queued first visit polls at the normal pace ([dc07155](https://github.com/eightyeighteyes/aoty-chart-toy/commit/dc071558528f1ff785c616cea67b2462b7ad4c86))
+* **web:** in-line polling goes by place in line ([33c8bf9](https://github.com/eightyeighteyes/aoty-chart-toy/commit/33c8bf91fd4b35ae9d61ebe6e83e791276193310))
+* **web:** in-line polling goes by place in line (AOTY-78) ([8fc8525](https://github.com/eightyeighteyes/aoty-chart-toy/commit/8fc8525caf5fdd0f287b7fe0a984228d13d5d2bf))
+* **web:** keep kamp's own colours wherever they pass contrast ([e742f28](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e742f28b814ec1a6cbcddb715b8606d515dc185b))
+* **web:** say Last.fm isn't answering instead of "couldn't update" ([1b3713c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1b3713cc79b1761462b59386b6c7ef49b9fcdd57))
+* **web:** the aurora no longer hides the page ([aa6f521](https://github.com/eightyeighteyes/aoty-chart-toy/commit/aa6f52198dc6c76750d3ab7277ccd91a2ef2dad0))
+* **web:** theme save errors go by the answer's error word ([ecd26a7](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ecd26a77ef4270ce9293c9dd28b07f4e23619d28))
+
 ## [1.6.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.5.0...v1.6.0) (2026-11-24)
 
 
