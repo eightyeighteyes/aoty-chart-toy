@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.8.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.7.0...v1.8.0) (2026-11-26)
+
+
+### Features
+
+* **tools:** rebuild every chart in an env ([b0275d5](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b0275d51f036abc3823490b577d7bcb13c94e47f))
+
+
+### Bug Fixes
+
+* **chart:** count short EPs and other non-album types as singles ([84b3e79](https://github.com/eightyeighteyes/aoty-chart-toy/commit/84b3e7976c0a49bff6446dd684a49e109f022341))
+* **chart:** count short EPs and other non-album types as singles (AOTY-82) ([2ce1d27](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2ce1d27bf2fe64caa9564a87c169f1922f091d85))
+
 ## [1.7.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.6.0...v1.7.0) (2026-11-26)
 
 
