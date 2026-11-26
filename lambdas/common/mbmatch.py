@@ -7,9 +7,9 @@ CLAUDE.md ("MusicBrainz — hard-won lessons").
 
 from common.albumkey import base_title, norm
 
-# Singles are left out of the per-album rankings (user decision 2026-11-20). MusicBrainz's
-# release-group type decides, whatever the length; only an untyped release (a Last.fm fallback
-# count) falls back to "under MIN_ALBUM_TRACKS".
+# Singles are left out of the per-album rankings (user decision 2026-11-20). A release group
+# typed Album is in at any length and one typed Single is out; anything else (EP, Other,
+# Broadcast, or untyped: a Last.fm fallback count) is out under MIN_ALBUM_TRACKS (AOTY-82).
 MIN_ALBUM_TRACKS = 4
 
 TYPE_RANK = {"Album": 0, "EP": 1}
@@ -125,10 +125,14 @@ def pick_release(artist, album, releases):
 
 
 def is_single(info):
-  """MusicBrainz's type decides: a 1-track Album (The Necks, Dopesmoker) is an album.
-  The track floor applies only when there's no type, i.e. a Last.fm fallback count."""
+  """A Single is out and an Album is in at any length (The Necks, Dopesmoker). Every other type
+  (EP, Other, Broadcast) and an untyped Last.fm fallback count is out under MIN_ALBUM_TRACKS:
+  a 1-track remix EP or a 1-track "(acoustic)" typed Other otherwise scored a whole album's
+  plays from one play (AOTY-82)."""
   if not info["tracks"]:
     return True  # no count: can't be scored per album
-  if info["type"]:
-    return info["type"] == "Single"
+  if info["type"] == "Album":
+    return False
+  if info["type"] == "Single":
+    return True
   return info["tracks"] < MIN_ALBUM_TRACKS

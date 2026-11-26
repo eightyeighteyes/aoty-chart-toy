@@ -186,12 +186,18 @@ def test_group_core_by_listener_ranks_listeners_then_album_plays():
     "short": {"plays": 20, "by": {"u1": 10, "u2": 10}},  # 5
     "long": {"plays": 60, "by": {"u1": 30, "u2": 30}},  # 3
     "single": {"plays": 99, "by": {"u1": 33, "u2": 33, "u3": 33}},  # a single: on no chart
+    "remix": {"plays": 9, "by": {"u1": 3, "u2": 3, "u3": 3}},  # a 1-track EP: on no chart (AOTY-82)
+    "acoustic": {"plays": 9, "by": {"u1": 3, "u2": 3, "u3": 3}},  # a 1-track Other: on no chart
   }
-  tracks = {"loop": (3, "Album"), "short": (4, "Album"), "long": (20, "Album"), "single": (1, "Single")}
+  tracks = {
+    "loop": (3, "Album"), "short": (4, "Album"), "long": (20, "Album"), "single": (1, "Single"),
+    "remix": (1, "EP"), "acoustic": (1, "Other"),
+  }  # fmt: skip
   items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
   ranked = group_core.rank(stats, items)
   assert [k for k, _ in ranked["listener"]] == ["short", "long", "loop"]
   assert [k for k, _ in ranked["album"]] == ["loop", "short", "long"]  # By Play: album plays first
+  assert [k for k, _ in ranked["weighted"]] == []  # no album has 3 listeners
 
 
 def test_group_member_views_keep_each_members_top_albums_by_plays_per_track():
@@ -201,7 +207,8 @@ def test_group_member_views_keep_each_members_top_albums_by_plays_per_track():
     "a": {"plays": 60, "by": {"u1": 60}},  # 60 / 20 = 3
     "b": {"plays": 10, "by": {"u1": 10}},  # 10 / 2 = 5: u1's top by plays per track
     "s": {"plays": 90, "by": {"u1": 90}},  # a single: never kept
+    "e": {"plays": 80, "by": {"u1": 80}},  # a 1-track EP: never kept (AOTY-82)
   }
-  tracks = {"a": (20, "Album"), "b": (2, "Album"), "s": (1, "Single")}
+  tracks = {"a": (20, "Album"), "b": (2, "Album"), "s": (1, "Single"), "e": (1, "EP")}
   items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
   assert group_core.member_keys(stats, items, ["u1"], n=1) == {"b"}

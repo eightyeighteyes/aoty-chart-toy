@@ -11,8 +11,8 @@ Rules (M0's, CLAUDE.md; user decisions 2026-11-22):
   - Only albums whose item says year == the store's year are ranked. The year comes from the
     albums table at build time, never copied into the store, so mb lane corrections show up.
   - One ranking, By Play ("album"): plays / track count, singles left out
-    (common.mbmatch.is_single: the release group's type decides; no count at all counts as a
-    single). Ties: plays, then key. By Track is gone, and with it singles (user, 2026-11-25,
+    (common.mbmatch.is_single: Album in at any length, Single out, anything else out under 4
+    tracks; no count at all counts as a single). Ties: plays, then key. By Track is gone, and with it singles (user, 2026-11-25,
     AOTY-63); By Listener and Weighted equal By Play for one listener, so only groups have them.
   - The ranking is a strict top TOP_N: albums tied with the last one shown are dropped.
   - Covers: the scrobbles' Last.fm image, else album.getInfo's (the handler looks those up for
