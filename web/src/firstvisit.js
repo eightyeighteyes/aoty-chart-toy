@@ -155,7 +155,7 @@
     return base;
   }
 
-  // [title, text] for a sync request the API turned away for capacity, or null. status is the
+  // [title, text] for a sync request the API turned away for capacity or a Last.fm failure, or null. status is the
   // HTTP status; body its JSON (null if none).
   function refusal(status, body) {
     const error = body && body.error;
@@ -164,6 +164,10 @@
     }
     if (status === 503 && error === "busy") {
       return ["lots of charts are pressing right now", "try again in a few minutes."];
+    }
+    // A new user is checked with Last.fm first (AOTY-81): it timed out or failed.
+    if (status === 503 && error === "lastfm_unavailable") {
+      return ["last.fm isn't answering right now", "try again in a minute."];
     }
     if (status === 429 && error === "too_many_new") {
       return ["that's a lot of new names from here", "try again in an hour."];

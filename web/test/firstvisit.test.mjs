@@ -155,9 +155,11 @@ test("capacity refusals have their own words, and anything else is null", () => 
   assert.equal(refusal(503, {error: "busy"})[0], "lots of charts are pressing right now");
   assert.equal(refusal(429, {error: "too_many_new"})[0], "that's a lot of new names from here");
   assert.equal(refusal(429, {message: "Too Many Requests"})[0], "lots of people are pressing charts right now");
+  assert.equal(refusal(503, {error: "lastfm_unavailable"})[0], "last.fm isn't answering right now");  // AOTY-81
   assert.equal(refusal(503, {error: "unavailable"}), null);
   assert.equal(refusal(500, null), null);
-  for (const [status, error] of [[503, "paused"], [503, "busy"], [429, "too_many_new"], [429, null]]) {
+  for (const [status, error] of [[503, "paused"], [503, "busy"], [503, "lastfm_unavailable"], [429, "too_many_new"],
+                                 [429, null]]) {
     const [title, text] = refusal(status, {error});
     assert.equal(title, title.toLowerCase());
     assert.equal(text, text.toLowerCase());
