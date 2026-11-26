@@ -71,7 +71,9 @@ log.setLevel(logging.INFO)
 
 ORIGIN_HEADER = "x-kamp-origin"  # added by kamp.fm's CloudFront on the api origins (kamp-site)
 NOT_FOUND_TTL_S = 86400
-LASTFM_TIMEOUT_S = 3
+# One attempt, inside API Gateway's 30 s. Last.fm's user.getInfo took a steady 3.1-3.4 s on
+# 2026-11-25, so 3 s refused every new user (AOTY-81).
+LASTFM_TIMEOUT_S = 10
 # SecureStrings set by hand (infra/README.md, "Sign-in"); readable by the api alone.
 AUTH_SECRETS = (*session.KEY_NAMES, "lastfm_api_secret")
 AUTH_ACTIONS = frozenset({"auth_start", "auth_callback", "me", "auth_signout"})
