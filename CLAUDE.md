@@ -921,10 +921,10 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 
 - User decisions:
   - **Drawn in the browser on a canvas**, in the page's theme. No server, no new infra.
-  - **Every visitor gets it** on a user page, once the chart ranks something. Group pages have no
-    card yet (AOTY-71 to AOTY-74 add formats).
+  - **Every visitor gets it**, on user and group pages (AOTY-71), once the ranking on screen has a
+    #1. AOTY-72 to AOTY-74 add formats.
   - **Ship despite AOTY-44** (Last.fm's artwork clause): "it's fine" (user, 2026-11-27).
-  - The caption is always 's ("chris's"), as `share.shareTitle`.
+  - A person's caption is always 's ("chris's"), as `share.shareTitle`.
 - **The split:** `sharecard.js` is pure and returns draw operations (`compose`). `app.js` plays them
   onto a canvas (`drawOp`). New formats are new `FORMATS` and layouts there, tested with a stand-in
   `measure`.
@@ -954,6 +954,27 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   "album of the year" settling after its cover loads makes a new image.
 - Analytics: `share_image` with `format` (`top1_square`) and `via` (`native`, `download`).
 - Preview: `tools/serve_shell.py --sample alice`, then "save image" on a desktop.
+
+## Group share images (AOTY-71, 2026-11-27)
+
+- User decisions:
+  - **The everyone view shares the #1 of the ranking on screen** (By Listener, By Play or Weighted;
+    older charts with no `listener` show `album`, as `group.rows`).
+  - **The caption is "<group> · album of the year <year>"**, as `share.shareTitle`'s group form, not
+    's. A long name is ellipsized, never the year (`sharecard.captionFitted`).
+  - **"7 of 9 members"** sits right of "a kamp toy", only while no member is still loading
+    (`waiting` 0), because a first build would undercount. The total counts unavailable members,
+    as the page's dots do.
+  - **A member's view (`?user=`) shares the member's image**: their re-ranked #1, "<member>'s"
+    caption, and their user page's link, never the group's. There's no count.
+- **One rule decides what's shown:** `share.imageSubject` (user, group or member), fed by
+  `share.userTop` or `group.top`. An empty ranking (Weighted's listener floor, a member with no plays
+  from the year) is null, which hides the button. The link buttons stay.
+- Member names on group charts are the lowercase usernames (no display names there), so a member
+  image's caption and link are lowercase.
+- The group's file is named by its slug: a name of all emoji or CJK would leave `fileName` empty.
+- Analytics: `share_image` is unchanged. `group_id` already rides every hit as a page field.
+- Preview: `serve_shell.py --sample alice`, `group/full-house`, then switch rankings and members.
 
 ## Monitoring (AOTY-27, 2026-11-23)
 
