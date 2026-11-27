@@ -273,12 +273,12 @@ sequenceDiagram
   API-)CB: {"group", "requested_at"}
   API-->>O: 201 {member, sync: queued | cooldown | in_progress | paused | not_queued}
   CB->>G: meta + members (consistent): chart_built_at covers requested_at? skip
-  CB->>S3: data/groups/<id>/chart.json
+  CB->>S3: data/groups/<id>/chart.json, then its og.html (link preview, AOTY-85)
   CB->>G: chart_built_at = the chart_requested_at it read first
   O->>API: DELETE api/groups/<id>
   API->>G: one transaction: meta (owner, count unchanged) and every member item
   API-)CB: {"group", "deleted": true}
-  CB->>S3: delete the chart (unless the slug is a group again by now)
+  CB->>S3: delete the chart and its og.html (unless the slug is a group again by now)
 ```
 
 A member's own sync still rebuilds every group they're in: after the user's chart, the chart
@@ -433,6 +433,7 @@ and the next day's run starts over.
 | `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`; the owner's `theme` and `theme_set_at` on meta, AOTY-76), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
 | site bucket `data/users/*/chart.json` | chart builder (builds, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-65) |
 | site bucket `data/groups/*/chart.json` | chart builder (writes, deletes, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-76) |
+| site bucket `data/users/*/og.html`, `data/groups/*/og.html` (AOTY-85) | chart builder (every build; a group's delete) | link-preview bots, through CloudFront: kamp-site's shell function sends them there |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 | SSM `session_key`, `session_key_previous`, `lastfm_api_secret` (AOTY-47) | the admin, by hand | api only |
@@ -478,6 +479,7 @@ sequenceDiagram
   CB->>ST: weeks.json.gz
   CB->>AT: BatchGet every played album
   CB->>S3: data/users/u/chart.json (Cache-Control no-cache)
+  CB->>S3: data/users/u/og.html (link preview, max-age=300; a failure never fails the build)
   CB->>ST: chart_pending.json
   CB->>U: chart_built_at, chart_pending
 ```

@@ -22,8 +22,12 @@ ENV = {
   "STORE_BUCKET": "store",
   "SITE_BUCKET": "site",
   "SITE_PREFIX": "toys/aoty-test/",
+  "BASE_PATH": "/toys/aoty-test/",
+  "PUBLIC_ORIGIN": "https://kamp.fm",
 }
 CHART = ("site", "toys/aoty-test/data/users/alice/chart.json")
+OG = ("site", "toys/aoty-test/data/users/alice/og.html")
+OG_META = {"ContentType": "text/html; charset=utf-8", "CacheControl": "max-age=300"}
 PENDING = ("store", "users/alice/2026/chart_pending.json")
 
 
@@ -226,6 +230,47 @@ def test_a_sync_event_writes_the_chart_with_no_cache(h, world):
   assert s3.json(PENDING) == {"keys": [key("B", "Waiting")]}
   assert ddb.users["alice"]["chart_built_at"] == NOW
   assert ddb.users["alice"]["chart_pending"] == 1
+
+
+# ---- link previews (AOTY-85) ----------------------------------------------------------------
+
+
+def test_a_build_writes_the_link_preview_page_beside_the_chart(h, world):
+  s3, ddb = world
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  page = s3.objects[OG].decode()
+  assert s3.meta[OG] == OG_META
+  assert '<meta property="og:title" content="AliCe&#x27;s albums of the year 2026">' in page
+  assert '<meta property="og:description" content="#1 so far: Known by A">' in page
+  assert '<meta property="og:url" content="https://kamp.fm/toys/aoty-test/user/AliCe">' in page
+
+
+def test_an_empty_first_chart_still_gets_a_preview_page(h):
+  # Written on every build, so a known user's link never meets a 403.
+  s3, ddb = FakeS3(), FakeDDB()
+  s3.put_store({("B", "Waiting"): 4})
+  ddb.users["alice"] = {"username": "alice"}
+  h.handler({"username": "alice", "requested_at": NOW}, None, Deps(s3, ddb))
+  assert s3.json(CHART)["rankings"]["album"] == []
+  assert "the 2026 albums alice actually lived with" in s3.objects[OG].decode()
+
+
+def test_a_failed_preview_write_never_fails_the_build(h, world, capsys):
+  s3, ddb = world
+  put = s3.put_object
+
+  def flaky(Bucket, Key, Body, **kw):
+    if Key.endswith("og.html"):
+      raise RuntimeError("S3 hiccup")
+    put(Bucket, Key, Body, **kw)
+
+  s3.put_object = flaky
+  out = h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  assert out["built"] == 1 and out["failed"] == 0 and out["og_failed"] == 1
+  assert CHART in s3.objects and OG not in s3.objects
+  assert ddb.users["alice"]["chart_built_at"] == NOW
+  line = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")][-1]
+  assert line["og_failed"] == 1
 
 
 # ---- page themes (AOTY-65) ------------------------------------------------------------------
@@ -517,6 +562,7 @@ def test_chart_plays_is_the_same_sum_sync_reports(h, world):
 
 GROUP = "the-server"  # a slug, as common/groups.py makes
 GROUP_CHART = ("site", f"toys/aoty-test/data/groups/{GROUP}/chart.json")
+GROUP_OG = ("site", f"toys/aoty-test/data/groups/{GROUP}/og.html")
 
 
 def group_world(**meta):
@@ -551,6 +597,12 @@ def test_a_group_event_writes_the_group_chart_with_m0s_rules(h):
   # By Play: album plays first, so Mine's 50 plays from one listener lead (AOTY-63).
   assert [chart["albums"][i]["album"] for i, _ in chart["rankings"]["album"]] == ["Mine", "Shared"]
   assert set(chart["rankings"]) == {"listener", "album", "weighted"}
+  # Its link preview page (AOTY-85) names the group and its By Listener #1.
+  page = s3.objects[GROUP_OG].decode()
+  assert s3.meta[GROUP_OG] == OG_META
+  assert '<meta property="og:title" content="the server · albums of the year 2026">' in page
+  assert '<meta property="og:description" content="#1 so far: Shared by A">' in page
+  assert f'<meta property="og:url" content="https://kamp.fm/toys/aoty-test/group/{GROUP}">' in page
 
 
 def test_a_members_sync_rebuilds_their_groups(h):
@@ -658,11 +710,13 @@ def test_a_deleted_groups_chart_is_removed_unless_the_slug_is_back(h):
   s3, ddb = group_world()
   h.handler({"group": GROUP}, None, Deps(s3, ddb))
   ddb.groups.clear()
+  assert GROUP_OG in s3.objects
   assert h.handler({"group": GROUP, "deleted": True}, None, Deps(s3, ddb))["built"] == 1
-  assert GROUP_CHART not in s3.objects
+  assert GROUP_CHART not in s3.objects and GROUP_OG not in s3.objects  # the preview goes too (AOTY-85)
   ddb.add_group(GROUP, ["bob"], name="again")  # re-created before the delete event ran
   h.handler({"group": GROUP, "deleted": True}, None, Deps(s3, ddb))
   assert s3.json(GROUP_CHART)["name"] == "again"
+  assert "again · albums of the year 2026" in s3.objects[GROUP_OG].decode()
 
 
 def test_a_build_for_a_group_deleted_mid_build_doesnt_recreate_its_meta(h):

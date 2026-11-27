@@ -913,6 +913,35 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   `share.js`.
 - Share links use it since AOTY-84 (below). Share images (AOTY-70) move to it in their own ticket.
 
+## Link previews (AOTY-85, 2026-11-27)
+
+- User decisions: a **bot-only tag page**, not pre-rendered shells or Lambda@Edge. **og:image is
+  the #1's cover**, not a rendered card.
+- **The chart builder writes `og.html` beside every chart.json** (`lambdas/chart/og.py`, pure).
+  - It's on every build, the empty first one included, so a known user's link never meets a 403.
+  - It's `text/html; charset=utf-8` with `max-age=300`.
+  - A failed write is logged and counted (`og_failed`), never the build's failure.
+  - A group's delete removes it. Restyles don't touch it: it carries no theme.
+- **kamp-site's shell function routes it.** A request whose user-agent matches its preview-bot
+  list (Discord, iMessage's `facebookexternalhit … Twitterbot`, Slack, …), on `<base>user/<name>`
+  or `<base>group/<slug>`, is rewritten to that og.html, the name lowercased and validated first.
+  - People get the SPA as before.
+  - The cache key is the rewritten URI, so bots and people never share a cached object.
+- **What the page says:**
+  - The title is `share.shareTitle`'s: "alice's albums of the year 2026", or "Full House ·
+    albums of the year 2026". The product name is `common/config.NAME`, which
+    `test_build_shell` keeps equal to the shell's.
+  - The description is "#1 so far: <album> by <artist>". Before anything ranks, it says what the
+    chart is. **Never a progress word:** platforms cache an embed for days.
+  - `og:url` is always canonical (`PUBLIC_ORIGIN` + `BASE_PATH` + the display name).
+  - `og:image` appears only for an https cover. Every value is HTML-escaped: group names are
+    user-written.
+- **The shell carries generic tags**: the intro's preview, and the fallback for a bot the list
+  misses. There's no default image yet, so a cover-less #1 gets a text-only card.
+- Rollout: the toy first (harmless alone), then `tools/rebuild_charts.py` per env (ask before
+  prod), then kamp-site. Sandbox has no kamp.fm path: check on staging with real Discord and
+  iMessage clients.
+
 ## Sharing (AOTY-84, 2026-11-27)
 
 - User decisions:

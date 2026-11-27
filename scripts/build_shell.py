@@ -45,7 +45,7 @@ ASSETS = {
 HASH_LEN = 12
 # The product name is undecided (AOTY-23, user 2026-11-21): a plain description, not a brand.
 # Avoid "AOTY" alone (albumoftheyear.org) and "Wrapped".
-NAME = "albums of the year"
+NAME = "albums of the year"  # lambdas/common/config.py NAME; test_build_shell keeps them equal
 TITLE = f"{NAME} · a kamp toy"
 TARGET_YEAR = 2026  # lambdas/common/config.py TARGET_YEAR; test_build_shell keeps them equal
 
