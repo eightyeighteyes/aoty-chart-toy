@@ -1399,6 +1399,11 @@
     $("share").textContent = labels.main;
     $("share-member").hidden = !member;
     if (member) $("share-member").textContent = labels.member;
+    // The share image (AOTY-70): user pages that rank something.
+    const image = $("share-image");
+    image.hidden = !share.imageVisible(shareTarget, current);
+    if (!image.hidden && !isBusy(image)) image.textContent = share.imageLabel(nativeFiles());
+    cardSoon();
   }
 
   // The share sheet where it applies, else copy. navigator.share must be the click's first await:
@@ -1438,6 +1443,189 @@
 
   $("share").addEventListener("click", () => shareOrCopy($("share"), shareTarget));
   $("share-member").addEventListener("click", () => shareOrCopy($("share-member"), groupWho ? memberTarget() : null));
+
+  // ---- the share image (AOTY-70) ----------------------------------------------------------------
+  //
+  // The #1 as a 1080x1080 PNG in the page's theme, drawn here on a canvas from sharecard.js's
+  // operations. Touch devices that can share files get the share sheet with the PNG alone (the only
+  // way into Instagram from the web, and iOS drops the image if text rides along); everything else
+  // downloads it.
+  //
+  // iOS refuses share() after slow work since the tap, so the image is made ahead: once the button
+  // scrolls into view, or is hovered, focused or touched, never on every page load (it costs a CORS
+  // fetch of the cover). A tap before it's ready makes it, then tries; if that share is refused, the
+  // image is ready and the next tap shares it at once.
+  const sc = globalThis.aotyShareCard;  // web/src/sharecard.js, loaded first
+  const CARD_FORMAT = "top1_square";
+  // The theme on screen, complete: what applyTheme last painted (the default's tokens for null).
+  let shownTokens = th.complete(th.THEMES[th.DEFAULT]);
+  let card = null;  // {key, promise, file}: the last image made or being made
+  let cardInView = false, cardTimer = 0;
+
+  // What the image shows now, and a key that changes whenever any of it does: the chart, the name,
+  // the link and the resolved colours ("album of the year" settles after its cover loads).
+  function cardInput() {
+    if (!shareTarget || !share.imageVisible(shareTarget, current)) return null;
+    const a = current.albums[current.rankings.album[0][0]];
+    if (!a) return null;
+    const texts = {title: a.album, artist: a.artist, name: shareTarget.name, year: current.year,
+                   url: linkFor(shareTarget)};
+    const urls = a.art ? [a.art, ...(a.fallbacks || [])] : [];
+    const tokens = shownTokens;
+    return {key: JSON.stringify([current.generated_at, texts, urls[0] || "", tokens]), texts, urls, tokens};
+  }
+
+  // The image for the page as it is now: the one already made, or a promise of it (null on failure).
+  function makeCard() {
+    const input = cardInput();
+    if (!input) return Promise.resolve(null);
+    if (card && card.key === input.key) return card.promise;
+    const mine = {key: input.key, file: null};
+    mine.promise = renderCard(input).catch(() => null).then(file => (mine.file = file));
+    card = mine;
+    return mine.promise;
+  }
+  const readyCard = () => {
+    const input = card && card.file ? cardInput() : null;
+    return input && input.key === card.key ? card.file : null;
+  };
+
+  // Ahead of a tap: soon after the button is on screen, again after a theme or chart change.
+  function cardSoon() {
+    clearTimeout(cardTimer);
+    if (!cardInView || $("share-image").hidden) return;
+    cardTimer = setTimeout(() => {
+      // Safari has no requestIdleCallback.
+      if (window.requestIdleCallback) requestIdleCallback(() => makeCard(), {timeout: 2000});
+      else makeCard();
+    }, 300);
+  }
+  if (window.IntersectionObserver) {
+    new IntersectionObserver(entries => {
+      cardInView = entries.some(e => e.isIntersecting);
+      cardSoon();
+    }).observe($("share-image"));
+  }
+  for (const type of ["pointerenter", "focus", "touchstart"]) {
+    $("share-image").addEventListener(type, () => { makeCard(); }, {passive: true});
+  }
+
+  async function renderCard({texts, urls, tokens}) {
+    // With the real text, so the unicode-range subsets it needs load (é, Cyrillic, CJK).
+    if (document.fonts && document.fonts.load) {
+      await Promise.all(sc.fontLoads({texts, tokens}).map(([f, t]) => document.fonts.load(f, t).catch(() => null)));
+    }
+    const img = urls.length ? await loadCover(urls, {cors: true}) : null;
+    // A cover that loaded but taints the canvas (no CORS after all) makes toBlob throw: a tainted
+    // canvas stays tainted, so the tile goes on a fresh one.
+    const blob = (img && await drawCard(texts, tokens, img)) || await drawCard(texts, tokens, null);
+    return blob ? new File([blob], sc.fileName(texts.name, texts.year), {type: "image/png"}) : null;
+  }
+
+  // One attempt on a new canvas: the PNG, or null (tainted, or toBlob gave nothing, as iOS can
+  // under memory pressure).
+  function drawCard(texts, tokens, img) {
+    const {width, height} = sc.FORMATS[CARD_FORMAT];
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return Promise.resolve(null);
+    const measure = (t, f) => { ctx.font = f; return ctx.measureText(t).width; };
+    for (const o of sc.compose({format: CARD_FORMAT, texts, tokens, cover: !!img, measure})) drawOp(ctx, o, img);
+    return new Promise(resolve => {
+      try { canvas.toBlob(b => resolve(b && b.size ? b : null), "image/png"); } catch (_) { resolve(null); }
+    });
+  }
+
+  function drawOp(ctx, o, img) {
+    ctx.save();
+    if (o.op === "fill") {
+      ctx.fillStyle = o.color;
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+    } else if (o.op === "text") {
+      ctx.font = o.font;
+      ctx.fillStyle = o.color;
+      ctx.textAlign = o.align;
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(o.text, o.x, o.y);
+    } else if (o.op === "mark") {
+      const k = o.size / 200, cx = o.x + o.size / 2, cy = o.y + o.size / 2;
+      for (const c of o.circles) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, c.r * k, 0, 2 * Math.PI);
+        if (c.fill) { ctx.fillStyle = c.fill; ctx.fill(); }
+        if (c.stroke) { ctx.strokeStyle = c.stroke; ctx.lineWidth = c.lineWidth * k; ctx.stroke(); }
+      }
+    } else if (o.op === "cover") {
+      // Cropped to a square from the middle, as object-fit: cover; with a soft shadow under it.
+      const s = Math.min(img.naturalWidth, img.naturalHeight);
+      ctx.shadowColor = `rgba(0, 0, 0, ${o.shadow})`;
+      ctx.shadowBlur = 48;
+      ctx.shadowOffsetY = 18;
+      ctx.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, o.x, o.y, o.w, o.h);
+    } else if (o.op === "tile") {
+      const g = ctx.createLinearGradient(o.x, o.y, o.x + o.w, o.y + o.h);  // 135 degrees, as .noart
+      g.addColorStop(0, o.from);
+      g.addColorStop(1, o.to);
+      ctx.fillStyle = g;
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+    }
+    ctx.restore();
+  }
+
+  // A file for the share sheet, or a download: one dummy PNG asks canShare whether files go.
+  const nativeFiles = files => {
+    try { return native({files: files || [new File([new Uint8Array(0)], "aoty.png", {type: "image/png"})]}); }
+    catch (_) { return false; }
+  };
+
+  async function shareImage() {
+    const button = $("share-image"), msg = $("share-msg");
+    if (sharing || isBusy(button)) return;
+    msg.textContent = "";
+    $("share-url").hidden = true;
+    const ready = readyCard();
+    if (ready) return deliver(ready, true);
+    busy(button, true, "making…");
+    const file = await makeCard();
+    busy(button, false);
+    if (!file) { msg.textContent = "couldn't make the image. try again in a minute."; return; }
+    deliver(file, false);
+  }
+
+  // activated: share() is this tap's first await, so the share sheet may open.
+  async function deliver(file, activated) {
+    const msg = $("share-msg");
+    if (nativeFiles([file])) {
+      sharing = true;
+      try {
+        await navigator.share({files: [file]});
+        track("event", "share_image", {format: CARD_FORMAT, via: "native"});
+        return;
+      } catch (e) {
+        const why = e && e.name;
+        if (why === "AbortError" || why === "InvalidStateError") return;  // cancelled, or a sheet open
+        // The tap's activation ran out while the image was made: it's ready now.
+        if (why === "NotAllowedError" && !activated) { msg.textContent = "the image is ready. tap again to share it."; return; }
+      } finally {
+        sharing = false;
+      }
+    }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name;
+    a.hidden = true;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);  // Firefox cancels a download revoked at once
+    track("event", "share_image", {format: CARD_FORMAT, via: "download"});
+    msg.textContent = "image saved.";
+  }
+
+  $("share-image").addEventListener("click", shareImage);
 
   // ---- the group page's share and edit controls -------------------------------------------------
 
@@ -1699,6 +1887,9 @@
   function applyTheme(tokens) {
     th.apply(tokens);
     auroraColors();
+    // The share image (AOTY-70) draws from the same tokens, so its tests cover what's on screen.
+    shownTokens = th.complete(tokens || th.THEMES[th.DEFAULT]);
+    cardSoon();
   }
 
   let matchKey = "", matchTokens = null;  // the cover the "album of the year" colours came from

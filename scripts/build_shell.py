@@ -33,6 +33,7 @@ ASSETS = {
   "intro.js": "INTRO",
   "lastfm.js": "LASTFM",
   "share.js": "SHARE",
+  "sharecard.js": "SHARECARD",
   "firstvisit.js": "FIRSTVISIT",
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",

@@ -37,6 +37,8 @@
     share_copy: {},
     // The system share sheet shared a page's link (AOTY-84): which page is never sent.
     share_native: {},
+    // A share image went out (AOTY-70): its format and how, never whose page or which album.
+    share_image: {format: ["top1_square"], via: ["native", "download"]},
     // An owner saved their page's theme (AOTY-65): the theme id only, never whose page.
     theme_set: {theme: ["poster", "kamp", "strawberry-switchblade", "beach-house", "blackpink", "deep-purple",
                         "green-day", "foxy-brown", "golden-smog", "white-stripes", "tangerine-dream",

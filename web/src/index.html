@@ -18,6 +18,7 @@
 <script src="{{INTRO}}" defer></script>
 <script src="{{LASTFM}}" defer></script>
 <script src="{{SHARE}}" defer></script>
+<script src="{{SHARECARD}}" defer></script>
 <script src="{{FIRSTVISIT}}" defer></script>
 <script src="{{GROUP}}" defer></script>
 <script src="{{GROUPEDIT}}" defer></script>
@@ -105,10 +106,12 @@
     <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
     <!-- User and group pages (AOTY-84, AOTY-52): share for everyone; a member's view of a group
          also offers the member's own page; edit for the group's owner only. The labels change to
-         "share" where the system share sheet is used (touch only). -->
+         "share" where the system share sheet is used (touch only). User pages also offer the #1 as
+         an image (AOTY-70), for every visitor once the chart ranks something. -->
     <div class="page-tools" id="page-tools" hidden>
       <button type="button" class="pill" id="share">copy link</button>
       <button type="button" class="pill" id="share-member" hidden></button>
+      <button type="button" class="pill" id="share-image" hidden>share image</button>
       <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
       <span class="share-url" id="share-url" hidden></span>
       <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>

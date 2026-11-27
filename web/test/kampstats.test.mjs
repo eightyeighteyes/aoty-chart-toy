@@ -59,6 +59,10 @@ test("events keep only listed params and values", () => {
   // AOTY-84: a native share says nothing about which page either.
   assert.deepEqual(EVENTS.share_native, {});
   assert.deepEqual(clean("share_native", {url: "https://aoty.kamp.fm/alice", title: "alice's albums"}), {});
+  // AOTY-70: a share image says its format and how it went, nothing about whose page or which album.
+  assert.deepEqual(clean("share_image", {format: "top1_square", via: "native", album: "1989", name: "alice"}),
+                   {format: "top1_square", via: "native"});
+  assert.deepEqual(clean("share_image", {format: "alice", via: "alice"}), {});
   // AOTY-43: an album link's click says nothing about which album, or whose page.
   assert.deepEqual(EVENTS.album_click, {});
   assert.deepEqual(clean("album_click", {album: "1989", artist: "Taylor Swift", user: "alice"}), {});
@@ -183,7 +187,7 @@ test("a username anywhere on the page never reaches a hit", () => {
   p.stats.setPage();
   for (const event of Object.keys(EVENTS)) {
     p.stats.event(event, {outcome: name, result: name, control: name, value: name, group_size: name,
-                          theme: name, name, username: name, url: `${ORIGIN}${BASE}user/${name}`,
+                          theme: name, format: name, via: name, name, username: name, url: `${ORIGIN}${BASE}user/${name}`,
                           album: name, artist: name, link_url: `https://www.last.fm/user/${name}`,
                           title: `${name}'s albums`, short: `https://aoty.kamp.fm/${name}`});
   }

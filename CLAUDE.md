@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -916,6 +916,44 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   `#page-tools` was `#group-tools`.
 - Analytics: `share_copy` (copied) and `share_native` (shared through the sheet), with no params.
   Which page was shared is never sent.
+
+## Share images (AOTY-70, 2026-11-27)
+
+- User decisions:
+  - **Drawn in the browser on a canvas**, in the page's theme. No server, no new infra.
+  - **Every visitor gets it** on a user page, once the chart ranks something. Group pages have no
+    card yet (AOTY-71 to AOTY-74 add formats).
+  - **Ship despite AOTY-44** (Last.fm's artwork clause): "it's fine" (user, 2026-11-27).
+  - The caption is always 's ("chris's"), as `share.shareTitle`.
+- **The split:** `sharecard.js` is pure and returns draw operations (`compose`). `app.js` plays them
+  onto a canvas (`drawOp`). New formats are new `FORMATS` and layouts there, tested with a stand-in
+  `measure`.
+- **Colours come from `shownTokens`**: what `applyTheme` last painted, `th.complete`d. Never
+  `getComputedStyle`, so `sharecard.test.mjs`'s contrast check covers what ships. Every text sits on
+  plain `bg`; the tile's name on the tile tokens.
+- **Text fitting** (`fitText`): the largest size that fits without breaking a word, else one that
+  breaks a word (CJK, one giant word), else the smallest with an ellipsis. Graphemes via
+  `Intl.Segmenter`, so emoji and accents aren't split.
+- **Real-browser rules:**
+  - A tainted canvas stays tainted: a cover that loads but taints makes `toBlob` throw, and the tile
+    is drawn on a **fresh** canvas. `toBlob` can also give null (iOS memory pressure).
+  - Fonts load with `document.fonts.load(font, text)` using the card's real text, so Google Fonts'
+    unicode-range subsets for é, Cyrillic or CJK come too.
+  - No canvas `letterSpacing` (uneven support), so gabbie's tracking isn't drawn.
+  - The kamp mark is `arc()`s, not an SVG image.
+  - **iOS refuses `share()` after slow work since the tap.** The image is made ahead: once the button
+    is in view (IntersectionObserver), or on hover, focus or touch. Never on page load: it costs a
+    CORS fetch of the cover. A tap before it's ready makes it; if that share is refused, the message
+    says "tap again".
+  - `share({files})` with the file **alone**: iOS splits text into a separate item and Instagram drops
+    the image.
+  - Files use the sheet only where `canShare({files})` says yes (`share.useNative` returns false for
+    files without `canShare`), so Firefox Android downloads.
+  - The download's blob URL is revoked after a minute: Firefox cancels one revoked at once.
+- The cache key is the chart's `generated_at`, the texts, the cover URL and the resolved tokens, so
+  "album of the year" settling after its cover loads makes a new image.
+- Analytics: `share_image` with `format` (`top1_square`) and `via` (`native`, `download`).
+- Preview: `tools/serve_shell.py --sample alice`, then "save image" on a desktop.
 
 ## Monitoring (AOTY-27, 2026-11-23)
 
