@@ -368,10 +368,8 @@ sequenceDiagram
     MB->>AT: write year, type, tracks (a confirmed miss = null year)
     MB->>HQ: delete the resolved messages
   end
-  opt messages left when time ran short
-    MB-)MB: async invoke itself (runs after this one exits)
-  end
   MB-)CB: {"pending": true}: after the first batch that writes, then at most once a minute, and at the end
+  Note over MB: Messages left when time ran short: work_left in the log. The 5-minute schedule<br/>(or a start throttled behind this run) begins the next run. It never invokes itself (AOTY-58).
 ```
 
 A failed request is never written. Its message reappears after the visibility timeout, and
@@ -390,7 +388,7 @@ sequenceDiagram
   participant ST as store bucket
   participant AT as albums table
 
-  Note over SC,MB: Hourly backstop, in case a sync's poke was lost
+  Note over SC,MB: Every 5 minutes: each next run of a backlog, and a lost sync poke (AOTY-58)
   SC-)MB: invoke {}
   MB->>HQ: receive (long poll, both queues)
   alt both empty

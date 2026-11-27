@@ -274,7 +274,7 @@ data "aws_iam_policy_document" "deploy" {
       values   = [each.key]
     }
   }
-  # The mb lane's hourly backstop (AOTY-19). Schedules carry no tags, so they're scoped by name.
+  # The mb lane's 5-minute schedule (AOTY-19, AOTY-58). Schedules carry no tags, so they're scoped by name.
   statement {
     sid = "Schedules"
     actions = [

@@ -404,9 +404,21 @@ not daily totals from paging scrobbles (the story text was revised to match).
   a failed Last.fm fallback is a failure, not a cached `None`.
 - **Time:** the client takes a deadline and never starts an attempt that might not finish by it
   (one `mb_get` can take minutes over 8 tries). A run stops starting batches 30 s before its
-  deadline, releases that batch's failures (visibility 0), and invokes itself if work is left.
+  deadline and releases that batch's failures (visibility 0). If work is left, it logs
+  `work_left`; the next run comes from the schedule.
+- **It never invokes itself (AOTY-58, 2026-11-27).** Each self-invoke was one more hop in the same
+  request chain, and Lambda's recursive loop detection stops a chain after about 16 hops. Prod's
+  1,904-album prewarm backlog hit that, and AWS Health sent runaway-termination notices.
+  - An EventBridge Scheduler start every 5 minutes (`schedule.tf`) is outside any chain.
+  - Don't set `RecursiveLoop: Allow`: it removes the guard.
+  - The `*-recursion-dropped` prod alarms watch `RecursiveInvocationsDropped`.
+  - sync's continuations (sync → SQS → sync, up to 20) are a chain too, and the pokes they send to
+    mb and chart carry it.
 - While a run goes, every other start is throttled and retried by Lambda until the 1 h max event
-  age. Harmless: each one exits fast on empty queues. The empty check long-polls both queues.
+  age. Harmless: each one exits fast on empty queues. The empty check long-polls both queues. So a
+  backlog's runs follow each other within about 5 minutes (retry backoff or the next tick).
+- An empty run (most scheduled starts) leaves `RunSeconds` and `AlbumsPerSecond` out of its EMF.
+  Otherwise its ~2 s of polling would drag down `mb-slow`'s albums per second in a light hour.
 - **Parity (`tools/mb_parity.py`, 2026-11-22 12:15 ET, laptop):** all 1,536 M0 cold-run candidates
   resolved with none failed. Years were the same for all 1,530 that M0's cache had. The other 6 were
   never looked up by M0; the new answers look right. Track counts and types were the same for all
