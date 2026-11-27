@@ -29,7 +29,7 @@ Every resource is named `kamp-aoty-<env>-*` and tagged `Project=kamp-aoty`, `Env
 | `albums` table | `artist_key` + `title_key` (`norm(album artist)`, `norm(base_title(album))`). Deletion protection in staging and prod, `prevent_destroy` everywhere; PITR in prod. |
 | `sync.fifo` queue | Message group = username. Visibility 5,400 s (6 x the sync timeout). Event source mapping to the sync Lambda: batch 1, `ReportBatchItemFailures`, `maximum_concurrency` = `sync_concurrency` (2). The sync Lambda reserves one more. Terraform ignores the mapping's `enabled`, which is the syncs' hard stop (see "Guardrails"). |
 | `mb-hot`, `mb-cold` queues | Polled by the mb Lambda itself, hot first. Visibility 900 s (the mb timeout). |
-| mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an hourly EventBridge Scheduler schedule that invokes it through the `…-mb-schedule` role; with both queues empty a run makes no MusicBrainz request. |
+| mb lane (AOTY-19) | The mb Lambda has **reserved concurrency 1**: the one MusicBrainz client per environment. Async invoke config: max event age 1 h, no error retries (throttled starts are retried by Lambda anyway). `kamp-aoty-<env>-mb-backstop` is an EventBridge Scheduler schedule, every 5 minutes, that invokes it through the `…-mb-schedule` role. It's how a backlog's next run starts, because the lane never invokes itself (AOTY-58: a self-invoke chain hit Lambda's recursive loop detection). With both queues empty a run makes no MusicBrainz request (about 288 such runs a day, a few seconds each). |
 | Release index build (AOTY-20) | `kamp-aoty-<env>-index` ECS cluster (FARGATE_SPOT only) and task definition: 1 vCPU / 4 GB, x86_64 (Spot runs no ARM64), AWS's public `lambda/python:3.13` image pinned by digest, fetching its code from `s3://<store>/code/index.zip`. Runs in the default VPC's public subnets with a public IP and the default security group: no NAT. `…-index-daily` schedule at 06:15 UTC (off in sandbox) runs the exact revision Terraform made, through the `…-index-schedule` role. Logs in `/ecs/kamp-aoty-<env>-index`. See "Release index" below. |
 | DLQs | One per queue, 14-day retention, `maxReceiveCount` 5, redrive allowed only from its source. |
 | Chart builder (AOTY-21) | The chart Lambda has **reserved concurrency 1**, so builds never overlap and an older read can't overwrite a newer chart. Started by async invokes from sync (`{"username", "requested_at"}`), mb (`{"pending": true}`) and the api (`{"group", ...}`, AOTY-48); same invoke config as mb. Writes `<prefix>data/users/<u>/chart.json` (`Cache-Control: no-cache`) to the site bucket and `users/<u>/<year>/chart_pending.json` to the store. See "Charts" below. |
@@ -646,7 +646,7 @@ Every alarm emails the `kamp-aoty-alerts` topic (`global/alerts.tf`) on ALARM an
 The alarm names say which env it is (`kamp-aoty-<env>-<alarm>`). `modules/stack/alarms.tf` has
 the set, and its description links here. `alarms` per env: prod `full`, staging `basic` (the DLQs
 and the uptime check), sandbox `none` (its deploy role can't write alarms: any branch can use it).
-About 18 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
+About 21 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
 $0.10 each a month.
 
 ```sh
@@ -707,7 +707,7 @@ hard stop on the mapping and fix it first.
 ### `mb-hot-age`
 
 An album users are waiting on has sat in mb-hot over 30 min, so the mb lane isn't draining.
-Check `/aws/lambda/kamp-aoty-<env>-mb` for errors and that the hourly `mb-backstop` schedule runs.
+Check `/aws/lambda/kamp-aoty-<env>-mb` for errors and that the 5-minute `mb-backstop` schedule runs.
 Start it by hand with the invoke in "Syncs: the API, or by hand".
 
 ### `mb-throttled`
@@ -750,6 +750,25 @@ fix it with `put-parameter --overwrite` or delete it (back to the default). See 
 was dropped). The chart builder runs one at a time, so a crowd of syncs piles up builds. A
 dropped build is redone at the user's next sync, or by hand ("Charts"). If it keeps happening,
 slow the syncs down (`pause_new_users`) until the line clears.
+
+### `recursion-dropped`
+
+`sync-recursion-dropped`, `mb-recursion-dropped`, `chart-recursion-dropped`: Lambda's recursive
+loop detection stopped an invocation, because the request chain it was in reached about 16 hops
+(Lambda → Lambda, or through SQS). AWS Health also sends an
+`AWS_LAMBDA_RUNAWAY_TERMINATION_NOTIFICATION` (readable only in the Health console).
+
+- **mb:** it shouldn't happen any more. The lane used to invoke itself when it ran out of time,
+  and a large backlog chained more than 16 runs (AOTY-58). Now the 5-minute schedule starts each
+  next run. Check that the deployed code is current: an old build still self-invokes.
+- **sync:** a long first sync continues in fresh messages (AOTY-46, up to 20), sync → SQS → sync,
+  all one chain. The sync worker's pokes to mb and chart carry it too, so a deep continuation can
+  also show as an mb or chart drop. A dropped sync continuation re-receives its message; a
+  dropped mb start is covered by the schedule; a dropped chart build is redone by the next poke
+from mb (pending albums) or the user's next sync.
+
+Don't fix it with `put-function-recursion-config --recursive-loop Allow`: that removes the guard
+against a real runaway.
 
 ## Dashboard (AOTY-41)
 

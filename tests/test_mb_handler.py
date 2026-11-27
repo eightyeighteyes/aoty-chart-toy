@@ -225,9 +225,23 @@ def test_empty_queues_make_no_musicbrainz_request_and_long_poll_both(h, capsys):
   assert sqs.waits == [h.WAIT_S, h.WAIT_S]  # hot, then cold, each a long poll
   line = emf(capsys)
   assert line["MbRequests"] == 0 and line["Environment"] == "test"
-  assert {m["Name"] for m in line["_aws"]["CloudWatchMetrics"][0]["Metrics"]} >= {
-    "MbRequests", "MbThrottled", "MbRetryAfterSeconds", "AlbumsPerSecond", "HotQueueDepth", "ColdQueueDepth"
-  }  # fmt: skip
+  names = {m["Name"] for m in line["_aws"]["CloudWatchMetrics"][0]["Metrics"]}
+  assert names >= {"MbRequests", "MbThrottled", "MbRetryAfterSeconds", "HotQueueDepth", "ColdQueueDepth"}
+  # An empty run (most scheduled starts, AOTY-58) leaves out the throughput metrics, so its few
+  # seconds of polling don't count as slow lane work (the mb-slow alarm divides by RunSeconds).
+  assert not names & {"RunSeconds", "AlbumsPerSecond"}
+  assert "RunSeconds" not in line and "AlbumsPerSecond" not in line
+
+
+def test_a_run_with_only_resolved_messages_still_reports_throughput(h, capsys):
+  item = {"artist_key": {"S": "artist"}, "title_key": {"S": "x"}}
+  deps, sqs, clock = world(h, ddb=FakeDDB({("artist", "x"): item}))
+  sqs.send("q/cold", msg("X"))
+  out = h.handler({}, Context(clock, 900), deps)
+  assert out["already_resolved"] == 1 and deps.mb.calls == []
+  line = emf(capsys)
+  names = {m["Name"] for m in line["_aws"]["CloudWatchMetrics"][0]["Metrics"]}
+  assert {"RunSeconds", "AlbumsPerSecond"} <= names and "RunSeconds" in line
 
 
 def test_resolves_writes_items_and_deletes_messages(h):
@@ -313,26 +327,30 @@ def test_every_search_gets_the_runs_deadline(h):
   assert deps.mb.deadlines == [300 - h.DEADLINE_MARGIN_S]
 
 
-def test_out_of_time_with_work_left_releases_failures_and_invokes_itself(h):
+def test_out_of_time_with_work_left_releases_failures_and_never_invokes_itself(h, capsys):
   # Deadline 80 s (100 - margin); each search costs 45 s. Batch 1 finishes at 45 s. Batch 2's
   # search ends past the deadline, so its 20 albums fail; batch 3 is never received.
   deps, sqs, clock = world(h, cost=45.0)
+  deps.env = {**ENV, "CHART_FUNCTION": "chart"}
   for i in range(60):
     sqs.send("q/cold", msg(f"A{i:02}"))
   out = h.handler({}, Context(clock, 100), deps)
   assert out["resolved"] == 20 and out["failed"] == 20
-  assert out["out_of_time"] and out["self_invoked"]
-  assert deps.lambda_.invokes == [{"FunctionName": "mb", "InvocationType": "Event", "Payload": b"{}"}]
+  assert out["out_of_time"] and out["work_left"]
+  # No self-invoke (AOTY-58): a chain of them was stopped by Lambda's recursive loop detection.
+  # The schedule starts the next run. The chart builder is still poked for the albums written.
+  assert [i["FunctionName"] for i in deps.lambda_.invokes] == ["chart"]
+  assert emf(capsys)["work_left"] is True
   # The failed batch was released (visible again now), not left to a 15-minute timeout.
   assert sqs.get_queue_attributes(QueueUrl="q/cold", AttributeNames=[])["Attributes"] == {
     "ApproximateNumberOfMessages": "40"
   }
 
 
-def test_out_of_time_with_nothing_left_does_not_invoke_itself(h):
+def test_out_of_time_with_nothing_left_has_no_work_left(h):
   deps, sqs, clock = world(h)
   out = h.handler({}, Context(clock, 10), deps)
-  assert out["out_of_time"] and not out["self_invoked"] and deps.lambda_.invokes == []
+  assert out["out_of_time"] and not out["work_left"] and deps.lambda_.invokes == []
   assert sqs.waits == []  # no time to start: nothing received
 
 

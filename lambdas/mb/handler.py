@@ -1,9 +1,14 @@
 """MusicBrainz lane Lambda (AOTY-19): the one MusicBrainz client, draining mb-hot then mb-cold.
 
-Started by the sync worker (async invoke, payload {}) whenever it queues albums, by an hourly
-schedule as a backstop, and by itself when it runs out of time with work left. Reserved
-concurrency 1 (infra/modules/stack/functions.tf) makes it the only MusicBrainz client in its
-environment: a second start is throttled and Lambda retries it after this one exits.
+Started by the sync worker (async invoke, payload {}) whenever it queues albums, and by a
+schedule every 5 minutes (infra/modules/stack/schedule.tf), which is also how a run that ran
+out of time with work left gets its successor. Reserved concurrency 1
+(infra/modules/stack/functions.tf) makes it the only MusicBrainz client in its environment: a
+second start is throttled and Lambda retries it after this one exits.
+
+It never invokes itself (AOTY-58). Each self-invoke was one more hop in the same request chain,
+and Lambda's recursive loop detection stops a chain after about 16 hops, which a large backlog
+reached. A Scheduler start is outside any chain.
 
 A message is one album, as the sync worker sends it (AOTY-18):
 
@@ -30,7 +35,9 @@ One run, until both queues are empty or time runs short:
      dead-letter queue.
   6. Once items are written, poke the chart builder (AOTY-21) with {"pending": true}: after the
      first such batch, then at most once a minute, and at the end of the run (ChartPoke).
-With both queues empty, a run makes no MusicBrainz request. Each run logs one EMF line.
+With both queues empty, a run makes no MusicBrainz request. Each run logs one EMF line; a run
+that received no messages leaves out RunSeconds and AlbumsPerSecond, so the empty scheduled
+runs don't dilute throughput (the mb-slow alarm divides by RunSeconds).
 """
 
 import gzip
@@ -190,15 +197,12 @@ def run(deps, context):
 
   charts.at_end()
   depths = _depths(deps, queues)
-  poked = False
-  if out_of_time and sum(depths.values()):
-    # The next run queues behind this one (reserved concurrency 1) and starts when it exits.
-    deps.lambda_.invoke(FunctionName=deps.env["MB_FUNCTION"], InvocationType="Event", Payload=b"{}")
-    poked = True
+  # No self-invoke (AOTY-58): the schedule, or a start throttled behind this run, picks it up.
+  work_left = out_of_time and sum(depths.values()) > 0
   elapsed = deps.mono() - started
   totals["lastfm_calls"] = getattr(deps.lastfm, "calls", 0) - calls_before
-  _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age)
-  return {**totals, "out_of_time": out_of_time, "self_invoked": poked}
+  _emit(deps, totals, depths, elapsed, out_of_time, work_left, index_age)
+  return {**totals, "out_of_time": out_of_time, "work_left": work_left}
 
 
 class ChartPoke:
@@ -428,7 +432,7 @@ to_dynamo = dynamo.to_item
 # ---- metrics ----------------------------------------------------------------------------
 
 
-def _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age=None):
+def _emit(deps, totals, depths, elapsed, out_of_time, work_left, index_age=None):
   """One CloudWatch Embedded Metric Format line: the run's metrics, by Environment."""
   mb = deps.mb.summary()
   values = {
@@ -456,6 +460,10 @@ def _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age=None):
   }
   if index_age is not None:  # absent rather than 0 when there's no usable index
     values["IndexAgeHours"] = (index_age, "None")
+  if not totals["messages"]:
+    # An empty run (most scheduled starts) did no lane work: absent rather than its few seconds
+    # of polling, which would drag down albums per second and trip mb-slow in a light hour.
+    del values["RunSeconds"], values["AlbumsPerSecond"]
   line = {
     "_aws": {
       "Timestamp": int(deps.clock() * 1000),
@@ -473,7 +481,7 @@ def _emit(deps, totals, depths, elapsed, out_of_time, poked, index_age=None):
     "invalid": totals["invalid"],
     "batches": totals["batches"],
     "out_of_time": out_of_time,
-    "self_invoked": poked,
+    "work_left": work_left,
     "chart_pokes": totals["chart_pokes"],
     "slept_s": round(mb["slept_s"], 1),
     "server_s": round(mb["server_s"], 1),
