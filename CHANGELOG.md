@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.9.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.8.0...v1.9.0) (2026-11-27)
+
+
+### Features
+
+* **build:** short host for prod share links ([e230160](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e23016080f4a40a1987fd23f8edf18989dec9108))
+* **chart:** carry each album's Last.fm name ([2e797c9](https://github.com/eightyeighteyes/aoty-chart-toy/commit/2e797c9c2a0c61b79613a53064cf676cbe819b65))
+* link chart albums and names to Last.fm (AOTY-43) ([ccf0aad](https://github.com/eightyeighteyes/aoty-chart-toy/commit/ccf0aad96f9cdd1c04bedaafeddbb72d30700d49))
+* share links for user and group pages (AOTY-84) ([c877daa](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c877daa2ef70e8d124ecf397a0d4af18de64b052))
+* **web:** 9:16 story share images (AOTY-72) ([334f9c6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/334f9c62beeb78b2096a418f3e36491de5283c69))
+* **web:** a 9:16 story layout for the share image (AOTY-72) ([0867d13](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0867d133c491b05cef289ccbd6b4768e582a123e))
+* **web:** count the story format and its switch (AOTY-72) ([c562ba1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c562ba1998753b0432e97e916972ab67a6adb280))
+* **web:** draw and share the top-album image (AOTY-70) ([01eb223](https://github.com/eightyeighteyes/aoty-chart-toy/commit/01eb223a4e13be63ee13ef33efdcf3609c8421d8))
+* **web:** Last.fm album URLs ([816c6b9](https://github.com/eightyeighteyes/aoty-chart-toy/commit/816c6b96a6c51f381cb04fd44433a34bbb7c9bdd))
+* **web:** link albums and names to Last.fm ([fba6702](https://github.com/eightyeighteyes/aoty-chart-toy/commit/fba6702b707f65d9983195200a9c8bf69a0939ae))
+* **web:** pick a square or story share image (AOTY-72) ([af06a6f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/af06a6f0fd276d026d5dbc28b0c067c3bdb3464c))
+* **web:** share a group's [#1](https://github.com/eightyeighteyes/aoty-chart-toy/issues/1) as a square image (AOTY-71) ([5875f28](https://github.com/eightyeighteyes/aoty-chart-toy/commit/5875f28069298925aa1517647759b1b9a5ff32d0))
+* **web:** share a group's [#1](https://github.com/eightyeighteyes/aoty-chart-toy/issues/1) as a square image (AOTY-71) ([a855e20](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a855e203075fdafc7ae229db7e88918f89a6de89))
+* **web:** share button on user pages, native share on touch ([8ac0c9c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/8ac0c9c34b5047856eb4bed0f25c63f19790db2d))
+* **web:** share card layout (AOTY-70) ([7af4c3b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7af4c3bb92e850c6b067f616e0b6c33ac2ee7b25))
+* **web:** share image button and its rules (AOTY-70) ([6bc13d8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6bc13d817aac9c02de61e50e4b1d54fa44939c3f))
+* **web:** share links, short on prod ([8fdbd2c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/8fdbd2c75c450aeb7f2b641d0758a3577e514adb))
+* **web:** share your [#1](https://github.com/eightyeighteyes/aoty-chart-toy/issues/1) as a square image (AOTY-70) ([3630adc](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3630adc7c84ede2cb6a11c5da33152847ec9b44c))
+* **web:** share your top 10 as an image (AOTY-74) ([30c29c5](https://github.com/eightyeighteyes/aoty-chart-toy/commit/30c29c5d8f49418d7d45a9559cc779ad0a9c205c))
+* **web:** share your top 10 as an image (AOTY-74) ([69b0ba6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/69b0ba6d1e1a5bb5df70bf8a81705b8c944744e1))
+* **web:** share your top 3 as an image (AOTY-73) ([6608815](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6608815af2b05cae3a9034d4fba6d3950565c5a3))
+* **web:** share your top 3 as an image (AOTY-73) ([622a471](https://github.com/eightyeighteyes/aoty-chart-toy/commit/622a471684a67021bac82e7533b92059b5085bda))
+* **web:** the group's on-screen [#1](https://github.com/eightyeighteyes/aoty-chart-toy/issues/1) for the share image (AOTY-71) ([86e1a31](https://github.com/eightyeighteyes/aoty-chart-toy/commit/86e1a31c797ee1592916d6e788369148a0d4a66e))
+* **web:** the top 3 on screen and the image's content rule (AOTY-73) ([b4af94a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b4af94acd38bceb42cae3491878dca6b193f5100))
+* **web:** top 10 in the image's content rule, falling back to top 3 (AOTY-74) ([f4e84ea](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f4e84eac33ab260d5cf04d0066e116bd131665d8))
+* **web:** top 10 share card layouts (AOTY-74) ([9a38724](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9a38724ac3e6afb8c1bc7fd0afd493419342801d))
+* **web:** top 3 share card layouts (AOTY-73) ([63f319c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/63f319c152213149cd4ad5533e74d39d953af637))
+
 ## [1.8.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.7.0...v1.8.0) (2026-11-26)
 
 
