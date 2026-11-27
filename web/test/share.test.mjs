@@ -144,7 +144,19 @@ test("top 3 needs three on screen, else the image is the #1; shapes and formats"
   assert.equal(formatId("top1", "square"), "top1_square");
   assert.equal(formatId("nope", "nope"), "top1_square");
   assert.deepEqual(SHAPES, ["square", "story"]);
-  assert.deepEqual(Object.keys(CONTENTS), ["top1", "top3"]);
+  assert.deepEqual(Object.keys(CONTENTS), ["top1", "top3", "top10"]);
+});
+
+test("a saved top 10 falls back to the biggest that fits, never past what was saved", () => {
+  assert.equal(cardContent("top10", 10), "top10");
+  assert.equal(cardContent("top10", 25), "top10");
+  assert.equal(cardContent("top10", 9), "top3");
+  assert.equal(cardContent("top10", 3), "top3");
+  assert.equal(cardContent("top10", 2), "top1");
+  assert.equal(cardContent("top10", 0), "top1");
+  assert.equal(cardContent("top3", 10), "top3");  // never more than was saved
+  assert.equal(cardContent("top1", 10), "top1");
+  assert.equal(formatId("top10", "story"), "top10_story");
 });
 
 test("the share image's label says what a tap does", () => {

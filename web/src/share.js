@@ -60,10 +60,15 @@
 
   // The image's two switches (AOTY-73): what it shows, and its shape. A content needs that many
   // albums on screen; with fewer the image is the #1 (the saved choice stays, for the next view).
-  const CONTENTS = {top1: 1, top3: 3};
+  // A saved choice too big for what's on screen falls back to the biggest that fits, never past
+  // the saved one: a top 10 with 5 on screen is a top 3 (AOTY-74).
+  const CONTENTS = {top1: 1, top3: 3, top10: 10};
   const SHAPES = ["square", "story"];
   function cardContent(saved, count) {
-    return Object.prototype.hasOwnProperty.call(CONTENTS, saved) && count >= CONTENTS[saved] ? saved : "top1";
+    const want = Object.prototype.hasOwnProperty.call(CONTENTS, saved) ? CONTENTS[saved] : 1;
+    let best = "top1";
+    for (const [id, n] of Object.entries(CONTENTS)) if (n <= want && n <= count && n >= CONTENTS[best]) best = id;
+    return best;
   }
   // The sharecard format for a content and a shape: top3_story, top1_square, …
   function formatId(content, shape) {
