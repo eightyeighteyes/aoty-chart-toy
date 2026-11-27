@@ -4,7 +4,8 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {shareUrl, useNative, shareTitle, shareLabels, userTop, imageSubject, imageLabel} = require("../src/share.js");
+const {shareUrl, useNative, shareTitle, shareLabels, userTop, userTops, CONTENTS, SHAPES, cardContent, formatId,
+       imageSubject, imageLabel} = require("../src/share.js");
 
 const PROD = {origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm"};
 const STAGING = {origin: "https://kamp.fm", base: "/toys/aoty-staging/", short: ""};
@@ -86,7 +87,7 @@ const hit = {album: "1989", listeners: 3};
 
 test("a user page's image is theirs", () => {
   const s = imageSubject({target: alice, chart: {}, top: hit, member: ""});
-  assert.deepEqual(s, {kind: "user", name: "Alice", link: alice, album: hit, played: null});
+  assert.deepEqual(s, {kind: "user", name: "Alice", link: alice, album: hit, albums: [hit], played: null});
   assert.equal(imageSubject({target: alice, chart: {}, top: null, member: ""}), null);
   assert.equal(imageSubject({target: null, chart: {}, top: hit, member: ""}), null);
   assert.equal(imageSubject({target: alice, chart: null, top: hit, member: ""}), null);
@@ -94,7 +95,8 @@ test("a user page's image is theirs", () => {
 
 test("a group's image names the group and counts its members once they're all in", () => {
   const s = imageSubject({target: house, chart: groupChart, top: hit, member: ""});
-  assert.deepEqual(s, {kind: "group", name: "Full House", link: house, album: hit, played: "3 of 4 members"});
+  assert.deepEqual(s, {kind: "group", name: "Full House", link: house, album: hit, albums: [hit],
+                       played: "3 of 4 members"});
   const loading = imageSubject({target: house, chart: {...groupChart, waiting: 2}, top: hit, member: ""});
   assert.equal(loading.played, null);
   const one = imageSubject({target: house, chart: {members: ["alice"]}, top: {album: "x", listeners: 1}, member: ""});
@@ -105,11 +107,44 @@ test("a group's image names the group and counts its members once they're all in
 test("a member's view shares the member's image, never the group's link", () => {
   const s = imageSubject({target: house, chart: groupChart, top: hit, member: "bob"});
   assert.deepEqual(s, {kind: "user", name: "bob", link: {kind: "user", id: "bob", name: "bob"}, album: hit,
-                       played: null});
+                       albums: [hit], played: null});
   const url = shareUrl({origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm", ...s.link});
   assert.equal(url, "https://aoty.kamp.fm/bob");
   assert.ok(!url.includes("/g/") && !url.includes("group"));
   assert.equal(imageSubject({target: house, chart: groupChart, top: null, member: "bob"}), null);
+});
+
+test("a user chart's top 3 is its first three, or fewer", () => {
+  const chart = {albums: [{album: "C"}, {album: "A"}, {album: "B"}, {album: "D"}],
+                 rankings: {album: [[1, 9], [2, 8], [0, 7], [3, 6]]}};
+  assert.deepEqual(userTops(chart, 3).map(a => a.album), ["A", "B", "C"]);
+  assert.deepEqual(userTops({...chart, rankings: {album: [[1, 9]]}}, 3).map(a => a.album), ["A"]);
+  assert.deepEqual(userTops(null, 3), []);
+});
+
+test("a top 3 subject keeps the order on screen; a member's links to their page", () => {
+  const three = [{album: "1", listeners: 3}, {album: "2", listeners: 2}, {album: "3", listeners: 1}];
+  const s = imageSubject({target: house, chart: groupChart, tops: three, member: ""});
+  assert.deepEqual(s.albums.map(a => a.album), ["1", "2", "3"]);
+  assert.equal(s.album, three[0]);
+  assert.equal(s.played, "3 of 4 members");  // #1's, drawn on #1 cards only
+  const m = imageSubject({target: house, chart: groupChart, tops: three, member: "bob"});
+  assert.deepEqual(m.link, {kind: "user", id: "bob", name: "bob"});
+  assert.deepEqual(m.albums, three);
+  assert.equal(imageSubject({target: alice, chart: {}, tops: [], member: ""}), null);
+});
+
+test("top 3 needs three on screen, else the image is the #1; shapes and formats", () => {
+  assert.equal(cardContent("top3", 3), "top3");
+  assert.equal(cardContent("top3", 10), "top3");
+  assert.equal(cardContent("top3", 2), "top1");
+  assert.equal(cardContent("top1", 3), "top1");
+  for (const x of [undefined, null, "", "nope", "__proto__", "toString"]) assert.equal(cardContent(x, 3), "top1", x);
+  assert.equal(formatId("top3", "story"), "top3_story");
+  assert.equal(formatId("top1", "square"), "top1_square");
+  assert.equal(formatId("nope", "nope"), "top1_square");
+  assert.deepEqual(SHAPES, ["square", "story"]);
+  assert.deepEqual(Object.keys(CONTENTS), ["top1", "top3"]);
 });
 
 test("the share image's label says what a tap does", () => {

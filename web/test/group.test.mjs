@@ -66,6 +66,16 @@ test("the share image's #1 is the one on screen, or null for an empty ranking", 
   assert.equal(top(silent, "listener", 3), null);  // a member with no plays from the year
 });
 
+test("a top 3 is the first three on screen, or fewer", () => {
+  const {tops} = require("../src/group.js");
+  assert.deepEqual(names(tops(chart, "listener", -1, 3)), ["Shared", "Loop"]);  // only two rank
+  assert.deepEqual(names(tops(chart, "album", -1, 3)), ["Loop", "Shared"]);
+  assert.deepEqual(names(tops(chart, "weighted", -1, 3)), ["Shared"]);
+  assert.deepEqual(names(tops(chart, "listener", memberIndex(chart, "bob"), 3)), ["Loop", "Shared"]);
+  const many = {...chart, rankings: {...chart.rankings, album: [[1, 20], [0, 0.8], [2, 0.5], [0, 0.1]]}};
+  assert.deepEqual(names(tops(many, "album", -1, 3)), ["Loop", "Shared", "Single"]);
+});
+
 test("unknown names are everyone", () => {
   assert.equal(memberIndex(chart, "nobody"), -1);
   assert.equal(memberIndex(chart, ""), -1);
