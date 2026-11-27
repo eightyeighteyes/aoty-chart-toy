@@ -57,6 +57,8 @@ real builds a week; the other days exit in seconds), plus a few cents of S3 for 
 - **AOTY owns its bucket policies** (the OAC grant uses kamp.fm's distribution ARN). kamp-site
   (AOTY-15) owns the CloudFront origins and behaviours and reads these outputs with
   `terraform_remote_state`.
+- **The short link `aoty.kamp.fm` is kamp-site's too** (AOTY-69, `infra/aoty_short.tf` there): its
+  own distribution and cert, redirecting into prod's `base_path`. Nothing in this repo creates it.
 
 ## CI roles (`global/`)
 
