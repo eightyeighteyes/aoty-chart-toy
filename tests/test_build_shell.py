@@ -186,6 +186,17 @@ def test_app_js_parses(tmp_path):
   subprocess.run([node, "--check", str(bs.SRC / "app.js")], check=True)
 
 
+def test_the_shell_has_generic_link_preview_tags(tmp_path):
+  # AOTY-85: the intro's preview, and the fallback for a bot kamp-site doesn't route to og.html.
+  bs.build(BASE, out=tmp_path / "web")
+  html = (tmp_path / "web" / "index.html").read_text()
+  assert f'<meta property="og:title" content="{bs.TITLE}">' in html
+  assert '<meta property="og:site_name" content="a kamp toy">' in html
+  assert f"the {bs.TARGET_YEAR} albums you actually lived with" in html
+  assert '<meta name="twitter:card" content="summary">' in html
+  assert "og:image" not in html  # no default image yet
+
+
 def test_the_year_and_name_match_the_lambdas():
   from common.config import NAME, TARGET_YEAR
 
