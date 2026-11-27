@@ -859,6 +859,31 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - Preview: `serve_shell.py --sample alice` leads with real awkward names: "1989 (Taylor's
   Version)", AC/DC, +44, Why?, Pg.99 "Document #8".
 
+## Short link (AOTY-69, 2026-11-27)
+
+- User decisions:
+  - **`aoty.kamp.fm`**, not `aoty.me`: it's free, it sits under the kamp endorsement, and it
+    doesn't commit to a product name.
+  - Redirects are **302**, so the targets can still change.
+  - A bad path goes to the intro.
+  - Only `?user=` on group links is passed through.
+  - No `utm_source`: `kampstats` drops the query from `page_location`, and a 302 keeps the
+    original referrer.
+- **Owned by kamp-site** (`infra/aoty_short.tf`, `infra/functions/aoty-short.js`): its own
+  distribution and certificate. **Prod only**: staging has no short host.
+- **The redirect table:**
+  - `/` → the intro.
+  - `/<name>` → `user/<name>`, with casing kept.
+  - `/g/<slug>` → `group/<slug>`, lowercased, plus a valid `?user=`.
+  - Anything else → the intro.
+  - The rule counts segments, so **`/g` alone is the user `g`**.
+- **One-letter first segments are reserved.** Last.fm names are at least two characters, so
+  short routes like `/g` never collide with a user. A future short route must be one letter too.
+- The function's name rule has no `.`, because the shell function treats a dotted last segment as
+  a file. If `USERNAME_RE` ever loosens, check the function too.
+- Share images (AOTY-70) and share links (AOTY-84) move to the short host in their own tickets.
+  Until then, the group page's "copy link" still gives the full kamp.fm URL.
+
 ## Monitoring (AOTY-27, 2026-11-23)
 
 - **One SNS topic for everything**, `kamp-aoty-alerts` in `infra/global/`: every env's alarms,
