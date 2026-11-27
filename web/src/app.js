@@ -14,6 +14,7 @@
   const TITLE = document.title;
   const YEAR = document.querySelector('meta[name="aoty-year"]').content;
   const intro = globalThis.aotyIntro;  // web/src/intro.js, loaded first
+  const lf = globalThis.aotyLastfm;  // web/src/lastfm.js, loaded first (AOTY-43)
   const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
   const grp = globalThis.aotyGroup;  // web/src/group.js, loaded first (AOTY-51)
   const ge = globalThis.aotyGroupEdit;  // web/src/groupedit.js, loaded first (AOTY-52)
@@ -76,8 +77,19 @@
     if (t instanceof HTMLImageElement && "artist" in t.dataset) coverFallback(t);
   }, true);
 
+  // alt="": every cover is inside its album's link, whose label already names it (AOTY-43).
+  // A followed album link (AOTY-43), counted with nothing about which. Delegated, so it survives
+  // every re-render's innerHTML. auxclick: a middle-click opens a tab without a click event.
+  // (A context-menu "open in new tab" can't be seen.)
+  const albumClick = e => {
+    if (e.type === "auxclick" && e.button !== 1) return;
+    if (e.target instanceof Element && e.target.closest("a.lf")) track("event", "album_click");
+  };
+  $("ranking").addEventListener("click", albumClick);
+  $("ranking").addEventListener("auxclick", albumClick);
+
   function cover(a, cls) {
-    if (a.art) return `<img class="${cls}" src="${esc(a.art)}" alt="${esc(a.album)} cover" loading="lazy" `
+    if (a.art) return `<img class="${cls}" src="${esc(a.art)}" alt="" loading="lazy" `
         + `data-fallbacks="${esc(a.fallbacks.join(" "))}" data-artist="${esc(a.artist)}">`;
     return `<div class="${cls} noart"><span style="--fs:${nameSize(a.artist)}">${esc(a.artist)}</span></div>`;
   }
@@ -118,7 +130,8 @@
     if (!groupTotal) return "";
     let s = "";
     for (let i = 0; i < groupTotal; i++) s += `<span class="dot${i < a.listeners ? " on" : ""}"></span>`;
-    return `<div class="dots" title="${a.listeners} of ${groupTotal} listeners">${s}</div>`;
+    // Decoration inside the album's link: its label carries the count (AOTY-43).
+    return `<div class="dots" aria-hidden="true">${s}</div>`;
   }
   // M0's score words: for one member it's their own album plays, not the group's. By Listener's
   // score is album plays too: the listeners it sorts by first lead the stats line.
@@ -137,6 +150,19 @@
   }
   const names = a => `<div class="album">${esc(a.album)}</div><div class="artist">${esc(a.artist)}</div>`;
 
+  // Each album is one link to its Last.fm page (AOTY-43; Last.fm's API terms, 2.7), the whole
+  // card, tile or row (user, 2026-11-25). A new tab, with no referrer: the path names the user.
+  // The label replaces the content for screen readers, so it carries the rank and the stats too
+  // (the hero's wording, the fullest); aria-describedby is skipped on links by some of them.
+  // "lastfm" is the album's Last.fm name; charts built before AOTY-43 have only the root title.
+  function albumLink(a, cls, mode, extra = "") {
+    const href = lf.albumUrl(a.artist, a.lastfm || a.album);
+    const said = stats(a, mode, "hero").replace(/<[^>]*>/g, "");  // already escaped text
+    const label = `${esc(`#${a.rank}, ${a.album} by ${a.artist} on last.fm`)}, ${said}, opens in a new tab`;
+    return `<a class="lf ${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer" `
+        + `aria-label="${label}"${extra}>`;
+  }
+
   // One ranking's poster view and list view.
   function renderRanking(chart, rows, mode) {
     if (!rows.length) {
@@ -146,26 +172,26 @@
       return `<p class="empty">No ${chart.year} albums in ${whose}'s scrobbles yet.${wait}</p>`;
     }
     const [top, rest, more] = [rows[0], rows.slice(1, chart.featured), rows.slice(chart.featured)];
-    const bg = top.art ? `style="--hero-art:url(&quot;${esc(top.art)}&quot;)"` : "";
-    const hero = `<section class="hero" ${bg}>${cover(top, "art")}<div>
+    const bg = top.art ? ` style="--hero-art:url(&quot;${esc(top.art)}&quot;)"` : "";
+    const hero = `${albumLink(top, "hero", mode, bg)}${cover(top, "art")}<div>
         <div class="crown">#1</div>${names(top)}${dots(top)}
         <div class="stats">${stats(top, mode, "hero")}</div>
-      </div></section>`;
-    const cards = rest.map((a, i) => `<li class="card" style="--i:${i + 1}">
+      </div></a>`;
+    const cards = rest.map((a, i) => `<li>${albumLink(a, "card", mode, ` style="--i:${i + 1}"`)}
         <div class="art-wrap">${cover(a, "art")}<span class="rank">${a.rank}</span></div>
         <div class="meta">${names(a)}${dots(a)}<div class="stats">${stats(a, mode, "card")}</div></div>
-      </li>`).join("");
-    const tiles = more.map(a => `<li class="tile">
+      </a></li>`).join("");
+    const tiles = more.map(a => `<li>${albumLink(a, "tile", mode)}
         <div class="art-wrap">${cover(a, "art")}<span class="tile-rank">${a.rank}</span></div>
-        ${names(a)}<div class="stats">${stats(a, mode, "tile")}</div>
-      </li>`).join("");
+        <div class="tile-meta">${names(a)}<div class="stats">${stats(a, mode, "tile")}</div></div>
+      </a></li>`).join("");
     const moreSection = more.length ? `<section class="more"><h2>${chart.featured + 1}–${rows.length}</h2>
         <ol class="more-grid">${tiles}</ol></section>` : "";
-    const list = rows.map((a, i) => `<li class="row${i ? "" : " first"}" style="--i:${i}">
+    const list = rows.map((a, i) => `<li>${albumLink(a, `row${i ? "" : " first"}`, mode, ` style="--i:${i}"`)}
         <span class="row-rank">${a.rank}</span>${cover(a, "row-art")}
         <div class="row-meta">${names(a)}</div>
         <div class="row-numbers">${dots(a)}<div class="stats">${stats(a, mode, "row")}</div></div>
-      </li>`).join("");
+      </a></li>`).join("");
     return `<div class="view-poster">${hero}<ol>${cards}</ol>${moreSection}</div>
       <ol class="list view-list">${list}</ol>`;
   }
@@ -207,10 +233,13 @@
     if (values.includes(saved)) set(saved);
   }
 
-  function heading(name, year) {
+  // user: a chart's username. Its name then links to their page here, and a small "[last.fm]"
+  // to their Last.fm profile, as Last.fm's API terms (2.7) ask (AOTY-43). Built node by node.
+  function heading(name, year, user) {
     $("eyebrow").textContent = NAME;
     const h1 = $("title");
-    h1.textContent = name;
+    if (user) h1.replaceChildren(...userLinks(name, user, "title-lastfm"));
+    else h1.textContent = name;
     if (year) {
       h1.appendChild(document.createElement("br"));
       const y = h1.appendChild(document.createElement("span"));
@@ -218,6 +247,27 @@
       y.textContent = year;
     }
     document.title = year ? `${name}'s ${NAME} ${year} · a kamp toy` : TITLE;
+  }
+
+  // [the name, linked to user's page here; " "; "[last.fm]", linked to their Last.fm profile in a
+  // new tab, with no referrer (the path names whoever's page this is)]. User names are
+  // USERNAME_RE's letters, so the path needs no escaping beyond encodeURIComponent.
+  function userLinks(name, user, cls) {
+    const page = document.createElement("a");
+    page.className = "user-link";
+    page.href = `${BASE}user/${encodeURIComponent(name)}`;
+    page.textContent = name;
+    const wrap = document.createElement("span");
+    wrap.className = cls;
+    const profile = wrap.appendChild(document.createElement("a"));
+    profile.href = intro.lastfmUserUrl(user);
+    profile.target = "_blank";
+    profile.rel = "noopener noreferrer";
+    profile.textContent = "last.fm";
+    profile.setAttribute("aria-label", `${name} on last.fm, opens in a new tab`);
+    wrap.prepend("[");
+    wrap.append("]");
+    return [page, " ", wrap];
   }
 
   // A message panel, optionally with the username box. The footer's profile line goes: the
@@ -388,7 +438,7 @@
     if (!repaint && firstView) track("event", "first_visit_end", {result: "painted"});
     stopAurora();  // the chart's here: the first visit's aurora fades out (AOTY-67)
     current = chart;
-    heading(display, chart.year);
+    heading(display, chart.year, lower);
     $("controls").hidden = false;
     const updated = new Date(chart.generated_at);
     profileLine(display, isNaN(updated) ? ""
@@ -897,9 +947,10 @@
     groupWho = who < 0 ? "" : chart.members[who];
     // A member's view has one listener, so every mode is By Play: no switch (AOTY-63).
     $("rank-switch").hidden = who >= 0;
-    const whose = who < 0 ? `${chart.name}'s members` : chart.members[who];
+    // A member's view names them with their links, as a user page's heading does (AOTY-43).
+    const whose = who < 0 ? [`${chart.name}'s members`] : userLinks(chart.members[who], chart.members[who], "sub-lastfm");
     const how = who < 0 ? GROUP_MODES[mode] : BY_PLAY;
-    $("sub").textContent = `Top ${rows.length} albums released in ${chart.year} that ${whose} played, ${how}.`;
+    $("sub").replaceChildren(`Top ${rows.length} albums released in ${chart.year} that `, ...whose, ` played, ${how}.`);
     const extra = [grp.loadingLine(chart), grp.checkingLine(chart)].filter(Boolean).join(" · ");
     if (extra) {
       const p = $("sub").appendChild(document.createElement("span"));

@@ -45,6 +45,8 @@
     member_add: {},
     member_remove: {},
     kamp_click: {},
+    // An album's Last.fm link was followed (AOTY-43): no album, no user, nothing else.
+    album_click: {},
   };
 
   // {type, path, group_id} for a pathname. Anything that isn't a chart is the intro, because

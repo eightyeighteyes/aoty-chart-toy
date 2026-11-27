@@ -124,12 +124,21 @@ def fake_theme(method, name, body, signed_in, data):
   return 200, json.dumps({"theme": body["theme"]}).encode(), "application/json"
 
 
+# Real albums with names Last.fm's URLs treat specially (AOTY-43), at the top of the sample, so
+# their links can be followed: an edition shown as its root title but linked by its own name, a
+# "/", a "+" (encoded twice), a "?", a "#" and an "'".
+REAL = [("Taylor Swift", "1989 (Taylor's Version)"), ("AC/DC", "Back in Black"),
+        ("+44", "When Your Heart Stops Beating"), ("Why?", "Alopecia"),
+        ("Panic! at the Disco", "A Fever You Can't Sweat Out"),  # the 5th is a single, off the chart
+        ("Pg.99", "Document #8")]  # fmt: skip
+
+
 def sample_chart(username, n=120):
   """A synthetic chart: n albums, a few singles, a few without covers or with a broken one."""
   store = {"version": 1, "year": 2026, "weeks": {"0": {"plays": {}}}, "albums": {}}
   items = {}
   for i in range(n):
-    artist, album = f"Sample Artist {i % 23}", f"Sample Album {i:03d}"
+    artist, album = REAL[i] if i < len(REAL) else (f"Sample Artist {i % 23}", f"Sample Album {i:03d}")
     k = join_key(album_key(artist, album))
     store["weeks"]["0"]["plays"][k] = 400 - 3 * i
     # Every 7th album has a Last.fm-style URL that 404s, to exercise the fallback chain.
