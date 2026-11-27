@@ -181,6 +181,57 @@ locals {
       }
     },
 
+    # Cookie-free visit counts (AOTY-64): every user and group page load POSTs its sync, and the
+    # API access log has the method, path and status, so ad blockers can't hide these the way they
+    # hide gtag. The user query only sums: never `stats by` the path, which would put usernames
+    # on the dashboard. Group slugs are fine (AOTY-38), but only 2xx ones, so a made-up slug
+    # someone POSTs (a 404) never shows.
+    {
+      type = "text", width = 24, height = 2
+      properties = {
+        markdown = join(" ", [
+          "## Visits (AOTY-64): page loads counted from the API access log.",
+          "Set the dashboard to 1 week for daily rows (days are UTC; the first and last are partial).",
+          "A new arrival counts twice (the intro's check, then the chart page); cooldown answers count;",
+          "the intro page itself isn't counted; `serve_shell --proxy` previews count in the env they proxy.",
+        ])
+      }
+    },
+    {
+      type = "log", width = 12, height = 6
+      properties = {
+        title  = "Visits per day (answered; refused = throttled, paused or bad names)"
+        region = local.region
+        view   = "table"
+        query = join(" ", [
+          "SOURCE '${aws_cloudwatch_log_group.api_access.name}'",
+          "| filter method = \"POST\" and path like /\\/api\\/(users|groups)\\/[^\\/]+\\/sync$/",
+          "and path not like /\\/api\\/users\\/(-smoke-|__smoke__)\\//",
+          "| fields strcontains(path, \"/api/users/\") as user_page, strcontains(path, \"/api/groups/\") as group_page,",
+          "status like /^2/ as answered",
+          "| stats sum(user_page * answered) as user_visits, sum(group_page * answered) as group_visits,",
+          "sum(1 - answered) as refused by bin(1d) as day",
+          "| sort day desc",
+        ])
+      }
+    },
+    {
+      type = "log", width = 12, height = 6
+      properties = {
+        title  = "Top groups by visits (answered)"
+        region = local.region
+        view   = "table"
+        query = join(" ", [
+          "SOURCE '${aws_cloudwatch_log_group.api_access.name}'",
+          "| filter method = \"POST\" and status like /^2/ and path like /\\/api\\/groups\\/[^\\/]+\\/sync$/",
+          "| parse path /\\/api\\/groups\\/(?<group>[^\\/]+)\\/sync$/",
+          "| stats count(*) as visits by group",
+          "| sort visits desc",
+          "| limit 10",
+        ])
+      }
+    },
+
     { type = "text", width = 24, height = 1, properties = { markdown = "## API and guardrails" } },
     {
       type = "metric", width = 8, height = 6

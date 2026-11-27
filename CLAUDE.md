@@ -1109,6 +1109,15 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - The api counts a POST sync's outcome once, in the dispatcher, from the response
   (`api_core.sync_outcome`), so every return path is covered. Status polls aren't counted.
 - API Gateway graphs are per stage. Per-route metrics would need detailed metrics, which are billed.
+- **Visits (AOTY-64, 2026-11-27)** are counted from the API access log, because ad blockers drop
+  gtag. Every page load POSTs its sync.
+  - The user query only sums: never `stats by` the path, which would put usernames on the
+    dashboard.
+  - Group slugs show only for 2xx answers, so a made-up slug (a 404) never appears.
+  - The query leaves out CD's smoke-test name, so keep the two in step.
+  - Queries in HCL strings need `\\/` for a regex slash; HCL refuses `\/`. Check a new one by
+    rendering it (a scratch config with the same `join`) and running it with
+    `aws logs start-query`.
 - `IndexDumpAgeHours` is left out, not 0, when the dump's age is unknown (0 read as "fresh").
 - **The budget is account-wide**, because kamp-site shares the account and a cost allocation tag
   only counts from the day it was activated.

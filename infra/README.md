@@ -759,6 +759,13 @@ Last.fm. Throughput is shown against the AOTY-12 baseline (1.5–2.3 albums/s), 
 thresholds are drawn as lines. Two Logs Insights tables break down sync and sync-request
 outcomes.
 
+- **Visits (AOTY-64):** a row counting page loads from the API access log, which ad blockers can't
+  hide the way they hide GA. A user or group page load is one POST to its `…/sync`. The row has
+  visits per day (answered user, answered group, and refused: throttled, paused or bad names)
+  and the top 10 group slugs (answered only).
+  - CD's smoke test is left out. A new arrival counts twice (the intro's check, then the chart
+    page), cooldown answers count, and `serve_shell --proxy` previews count in that env.
+  - It follows the dashboard's time range, so set 1 week for daily rows. Days are UTC.
 - **Free tier:** 3 dashboards of up to 50 metrics each. A precondition fails the plan past 50.
   Every metric entry counts, hidden ones feeding an expression too. Logs Insights widgets don't
   count (they bill per GB scanned, only when viewed).
