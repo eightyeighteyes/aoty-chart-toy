@@ -114,6 +114,7 @@ def test_placeholders_name_year_title_and_icon_are_filled(tmp_path):
   assert html.index(published["intro.js"]) < html.index(published["app.js"])
   assert html.index(published["firstvisit.js"]) < html.index(published["app.js"])
   assert html.index(published["borealis.js"]) < html.index(published["app.js"])  # AOTY-67
+  assert html.index(published["lastfm.js"]) < html.index(published["app.js"])  # AOTY-43
   assert f'<meta name="aoty-year" content="{bs.TARGET_YEAR}">' in html
 
 

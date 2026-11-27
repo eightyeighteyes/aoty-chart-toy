@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -820,6 +820,44 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   doesn't loop. Index re-checks that change an album already on a chart show up at the next sync.
 - Sandbox has no kamp.fm path: test the Lambda half there (chart.json lands in its site bucket),
   and the page with `tools/serve_shell.py`.
+
+## Last.fm links (AOTY-43, 2026-11-27)
+
+- User decisions:
+  - **The whole hero, card, tile or row is one link** to the album's Last.fm page, opening in a
+    new tab.
+  - The heading's name links to the user's own page, even when you're already on it, and a small
+    "[last.fm]" beside it links their profile. A group member view (`?user=`) does the same for
+    the member's name in the sub line.
+  - The footer profile line stays.
+  - **No skip link.** Nothing important follows the chart, and landmarks and headings already
+    serve screen readers.
+- **The link uses `lastfm`, not `album`.** chart.json's `album` is the root title (`base_title`).
+  The root title can be another album's page: "1989 (Taylor's Version)" would link the 2014
+  "1989". Each album also carries `lastfm`, the name the store kept for its key: the first one
+  sync saw, which may be a "(Deluxe)" page, but always a real one.
+  - A group takes the first member's name, in page order.
+  - Charts built before AOTY-43 link `album`. Run `tools/rebuild_charts.py` after the deploy.
+- **Encoding** (`lastfm.js`, checked against `album.getInfo`'s `url`):
+  - `encodeURIComponent`, then spaces as `+`.
+  - A literal `+` is encoded twice (`%252B`: "+44").
+  - `'` becomes `%27`.
+  - `$ & , : ; = @` stay raw.
+  - Last.fm's site serves curl a bot challenge, so check new cases through the API, not the page.
+- **The page:**
+  - Links are `.lf` with `rel="noopener noreferrer"`, because the path names the user.
+  - The `aria-label` carries the rank, names, stats (the hero's wording) and "opens in a new tab".
+    It isn't `aria-describedby`, which some screen readers skip on links. Covers inside links
+    have `alt=""`, and the dots are `aria-hidden`.
+  - The hover is on the `<li>`, which never moves, so the card lifts without dropping out of hover
+    at its bottom edge. The hero doesn't lift: its blurred backdrop would become a layer. Rows
+    tint instead.
+  - `.theme-fade .card` combines the theme fade's colour transitions with the lift's transform.
+    `.theme-fade *` alone would cancel one of them.
+  - `album_click` has no params. It's counted on `click` and middle-click `auxclick`. A
+    context-menu "open in new tab" can't be seen.
+- Preview: `serve_shell.py --sample alice` leads with real awkward names: "1989 (Taylor's
+  Version)", AC/DC, +44, Why?, Pg.99 "Document #8".
 
 ## Monitoring (AOTY-27, 2026-11-23)
 

@@ -186,7 +186,7 @@ def test_chart_shape():
   assert chart["featured"] == core.FEATURED_N
   assert set(chart["rankings"]) == {"album"}  # By Play only: no By Track (AOTY-63), no Weighted for one user
   assert chart["albums"][0] == {
-    "artist": "Artist", "album": "Title", "plays": 4, "tracks": 4, "single": False,
+    "artist": "Artist", "album": "Title", "lastfm": "Title", "plays": 4, "tracks": 4, "single": False,
     "art": caa_url("rg-1"), "fallbacks": [],
   }  # fmt: skip
 
@@ -206,6 +206,15 @@ def test_edition_suffixes_show_as_the_root_album():
   store = make_store({("Ratboys", "Singin' to an Empty Chair (Deluxe)"): 4})
   chart, _ = build(store, {key("Ratboys", "Singin' to an Empty Chair"): item(tracks=4)})
   assert chart["albums"][0]["album"] == "Singin' to an Empty Chair"
+  assert chart["albums"][0]["lastfm"] == "Singin' to an Empty Chair (Deluxe)"  # the page links this
+
+
+def test_the_link_name_keeps_an_edition_that_is_its_own_album():
+  # The root title would link Last.fm's 2014 "1989" (AOTY-43).
+  store = make_store({("Taylor Swift", "1989 (Taylor's Version)"): 4})
+  chart, _ = build(store, {key("Taylor Swift", "1989 (Taylor's Version)"): item(tracks=4)})
+  (a,) = chart["albums"]
+  assert (a["album"], a["lastfm"]) == ("1989", "1989 (Taylor's Version)")
 
 
 def test_the_owners_theme_is_published_unless_its_the_default_or_unknown():

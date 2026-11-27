@@ -212,3 +212,28 @@ def test_group_member_views_keep_each_members_top_albums_by_plays_per_track():
   tracks = {"a": (20, "Album"), "b": (2, "Album"), "s": (1, "Single"), "e": (1, "EP")}
   items = {k: {"year": YEAR, "tracks": n, "tracks_type": t} for k, (n, t) in tracks.items()}
   assert group_core.member_keys(stats, items, ["u1"], n=1) == {"b"}
+
+
+def test_group_link_names_come_from_the_first_member_in_page_order():
+  # Each member's store keeps the Last.fm name it saw first; the group takes the first member's,
+  # in page order, whatever order the stores arrive in (AOTY-43).
+  import group_core
+
+  import sync_core
+  from common.albumkey import album_key, join_key
+
+  k = join_key(album_key("Taylor Swift", "1989 (Taylor's Version)"))
+
+  def store(name):
+    s = sync_core.new_store(YEAR)
+    s["weeks"]["0"] = {"to": 0, "fetched_at": 0, "plays": {k: 4}}
+    s["albums"][k] = {"artist": "Taylor Swift", "album": name, "mbid": "", "image": ""}
+    return s
+
+  items = {k: {"year": YEAR, "tracks": 4, "tracks_type": "Album", "rg_mbid": "rg"}}
+  for order in (("bob", "alice"), ("alice", "bob")):
+    names = {"alice": "1989 (Taylor's Version) [Deluxe]", "bob": "1989 (Taylor's Version)"}
+    stores = {m: store(names[m]) for m in order}
+    chart, _ = group_core.build_group_chart(stores, items, group_id="g", name="G", year=YEAR, now=0)
+    (a,) = chart["albums"]
+    assert a["lastfm"] == "1989 (Taylor's Version) [Deluxe]"  # alice's, though bob's store came first
