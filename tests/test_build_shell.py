@@ -270,6 +270,9 @@ def test_nothing_overwrites_the_credits():
 def test_app_js_sets_up_the_switches_once_and_polls_politely():
   js = (bs.SRC / "app.js").read_text()
   assert js.count('setupSwitch("rank"') == 1 and "switchesReady" in js  # no doubled listeners
+  assert js.count('setupSwitch("format"') == 1  # the share image's square | story (AOTY-72)
+  page = (bs.SRC / "index.html").read_text()
+  assert 'data-format="top1_square"' in page  # a default, or the card's format reads undefined
   assert "visibilitychange" in js and "document.hidden" in js
   assert '"content-type": "application/json"' in js  # the API refuses anything else (415)
 

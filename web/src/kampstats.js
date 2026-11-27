@@ -32,13 +32,15 @@
     intro_submit: {outcome: OUTCOMES},
     first_visit_end: {result: ["painted", "none", "stalled", "private", "error"]},
     group_loaded: {group_size: "count"},
-    control_change: {control: ["view", "rank", "filter"],
-                     value: ["poster", "list", "listener", "album", "weighted", "member", "everyone"]},
+    // "format" is the share image's square | story switch (AOTY-72).
+    control_change: {control: ["view", "rank", "filter", "format"],
+                     value: ["poster", "list", "listener", "album", "weighted", "member", "everyone",
+                             "top1_square", "top1_story"]},
     share_copy: {},
     // The system share sheet shared a page's link (AOTY-84): which page is never sent.
     share_native: {},
     // A share image went out (AOTY-70): its format and how, never whose page or which album.
-    share_image: {format: ["top1_square"], via: ["native", "download"]},
+    share_image: {format: ["top1_square", "top1_story"], via: ["native", "download"]},
     // An owner saved their page's theme (AOTY-65): the theme id only, never whose page.
     theme_set: {theme: ["poster", "kamp", "strawberry-switchblade", "beach-house", "blackpink", "deep-purple",
                         "green-day", "foxy-brown", "golden-smog", "white-stripes", "tangerine-dream",

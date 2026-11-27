@@ -976,6 +976,27 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - Analytics: `share_image` is unchanged. `group_id` already rides every hit as a page field.
 - Preview: `serve_shell.py --sample alice`, `group/full-house`, then switch rankings and members.
 
+## Story images (AOTY-72, 2026-11-27)
+
+- User decision: the vertical format is **9:16 (1080x1920)**, not 4:3, because Stories, Reels and
+  TikTok are vertical.
+- `top1_story` is the square's stack, with a bigger cover, moved inside its **safe band**.
+  - Instagram and TikTok cover the top 250 px and the bottom 340 px (`FORMATS[..].safe`), so only
+    the background is drawn there.
+  - `sharecard.test.mjs` checks every op against the band, for each theme, long text, group and
+    no-cover case. Text extents in that test are estimates (one em above the baseline, 0.3 below),
+    so the layout keeps 40+ px of slack for real fonts.
+- **The "square | story" switch** sits beside the image button and hides with it. It's a
+  `setupSwitch` (`data-format` on `<main>`, default square), remembered per viewer as
+  `aoty-card-format`.
+  - **Each format keeps its own made-ahead image** (`cards[format]`), so flipping back doesn't lose
+    a ready one. That matters for iOS's activation rule.
+  - Unknown ids read as square (`sharecard.formatOf`).
+- Story files end in `-story.png`.
+- Analytics: `share_image` `format` is `top1_square` or `top1_story`, the format at the tap.
+  Flipping the switch is `control_change` with `control: format`.
+- Top 3 and top 10 (AOTY-73, AOTY-74) add their own story layouts beside these.
+
 ## Monitoring (AOTY-27, 2026-11-23)
 
 - **One SNS topic for everything**, `kamp-aoty-alerts` in `infra/global/`: every env's alarms,
