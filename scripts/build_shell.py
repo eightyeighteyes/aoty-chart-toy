@@ -11,7 +11,8 @@ The kamp.fm CSP allows no inline script and no inline event handlers, so the bui
 index.html has either (a JSON data block, type="application/json", is fine).
 
 index.html placeholders: {{BASE}}, {{NAME}} (the placeholder product name), {{TITLE}}, {{YEAR}},
-{{GA}} (the GA4 measurement id, --ga-id, empty unless prod: AOTY-38), and one per asset in ASSETS. They're filled here, not by JavaScript, so nothing flashes.
+{{GA}} (the GA4 measurement id, --ga-id, empty unless prod: AOTY-38), {{SHORT}} (the share links'
+short host, --short-host, empty unless prod: AOTY-84), and one per asset in ASSETS. They're filled here, not by JavaScript, so nothing flashes.
 """
 
 import argparse
@@ -31,6 +32,7 @@ ASSETS = {
   "kampstats.js": "STATS",
   "intro.js": "INTRO",
   "lastfm.js": "LASTFM",
+  "share.js": "SHARE",
   "firstvisit.js": "FIRSTVISIT",
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",
@@ -51,6 +53,10 @@ _HANDLER = re.compile(r"<[^>]*\son[a-z]+\s*=", re.IGNORECASE)
 _PLACEHOLDER = re.compile(r"\{\{[A-Z]+\}\}")
 # A GA4 measurement id (AOTY-38), or empty for no analytics. Checked because it lands in HTML.
 _GA_ID = re.compile(r"(G-[A-Z0-9]{4,20})?")
+# The share links' short host (AOTY-84): kamp-site's aoty.kamp.fm (AOTY-69), whose redirects land
+# on prod's base alone, so it's accepted only with that base. An allowlist, because it lands in HTML.
+SHORT_HOSTS = {"aoty.kamp.fm"}
+SHORT_BASE = "/toys/aoty/"
 
 
 class ShellError(SystemExit):
@@ -75,20 +81,25 @@ def check_csp(html):
     raise ShellError("inline event handlers (on*=) are blocked by the CSP: use addEventListener")
 
 
-def build(base, src=SRC, out=OUT, ga_id=""):
+def build(base, src=SRC, out=OUT, ga_id="", short_host=""):
   """Write out/index.html and out/assets/<hashed names>; returns {asset: published path}.
 
   ga_id is kamp.fm's GA4 measurement id, given for prod only (deploy.yml). Without one,
-  kampstats.js loads nothing and sends nothing.
+  kampstats.js loads nothing and sends nothing. short_host is the share links' short host, also
+  prod only; without one, share.js shares the page's own address.
   """
   if not (base.startswith("/") and base.endswith("/")):
     raise ShellError(f"--base must start and end with a slash, got {base!r}")
   if not _GA_ID.fullmatch(ga_id):
     raise ShellError(f"--ga-id must look like G-XXXXXXXXXX, got {ga_id!r}")
+  if short_host and short_host not in SHORT_HOSTS:
+    raise ShellError(f"--short-host must be one of {sorted(SHORT_HOSTS)}, got {short_host!r}")
+  if short_host and base != SHORT_BASE:
+    raise ShellError(f"--short-host redirects to {SHORT_BASE} only, not {base!r}")
   shutil.rmtree(out, ignore_errors=True)
   (out / "assets").mkdir(parents=True)
   published = {}
-  values = {"BASE": base, "NAME": NAME, "TITLE": TITLE, "YEAR": str(TARGET_YEAR), "GA": ga_id}
+  values = {"BASE": base, "NAME": NAME, "TITLE": TITLE, "YEAR": str(TARGET_YEAR), "GA": ga_id, "SHORT": short_host}
   for name, placeholder in ASSETS.items():
     data = (src / name).read_bytes()
     hashed = hashed_name(name, data)
@@ -111,8 +122,9 @@ def main():
   p.add_argument("--base", required=True, help="the env's base path, e.g. /toys/aoty/")
   p.add_argument("--out", type=Path, default=OUT)
   p.add_argument("--ga-id", default="", help="GA4 measurement id (prod only); empty for no analytics")
+  p.add_argument("--short-host", default="", help="share links' short host (prod only, aoty.kamp.fm); empty for none")
   args = p.parse_args()
-  for name, path in build(args.base, out=args.out, ga_id=args.ga_id).items():
+  for name, path in build(args.base, out=args.out, ga_id=args.ga_id, short_host=args.short_host).items():
     print(f"{name} -> {args.base}{path}")
   print(f"wrote {args.out / 'index.html'}")
 

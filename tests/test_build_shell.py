@@ -89,7 +89,7 @@ def test_app_js_has_no_inline_handlers_or_eval():
 
 # The polite live regions. Only the sync banner speaks on its own (chart pages); every other one
 # is empty until it answers something the visitor just did: a form's message (the intro's, and
-# AOTY-52's create, rename and add) or an action's (sign in or out, copy link).
+# AOTY-52's create, rename and add) or an action's (sign in or out, share or copy a link).
 LIVE_REGIONS = {"banner-msg", "intro-msg", "account-msg", "share-msg", "create-msg", "rename-msg", "add-msg",
                 "theme-msg"}  # fmt: skip
 
@@ -135,6 +135,29 @@ def test_analytics_is_off_unless_a_measurement_id_is_given(tmp_path):
 def test_a_malformed_measurement_id_fails_the_build(tmp_path, ga_id):
   with pytest.raises(SystemExit, match="ga-id"):
     bs.build(BASE, out=tmp_path / "web", ga_id=ga_id)
+
+
+def test_share_links_are_short_only_on_prod(tmp_path):
+  # AOTY-84: aoty.kamp.fm (kamp-site, AOTY-69) redirects into prod alone, so only prod's deploy
+  # passes --short-host; staging and previews share the page's own address.
+  published = bs.build(BASE, out=tmp_path / "a")
+  html = (tmp_path / "a" / "index.html").read_text()
+  assert '<meta name="aoty-short" content="">' in html
+  assert html.index(published["share.js"]) < html.index(published["app.js"])
+  bs.build(bs.SHORT_BASE, out=tmp_path / "b", short_host="aoty.kamp.fm")
+  assert '<meta name="aoty-short" content="aoty.kamp.fm">' in (tmp_path / "b" / "index.html").read_text()
+
+
+@pytest.mark.parametrize("host", ["evil.com", "aoty.kamp.fm/", 'aoty.kamp.fm"><script>', "AOTY.KAMP.FM"])
+def test_only_the_known_short_host_is_accepted(tmp_path, host):
+  with pytest.raises(SystemExit, match="short-host"):
+    bs.build(bs.SHORT_BASE, out=tmp_path / "web", short_host=host)
+
+
+def test_the_short_host_needs_prods_base(tmp_path):
+  # Its redirects land on /toys/aoty/: on staging they'd send people to prod.
+  with pytest.raises(SystemExit, match="short-host"):
+    bs.build("/toys/aoty-staging/", out=tmp_path / "web", short_host="aoty.kamp.fm")
 
 
 def test_the_kamp_link_sends_only_the_origin_as_referrer(tmp_path):
