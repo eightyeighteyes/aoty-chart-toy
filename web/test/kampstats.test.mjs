@@ -64,10 +64,11 @@ test("events keep only listed params and values", () => {
                    {format: "top1_square", via: "native"});
   assert.deepEqual(clean("share_image", {format: "alice", via: "alice"}), {});
   // AOTY-72, AOTY-73: the story and top 3 formats, and the image's two switches.
-  for (const format of ["top1_square", "top1_story", "top3_square", "top3_story"]) {
+  for (const format of ["top1_square", "top1_story", "top3_square", "top3_story", "top10_square", "top10_story"]) {
     assert.deepEqual(clean("share_image", {format, via: "download"}), {format, via: "download"});
   }
-  for (const [control, value] of [["content", "top1"], ["content", "top3"], ["shape", "square"], ["shape", "story"]]) {
+  for (const [control, value] of [["content", "top1"], ["content", "top3"], ["content", "top10"], ["shape", "square"],
+                                  ["shape", "story"]]) {
     assert.deepEqual(clean("control_change", {control, value}), {control, value});
   }
   assert.deepEqual(clean("control_change", {control: "format", value: "top1_story"}), {});  // AOTY-72's, gone
