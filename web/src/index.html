@@ -76,7 +76,7 @@
   <p class="privacy">we read your public last.fm plays. no login needed, nothing sold.</p>
 </section>
 
-<main class="poster" id="poster" data-view="poster" data-rank="listener" data-format="top1_square">
+<main class="poster" id="poster" data-view="poster" data-rank="listener" data-content="top1" data-shape="square">
   <header>
     <div class="eyebrow" id="eyebrow">{{NAME}}</div>
     <h1 id="title">{{NAME}}</h1>
@@ -107,15 +107,19 @@
     <!-- User and group pages (AOTY-84, AOTY-52): share for everyone; a member's view of a group
          also offers the member's own page; edit for the group's owner only. The labels change to
          "share" where the system share sheet is used (touch only). Both also offer the #1 as an
-         image (AOTY-70, AOTY-71), for every visitor once the ranking shown has one, square or
-         9:16 for stories (AOTY-72). -->
+         image (AOTY-70, AOTY-71), for every visitor once the ranking shown has one: the #1 or the
+         top 3 (AOTY-73, "top 3" only with three on screen), square or 9:16 for stories (AOTY-72). -->
     <div class="page-tools" id="page-tools" hidden>
       <button type="button" class="pill" id="share">copy link</button>
       <button type="button" class="pill" id="share-member" hidden></button>
       <button type="button" class="pill" id="share-image" hidden>share image</button>
-      <div class="switch small" role="group" aria-label="Image format" id="format-switch" hidden>
-        <button type="button" data-format="top1_square" aria-pressed="true">square</button>
-        <button type="button" data-format="top1_story" aria-pressed="false">story</button>
+      <div class="switch small" role="group" aria-label="Image" id="content-switch" hidden>
+        <button type="button" data-content="top1" aria-pressed="true">#1</button>
+        <button type="button" data-content="top3" aria-pressed="false">top 3</button>
+      </div>
+      <div class="switch small" role="group" aria-label="Image format" id="shape-switch" hidden>
+        <button type="button" data-shape="square" aria-pressed="true">square</button>
+        <button type="button" data-shape="story" aria-pressed="false">story</button>
       </div>
       <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
       <span class="share-url" id="share-url" hidden></span>

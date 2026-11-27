@@ -429,8 +429,16 @@
     switchesReady = true;
     setupSwitch("view", "aoty-view");
     setupSwitch("rank", "aoty-rank", () => renderChart(current));
-    // The share image's square | story (AOTY-72): remembered per viewer, made ahead like the rest.
-    setupSwitch("format", "aoty-card-format", () => cardSoon());
+    // The share image's #1 | top 3 (AOTY-73) and square | story (AOTY-72): remembered per viewer,
+    // made ahead like the rest. AOTY-72's one switch saved "top1_story": that's the story shape.
+    try {
+      if (localStorage.getItem("aoty-card-shape") === null && localStorage.getItem("aoty-card-format") === "top1_story") {
+        localStorage.setItem("aoty-card-shape", "story");
+      }
+      localStorage.removeItem("aoty-card-format");
+    } catch (_) {}
+    setupSwitch("content", "aoty-card-content", () => renderShare());
+    setupSwitch("shape", "aoty-card-shape", () => renderShare());
   }
 
   function paint(chart, raw, lower) {
@@ -1405,10 +1413,19 @@
     $("share-member").hidden = !member;
     if (member) $("share-member").textContent = labels.member;
     // The share image (AOTY-70, AOTY-71): any page whose ranking on screen has a #1.
-    const image = $("share-image");
-    image.hidden = !cardSubject();
-    $("format-switch").hidden = image.hidden;
+    const image = $("share-image"), s = cardSubject();
+    image.hidden = !s;
+    $("shape-switch").hidden = !s;
     if (!image.hidden && !isBusy(image)) image.textContent = share.imageLabel(nativeFiles());
+    // #1 | top 3 (AOTY-73) only with three on screen. Hiding it keeps the saved choice: a view with
+    // fewer draws the #1, and the next view with three is a top 3 again. The pressed button is the
+    // one the image will be; focus on a switch that hides goes to the image button.
+    const contents = $("content-switch"), can3 = !!s && s.albums.length >= 3;
+    if (!can3 && contents.contains(document.activeElement) && !image.hidden) image.focus();
+    contents.hidden = !can3;
+    const shown = cardContentFor(s);
+    contents.querySelectorAll("button[data-content]")
+        .forEach(b => b.setAttribute("aria-pressed", String(b.dataset.content === shown)));
     cardSoon();
   }
 
@@ -1452,18 +1469,21 @@
 
   // ---- the share image (AOTY-70) ----------------------------------------------------------------
   //
-  // The #1 as a PNG in the page's theme, 1080x1080 or a 1080x1920 story (AOTY-72), drawn here on a
-  // canvas from sharecard.js's operations. Touch devices that can share files get the share sheet with the PNG alone (the only
-  // way into Instagram from the web, and iOS drops the image if text rides along); everything else
-  // downloads it.
+  // The #1 or the top 3 (AOTY-73) as a PNG in the page's theme, 1080x1080 or a 1080x1920 story
+  // (AOTY-72), drawn here on a canvas from sharecard.js's operations. Touch devices that can share
+  // files get the share sheet with the PNG alone (the only way into Instagram from the web, and iOS
+  // drops the image if text rides along); everything else downloads it.
   //
   // iOS refuses share() after slow work since the tap, so the image is made ahead: once the button
   // scrolls into view, or is hovered, focused or touched, never on every page load (it costs a CORS
-  // fetch of the cover). A tap before it's ready makes it, then tries; if that share is refused, the
-  // image is ready and the next tap shares it at once.
+  // fetch of each cover). A tap before it's ready makes it, then tries; if that share is refused,
+  // the image is ready and the next tap shares it at once.
   const sc = globalThis.aotyShareCard;  // web/src/sharecard.js, loaded first
-  // The format the switch shows (data-format on <main>, set by setupSwitch), a known one or square.
-  const cardFormat = () => sc.formatOf(poster.dataset.format);
+  const COVER_WAIT_MS = 8000;  // a cover still loading after this is drawn as its tile
+  // What the image will show for subject s: the saved content when there are enough albums on
+  // screen, else the #1 (data-content and data-shape on <main>, set by setupSwitch).
+  const cardContentFor = s => share.cardContent(poster.dataset.content, s ? s.albums.length : 0);
+  const cardFormat = s => share.formatId(cardContentFor(s), poster.dataset.shape);
   // The theme on screen, complete: what applyTheme last painted (the default's tokens for null).
   let shownTokens = th.complete(th.THEMES[th.DEFAULT]);
   // Per format, {key, promise, file}: the last image made or being made. One per format, so
@@ -1471,30 +1491,32 @@
   const cards = {};
   let cardInView = false, cardTimer = 0;
 
-  // What the image shows (share.imageSubject): the #1 of the ranking on screen, and for a member's
+  // What the image shows (share.imageSubject): the top of the ranking on screen, and for a member's
   // view of a group, the member's own (AOTY-71). groupWho and the switch are set by renderGroup
-  // before it calls renderShare.
+  // before it calls renderShare. Up to 3 albums, the most any content draws.
   function cardSubject() {
     if (!shareTarget || !current || !current.rankings) return null;
     const group = shareTarget.kind === "group" && current.kind === "group";
     if (shareTarget.kind === "group" && !group) return null;
-    const top = group ? grp.top(current, groupMode(), grp.memberIndex(current, groupWho)) : share.userTop(current);
-    return share.imageSubject({target: shareTarget, chart: current, top, member: group ? groupWho : ""});
+    const tops = group ? grp.tops(current, groupMode(), grp.memberIndex(current, groupWho), 3)
+        : share.userTops(current, 3);
+    return share.imageSubject({target: shareTarget, chart: current, tops, member: group ? groupWho : ""});
   }
 
   // What the image shows now, and a key that changes whenever any of it does: the chart, the name,
-  // the link, the format and the resolved colours ("album of the year" settles after its cover loads).
+  // the link, the format, every album drawn and the resolved colours ("album of the year" settles
+  // after its cover loads).
   function cardInput() {
     const s = cardSubject();
     if (!s) return null;
-    const a = s.album, format = cardFormat();
-    const texts = {title: a.album, artist: a.artist, name: s.name, year: current.year, url: linkFor(s.link),
-                   kind: s.kind, played: s.played};
+    const format = cardFormat(s), shown = s.albums.slice(0, sc.FORMATS[format].count);
+    const texts = {albums: shown.map(a => ({title: a.album, artist: a.artist})), name: s.name, year: current.year,
+                   url: linkFor(s.link), kind: s.kind, played: s.played};
     // A group's file is named by its slug: its name may be all emoji or CJK, which fileName drops.
     const file = sc.fileName(s.kind === "group" ? s.link.id : s.name, current.year, format);
-    const urls = a.art ? [a.art, ...(a.fallbacks || [])] : [];
+    const urls = shown.map(a => (a.art ? [a.art, ...(a.fallbacks || [])] : []));
     const tokens = shownTokens;
-    const key = JSON.stringify([format, current.generated_at, texts, urls[0] || "", tokens]);
+    const key = JSON.stringify([format, current.generated_at, texts, urls.map(u => u[0] || ""), tokens]);
     return {key, format, texts, file, urls, tokens};
   }
 
@@ -1537,18 +1559,39 @@
   async function renderCard({format, texts, file, urls, tokens}) {
     // With the real text, so the unicode-range subsets it needs load (é, Cyrillic, CJK).
     if (document.fonts && document.fonts.load) {
-      await Promise.all(sc.fontLoads({texts, tokens}).map(([f, t]) => document.fonts.load(f, t).catch(() => null)));
+      await Promise.all(sc.fontLoads({texts, tokens, format})
+          .map(([f, t]) => document.fonts.load(f, t).catch(() => null)));
     }
-    const img = urls.length ? await loadCover(urls, {cors: true}) : null;
-    // A cover that loaded but taints the canvas (no CORS after all) makes toBlob throw: a tainted
-    // canvas stays tainted, so the tile goes on a fresh one.
-    const blob = (img && await drawCard(format, texts, tokens, img)) || await drawCard(format, texts, tokens, null);
+    // Every cover at once, each given up on after COVER_WAIT_MS, and each one that would taint the
+    // canvas (it loaded without CORS after all) dropped on its own, so only its slot is a tile.
+    const imgs = await Promise.all(urls.map(u => (u.length ? withTimeout(loadCover(u, {cors: true}), COVER_WAIT_MS)
+        .then(img => (img && readable(img) ? img : null)) : null)));
+    // A taint the check missed still makes toBlob throw, and a tainted canvas stays tainted: the
+    // tiles go on a fresh one.
+    const blob = (imgs.some(Boolean) && await drawCard(format, texts, tokens, imgs))
+        || await drawCard(format, texts, tokens, imgs.map(() => null));
     return blob ? new File([blob], file, {type: "image/png"}) : null;
   }
 
+  // p, or null once ms have passed.
+  const withTimeout = (p, ms) => Promise.race([p, new Promise(resolve => setTimeout(() => resolve(null), ms))]);
+  // Whether a canvas holding img can still be read back (getImageData throws on a tainted one).
+  function readable(img) {
+    try {
+      const c = document.createElement("canvas");
+      c.width = c.height = 1;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, 1, 1);
+      ctx.getImageData(0, 0, 1, 1);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // One attempt on a new canvas: the PNG, or null (tainted, or toBlob gave nothing, as iOS can
-  // under memory pressure).
-  function drawCard(format, texts, tokens, img) {
+  // under memory pressure). imgs: per album, its cover or null for its tile.
+  function drawCard(format, texts, tokens, imgs) {
     const {width, height} = sc.FORMATS[format];
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -1556,12 +1599,14 @@
     const ctx = canvas.getContext("2d");
     if (!ctx) return Promise.resolve(null);
     const measure = (t, f) => { ctx.font = f; return ctx.measureText(t).width; };
-    for (const o of sc.compose({format, texts, tokens, cover: !!img, measure})) drawOp(ctx, o, img);
+    const covers = imgs.map(Boolean);
+    for (const o of sc.compose({format, texts, tokens, covers, measure})) drawOp(ctx, o, imgs[o.slot]);
     return new Promise(resolve => {
       try { canvas.toBlob(b => resolve(b && b.size ? b : null), "image/png"); } catch (_) { resolve(null); }
     });
   }
 
+  // img: the cover for a cover op (o.slot's).
   function drawOp(ctx, o, img) {
     ctx.save();
     if (o.op === "fill") {
@@ -1609,7 +1654,7 @@
     if (sharing || isBusy(button)) return;
     msg.textContent = "";
     $("share-url").hidden = true;
-    const format = cardFormat();  // the tap's, even if the switch moves while the image is made
+    const format = cardFormat(cardSubject());  // the tap's, even if a switch moves while it's made
     const ready = readyCard();
     if (ready) return deliver(ready, true, format);
     busy(button, true, "making…");

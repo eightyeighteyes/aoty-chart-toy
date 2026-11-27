@@ -63,12 +63,14 @@ test("events keep only listed params and values", () => {
   assert.deepEqual(clean("share_image", {format: "top1_square", via: "native", album: "1989", name: "alice"}),
                    {format: "top1_square", via: "native"});
   assert.deepEqual(clean("share_image", {format: "alice", via: "alice"}), {});
-  // AOTY-72: the story format, and its switch.
-  assert.deepEqual(clean("share_image", {format: "top1_story", via: "download"}), {format: "top1_story", via: "download"});
-  assert.deepEqual(clean("control_change", {control: "format", value: "top1_story"}),
-                   {control: "format", value: "top1_story"});
-  assert.deepEqual(clean("control_change", {control: "format", value: "top1_square"}),
-                   {control: "format", value: "top1_square"});
+  // AOTY-72, AOTY-73: the story and top 3 formats, and the image's two switches.
+  for (const format of ["top1_square", "top1_story", "top3_square", "top3_story"]) {
+    assert.deepEqual(clean("share_image", {format, via: "download"}), {format, via: "download"});
+  }
+  for (const [control, value] of [["content", "top1"], ["content", "top3"], ["shape", "square"], ["shape", "story"]]) {
+    assert.deepEqual(clean("control_change", {control, value}), {control, value});
+  }
+  assert.deepEqual(clean("control_change", {control: "format", value: "top1_story"}), {});  // AOTY-72's, gone
   // AOTY-43: an album link's click says nothing about which album, or whose page.
   assert.deepEqual(EVENTS.album_click, {});
   assert.deepEqual(clean("album_click", {album: "1989", artist: "Taylor Swift", user: "alice"}), {});
