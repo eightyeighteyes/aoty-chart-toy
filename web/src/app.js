@@ -1515,8 +1515,7 @@
     const s = cardSubject();
     if (!s) return null;
     const format = cardFormat(s), shown = s.albums.slice(0, sc.FORMATS[format].count);
-    const texts = {albums: shown.map(a => ({title: a.album, artist: a.artist})), name: s.name, year: current.year,
-                   url: linkFor(s.link), kind: s.kind, played: s.played};
+    const texts = share.cardTexts(s, current.year, linkFor(s.link), shown.length);  // as the card Lambda's (AOTY-91)
     // A group's file is named by its slug: its name may be all emoji or CJK, which fileName drops.
     const file = sc.fileName(s.kind === "group" ? s.link.id : s.name, current.year, format);
     const urls = shown.map(a => (a.art ? [a.art, ...(a.fallbacks || [])] : []));

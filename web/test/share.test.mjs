@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const {shareUrl, useNative, shareTitle, shareLabels, userTop, userTops, CONTENTS, SHAPES, cardContent, formatId,
-       imageSubject, imageLabel} = require("../src/share.js");
+       imageSubject, imageLabel, cardTexts, previewSubject} = require("../src/share.js");
 
 const PROD = {origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm"};
 const STAGING = {origin: "https://kamp.fm", base: "/toys/aoty-staging/", short: ""};
@@ -114,6 +114,29 @@ test("a member's view shares the member's image, never the group's link", () => 
   assert.equal(url, "https://aoty.kamp.fm/bob");
   assert.ok(!url.includes("/g/") && !url.includes("group"));
   assert.equal(imageSubject({target: house, chart: groupChart, top: null, member: "bob"}), null);
+});
+
+test("a card's texts are its albums' titles and artists, the name, year, link and count (AOTY-91)", () => {
+  const albums = [{album: "Blue Lines", artist: "Massive Attack"}, {album: "Dummy", artist: "Portishead"}];
+  const s = {kind: "group", name: "Full House", albums, played: "3 of 4 members"};
+  assert.deepEqual(cardTexts(s, 2026, "https://aoty.kamp.fm/g/full-house"), {
+    albums: [{title: "Blue Lines", artist: "Massive Attack"}], name: "Full House", year: 2026,
+    url: "https://aoty.kamp.fm/g/full-house", kind: "group", played: "3 of 4 members",
+  });
+  assert.equal(cardTexts(s, 2026, "u", 3).albums.length, 2);  // fewer when fewer rank
+});
+
+test("a preview card's subject is the page as a visitor first sees it (AOTY-91)", () => {
+  const user = {username: "alice", display_name: "AliCe", albums: [hit], rankings: {album: [[0, 9]]}};
+  assert.deepEqual(previewSubject(user, userTop(user)), {kind: "user", name: "AliCe",
+    link: {kind: "user", id: "AliCe", name: "AliCe"}, album: hit, albums: [hit], played: null});
+  assert.equal(previewSubject({...user, display_name: undefined}, hit).name, "alice");
+  const group = {kind: "group", id: "full-house", name: "Full House", ...groupChart};
+  const s = previewSubject(group, hit);
+  assert.deepEqual([s.kind, s.name, s.link.id, s.played], ["group", "Full House", "full-house", "3 of 4 members"]);
+  assert.equal(previewSubject({...group, name: ""}, hit).name, "full-house");
+  assert.equal(previewSubject(user, null), null);  // nothing ranks yet
+  assert.equal(previewSubject(null, hit), null);
 });
 
 test("a user chart's top 3 is its first three, or fewer", () => {
