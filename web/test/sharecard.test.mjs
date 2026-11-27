@@ -146,9 +146,10 @@ test("nothing but the background is drawn in a format's covered strips, whatever
   const group = {...long, kind: "group", played: "25 of 25 members"};
   for (const [format, f] of Object.entries(FORMATS)) {
     for (const id of ["poster", "gabbie", "white-stripes"]) {
-      for (const texts of [TEXTS, long, group, {...TEXTS, artist: "Godspeed You! Black Emperor"}]) {
+      for (const texts of [TEXTS, long, group, {...TEXTS, artist: "Godspeed You! Black Emperor"}, TOP3, LONG3,
+                           {...LONG3, kind: "group", name: "y".repeat(50)}]) {
         for (const cover of [true, false]) {
-          const ops = compose({format, texts, tokens: complete(THEMES[id]), cover, measure});
+          const ops = compose({format, texts, tokens: complete(THEMES[id]), covers: [cover, !cover, cover], measure});
           assert.equal(ops[0].op, "fill");
           assert.deepEqual([ops[0].w, ops[0].h], [f.width, f.height]);
           for (const o of ops.slice(1)) {
@@ -185,7 +186,7 @@ test("with no usable cover, the artist-name tile in the theme's tile colours", (
 test("the title wraps to two lines and the artist follows it without overlapping the link", () => {
   const t = complete(THEMES.poster);
   const long = {...TEXTS, title: "Everything Everywhere All at Once and Then Some More", artist: "A".repeat(80)};
-  for (const format of Object.keys(FORMATS)) {
+  for (const format of ["top1_square", "top1_story"]) {
     const ops = textOps(compose({format, texts: long, tokens: t, cover: true, measure}));
     const [, , t1, t2, artist, url] = ops;
     assert.ok(t2.y > t1.y, format);
@@ -265,6 +266,143 @@ test("a group's count and caption load their fonts", () => {
   const loads = fontLoads({texts: {...GROUP, played: "7 of 9 членов"}, tokens: complete(THEMES.poster)});
   assert.ok(loads.some(([f, s]) => f.startsWith("500") && f.includes("Inter") && s.includes("членов")));
   assert.ok(loads.some(([f, s]) => f.startsWith("600") && s === "Full House · album of the year 2026"));
+});
+
+// The #1 cards' ops as they were before AOTY-73 made them slots (fixtures/top1_ops.json), less the
+// slot index cover and tile ops now carry: a top 3 must never change a #1.
+test("a #1 card draws exactly what it did before slots", async () => {
+  const {readFileSync} = await import("node:fs");
+  const cases = JSON.parse(readFileSync(new URL("./fixtures/top1_ops.json", import.meta.url), "utf8"));
+  assert.ok(cases.length >= 60);
+  const strip = ops => ops.map(({slot, ...o}) => o);
+  for (const {format, id, texts, cover, ops} of cases) {
+    assert.deepEqual(strip(compose({format, texts, tokens: complete(THEMES[id]), cover, measure})), ops,
+                     `${format} ${id} ${texts.title} ${cover}`);
+  }
+});
+
+// ---- top 3 (AOTY-73) ----------------------------------------------------------------------------
+
+const NB = " ";  // the no-break space tying a rank to its title
+const TOP3 = {...TEXTS, albums: [{title: "1989", artist: "Taylor Swift"}, {title: "Blue", artist: "Joni Mitchell"},
+                                 {title: "Pink Moon", artist: "Nick Drake"}]};
+const LONG3 = {...TEXTS, albums: [
+  {title: "Everything Everywhere All at Once and Then Some More And More", artist: "A".repeat(90)},
+  {title: "The Most Ridiculously Long Second Album Title Ever Pressed", artist: "Godspeed You! Black Emperor"},
+  {title: "東京事変の新しいアルバムのタイトルはとても長い", artist: "東京事変".repeat(10)},
+]};
+
+// A text op's ink, tighter than the safe-band test's: cap height above the baseline, a short
+// descender below, so lines with 1.05–1.2 leading don't count as touching.
+function ink(o) {
+  const s = sizeOf(o.font), w = measure(o.text, o.font);
+  const left = o.align === "center" ? o.x - w / 2 : o.align === "right" ? o.x - w : o.x;
+  return {top: o.y - 0.75 * s, bottom: o.y + 0.2 * s, left, right: left + w};
+}
+const touch = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+test("top 3 formats are square and story, with their own file names and captions", () => {
+  assert.deepEqual([FORMATS.top3_square.count, FORMATS.top3_story.count], [3, 3]);
+  assert.deepEqual([FORMATS.top3_square.height, FORMATS.top3_story.height], [1080, 1920]);
+  assert.deepEqual(FORMATS.top3_story.safe, FORMATS.top1_story.safe);
+  assert.equal(fileName("Alice", 2026, "top3_square"), "aoty-2026-Alice-top3.png");
+  assert.equal(fileName("Alice", 2026, "top3_story"), "aoty-2026-Alice-top3-story.png");
+  assert.equal(caption("alice", 2026, "user", 3), "alice's top 3 albums of 2026");
+  assert.equal(caption("Full House", 2026, "group", 3), "Full House · top 3 albums of 2026");
+  assert.equal(caption("alice", 2026, "user", 1), "alice's album of the year 2026");
+});
+
+test("a top 3 draws three slots in rank order, each title ranked", () => {
+  for (const format of ["top3_square", "top3_story"]) {
+    const ops = compose({format, texts: TOP3, tokens: complete(THEMES.poster), covers: [true, true, true], measure});
+    assert.deepEqual(ops.filter(o => o.op === "cover").map(o => o.slot), [0, 1, 2], format);
+    const texts = textOps(ops).map(o => o.text);
+    assert.deepEqual(texts, ["a kamp toy", "alice's top 3 albums of 2026", `#1${NB}1989`, "Taylor Swift",
+                             `#2${NB}Blue`, "Joni Mitchell", `#3${NB}Pink Moon`, "Nick Drake", "aoty.kamp.fm/alice"],
+                     format);
+    // #1's cover is the big one.
+    const [c1, c2, c3] = ops.filter(o => o.op === "cover");
+    assert.ok(c1.w > 2 * c2.w && c2.w === c3.w, format);
+  }
+});
+
+test("#2 and #3 sit beside #1 on the square, below it on the story", () => {
+  const sq = compose({format: "top3_square", texts: TOP3, tokens: complete(THEMES.poster), covers: [true, true, true],
+                      measure}).filter(o => o.op === "cover");
+  assert.ok(sq[1].x >= sq[0].x + sq[0].w && sq[2].x === sq[1].x && sq[2].y > sq[1].y);
+  const st = compose({format: "top3_story", texts: TOP3, tokens: complete(THEMES.poster), covers: [true, true, true],
+                      measure}).filter(o => o.op === "cover");
+  assert.ok(st[1].y >= st[0].y + st[0].h && st[2].y === st[1].y && st[2].x > st[1].x);
+});
+
+test("no two texts and no text and cover overlap, at any length, in any format", () => {
+  for (const format of Object.keys(FORMATS)) {
+    for (const texts of [TEXTS, TOP3, LONG3, {...LONG3, kind: "group", name: "y".repeat(50), played: "25 of 25 members"}]) {
+      for (const covers of [[true, true, true], [false, false, false], [true, false, true]]) {
+        const ops = compose({format, texts, tokens: complete(THEMES.gabbie), covers, measure});
+        const text = textOps(ops), boxes = ops.filter(o => o.op === "cover" || o.op === "tile");
+        for (let i = 0; i < text.length; i++) {
+          for (let j = i + 1; j < text.length; j++) {
+            assert.ok(!touch(ink(text[i]), ink(text[j])), `${format}: "${text[i].text}" / "${text[j].text}"`);
+          }
+          if (text[i].on === "tile") continue;
+          for (const b of boxes) {
+            const box = {top: b.y, bottom: b.y + b.h, left: b.x, right: b.x + b.w};
+            assert.ok(!touch(ink(text[i]), box), `${format}: "${text[i].text}" on slot ${b.slot}`);
+          }
+        }
+        // Every slot's names stay inside the canvas's pad.
+        for (const o of text) {
+          const e = ink(o);
+          assert.ok(e.left >= 64 - 0.01 && e.right <= 1016 + 0.01, `${format}: "${o.text}"`);
+        }
+      }
+    }
+  }
+});
+
+test("long top 3 titles are cut, keeping their rank and the start of the title", () => {
+  for (const format of ["top3_square", "top3_story"]) {
+    const ops = textOps(compose({format, texts: LONG3, tokens: complete(THEMES.poster), covers: [true, true, true],
+                                 measure}));
+    const titles = ops.filter(o => /^#\d /.test(o.text));  // each title's first line
+    assert.deepEqual(titles.map(o => o.text.slice(0, 2)), ["#1", "#2", "#3"], format);
+    for (const o of titles) assert.ok(o.text.length > 6, `${format}: "${o.text}"`);  // never "#3…"
+    assert.ok(ops.filter(o => o.on === "bg" && o.text.endsWith("…")).length >= 3, format);
+  }
+});
+
+test("a missing cover tiles only its own slot, with its own artist, sized to fit", () => {
+  for (const format of ["top3_square", "top3_story"]) {
+    const t = complete(THEMES.poster);
+    const ops = compose({format, texts: TOP3, tokens: t, covers: [true, false, true], measure});
+    assert.deepEqual(ops.filter(o => o.op === "cover").map(o => o.slot), [0, 2]);
+    const tile = ops.find(o => o.op === "tile");
+    assert.equal(tile.slot, 1);
+    const onTile = textOps(ops).filter(o => o.on === "tile");
+    assert.equal(onTile.map(o => o.text).join(" "), "Joni Mitchell");
+    for (const o of onTile) {
+      const e = ink(o);
+      assert.ok(e.left >= tile.x && e.right <= tile.x + tile.w && e.top >= tile.y && e.bottom <= tile.y + tile.h,
+                `${format}: "${o.text}"`);
+    }
+  }
+});
+
+test("the member count is for #1 cards only", () => {
+  const group = {...TOP3, kind: "group", name: "Full House", played: "7 of 9 members"};
+  const ops = textOps(compose({format: "top3_square", texts: group, tokens: complete(THEMES.poster),
+                               covers: [true, true, true], measure}));
+  assert.ok(!ops.some(o => o.text === "7 of 9 members"));
+  assert.equal(ops[1].text, "Full House · top 3 albums of 2026");
+});
+
+test("a top 3 loads every title's and artist's fonts", () => {
+  const loads = fontLoads({texts: {...TOP3, albums: [...TOP3.albums.slice(0, 2), {title: "Ægis", artist: "Björk"}]},
+                           tokens: complete(THEMES.poster), format: "top3_square"});
+  assert.ok(loads.some(([f, s]) => f.includes("Bricolage") && s.includes("Ægis") && s.includes("#3")));
+  assert.ok(loads.some(([f, s]) => f.startsWith("500") && s.includes("Björk") && s.includes("Joni Mitchell")));
+  assert.ok(loads.some(([, s]) => s === "alice's top 3 albums of 2026"));
 });
 
 test("the printed link drops its scheme", () => {

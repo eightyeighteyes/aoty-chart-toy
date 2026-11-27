@@ -43,7 +43,11 @@
   // The #1 on screen for one mode and member (the share image's album, AOTY-71), or null when that
   // ranking is empty: Weighted's listener floor, a member with no plays from the year.
   function top(chart, mode, who = -1) {
-    return rows(chart, mode, who)[0] || null;
+    return tops(chart, mode, who, 1)[0] || null;
+  }
+  // The first n on screen, in order (AOTY-73's top 3): fewer when the ranking has fewer.
+  function tops(chart, mode, who = -1, n = 1) {
+    return rows(chart, mode, who).slice(0, n);
   }
 
   // "3 of 8 still loading" while members' first syncs run; "" once everyone is in.
@@ -83,7 +87,7 @@
         && Array.isArray(chart.members) && Array.isArray(chart.albums) && !!chart.rankings;
   }
 
-  const api = {MODES, ID_RE, memberIndex, rows, top, loadingLine, checkingLine, valid, syncWatch,
+  const api = {MODES, ID_RE, memberIndex, rows, top, tops, loadingLine, checkingLine, valid, syncWatch,
                SYNC_GRACE_MS, SYNC_WATCH_MAX_MS};
   root.aotyGroup = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

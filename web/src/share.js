@@ -49,36 +49,61 @@
 
   // A user chart's #1 (By Play, its one ranking), or null before it ranks anything.
   function userTop(chart) {
+    return userTops(chart, 1)[0] || null;
+  }
+  // Its first n, in order (AOTY-73): fewer when it ranks fewer.
+  function userTops(chart, n = 1) {
     const r = chart && chart.rankings && chart.rankings.album;
-    return Array.isArray(r) && r.length ? chart.albums[r[0][0]] || null : null;
+    if (!Array.isArray(r)) return [];
+    return r.slice(0, n).map(([i]) => chart.albums[i]).filter(Boolean);
   }
 
-  // What the share image shows (AOTY-70, AOTY-71), or null for no image: {kind, name, link, album,
-  // played}. Every visitor gets it, signed in or not. top is the #1 on screen (userTop, or
-  // group.top for the ranking and member shown); member is a group's ?user= member, or "".
+  // The image's two switches (AOTY-73): what it shows, and its shape. A content needs that many
+  // albums on screen; with fewer the image is the #1 (the saved choice stays, for the next view).
+  const CONTENTS = {top1: 1, top3: 3};
+  const SHAPES = ["square", "story"];
+  function cardContent(saved, count) {
+    return Object.prototype.hasOwnProperty.call(CONTENTS, saved) && count >= CONTENTS[saved] ? saved : "top1";
+  }
+  // The sharecard format for a content and a shape: top3_story, top1_square, …
+  function formatId(content, shape) {
+    const c = Object.prototype.hasOwnProperty.call(CONTENTS, content) ? content : "top1";
+    return `${c}_${SHAPES.includes(shape) ? shape : "square"}`;
+  }
+
+  // What the share image shows (AOTY-70, AOTY-71, AOTY-73), or null for no image: {kind, name,
+  // link, album, albums, played}. Every visitor gets it, signed in or not. tops are the albums on
+  // screen from the top (userTops, or group.tops for the ranking and member shown; top alone is
+  // a #1); member is a group's ?user= member, or "".
   //   - a user page: its name and link.
   //   - a member's view of a group: the member's own image, linking to their user page, never the
   //     group's (user decision 2026-11-27).
   //   - a group: its name and link, and "7 of 9 members" once no member is still loading (a count
   //     during the first build would undercount, user decision 2026-11-27). The total counts every
   //     member, unavailable ones included, as the page's dots do.
-  function imageSubject({target, chart, top, member}) {
-    if (!target || !chart || !top) return null;
-    if (target.kind !== "group") return {kind: "user", name: target.name, link: target, album: top, played: null};
+  function imageSubject({target, chart, top, tops, member}) {
+    const albums = (tops || (top ? [top] : [])).filter(Boolean);
+    if (!target || !chart || !albums.length) return null;
+    const first = albums[0];
+    if (target.kind !== "group") {
+      return {kind: "user", name: target.name, link: target, album: first, albums, played: null};
+    }
     if (member) {
-      return {kind: "user", name: member, link: {kind: "user", id: member, name: member}, album: top, played: null};
+      return {kind: "user", name: member, link: {kind: "user", id: member, name: member}, album: first, albums,
+              played: null};
     }
     const total = (chart.members || []).length + (chart.unavailable || 0);
-    const counted = !chart.waiting && total > 0 && Number.isInteger(top.listeners);
-    const played = counted ? `${top.listeners} of ${total} ${total === 1 ? "member" : "members"}` : null;
-    return {kind: "group", name: target.name, link: target, album: top, played};
+    const counted = !chart.waiting && total > 0 && Number.isInteger(first.listeners);
+    const played = counted ? `${first.listeners} of ${total} ${total === 1 ? "member" : "members"}` : null;
+    return {kind: "group", name: target.name, link: target, album: first, albums, played};
   }
   // Its label says what a tap does: the share sheet (touch, where files can be shared), or a download.
   function imageLabel(native) {
     return native ? "share image" : "save image";
   }
 
-  const api = {shareUrl, useNative, shareTitle, shareLabels, userTop, imageSubject, imageLabel};
+  const api = {shareUrl, useNative, shareTitle, shareLabels, userTop, userTops, CONTENTS, SHAPES, cardContent, formatId,
+               imageSubject, imageLabel};
   root.aotyShare = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
