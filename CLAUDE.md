@@ -987,15 +987,43 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
     no-cover case. Text extents in that test are estimates (one em above the baseline, 0.3 below),
     so the layout keeps 40+ px of slack for real fonts.
 - **The "square | story" switch** sits beside the image button and hides with it. It's a
-  `setupSwitch` (`data-format` on `<main>`, default square), remembered per viewer as
-  `aoty-card-format`.
+  `setupSwitch` (`data-shape` on `<main>`, default square), remembered per viewer as
+  `aoty-card-shape` since AOTY-73. AOTY-72's `aoty-card-format` = `top1_story` is carried over
+  once.
   - **Each format keeps its own made-ahead image** (`cards[format]`), so flipping back doesn't lose
     a ready one. That matters for iOS's activation rule.
-  - Unknown ids read as square (`sharecard.formatOf`).
+  - Unknown ids read as square (`sharecard.formatOf`, `share.formatId`).
 - Story files end in `-story.png`.
-- Analytics: `share_image` `format` is `top1_square` or `top1_story`, the format at the tap.
-  Flipping the switch is `control_change` with `control: format`.
-- Top 3 and top 10 (AOTY-73, AOTY-74) add their own story layouts beside these.
+- Analytics: `share_image` `format` is the format at the tap. Flipping a switch is
+  `control_change` with `control: content | shape`.
+- Top 10 (AOTY-74) adds its own layouts beside these.
+
+## Top 3 images (AOTY-73, 2026-11-27)
+
+- User decisions:
+  - **#1 big, #2 and #3 smaller.** They sit beside #1 on the square and below it on the story.
+  - **Two switches**: "#1 | top 3" (`data-content`, `aoty-card-content`) beside "square | story".
+  - **The caption is "alice's top 3 albums of 2026"**, or "Full House · top 3 albums of 2026" on a
+    group.
+- **The card is slots** (`layout().slots`). Each slot has its cover or tile, then its title and
+  artist. A #1 card is one slot.
+  - `web/test/fixtures/top1_ops.json` is the #1 cards' ops from before slots. They must still draw
+    exactly that, minus the `slot` index.
+  - Re-capture it only for an intended change to a #1 card.
+- Titles on a top N start with `#n` and a **no-break space**, so a title that breaks (CJK, one long
+  word) keeps going after the rank, never "#3…". `wrap` and `fitText` treat every space but a
+  no-break one as a break.
+- **"top 3" needs three on screen** (`share.cardContent`).
+  - With fewer (Weighted's floor, a light member), the switch hides and the image is the #1. The
+    saved choice stays for the next view.
+  - The pressed button is the one that will be drawn.
+- The member count is drawn on #1 cards only.
+- **Covers:** each slot loads its own, all at once, each chain capped at 8 s (`COVER_WAIT_MS`).
+  - Each loaded cover is checked for taint on its own (`readable`, a 1x1 `getImageData`), so a
+    non-CORS cover tiles only its slot.
+  - A taint the check misses still falls back to all tiles, on a fresh canvas.
+- The cache key covers every album's texts and first cover URL.
+- Files end in `-top3.png` or `-top3-story.png`.
 
 ## Monitoring (AOTY-27, 2026-11-23)
 
