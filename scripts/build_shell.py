@@ -30,6 +30,7 @@ ASSETS = {
   "app.js": "JS",
   "kampstats.js": "STATS",
   "intro.js": "INTRO",
+  "lastfm.js": "LASTFM",
   "firstvisit.js": "FIRSTVISIT",
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",
