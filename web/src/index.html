@@ -76,7 +76,7 @@
   <p class="privacy">we read your public last.fm plays. no login needed, nothing sold.</p>
 </section>
 
-<main class="poster" id="poster" data-view="poster" data-rank="listener">
+<main class="poster" id="poster" data-view="poster" data-rank="listener" data-format="top1_square">
   <header>
     <div class="eyebrow" id="eyebrow">{{NAME}}</div>
     <h1 id="title">{{NAME}}</h1>
@@ -106,12 +106,17 @@
     <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
     <!-- User and group pages (AOTY-84, AOTY-52): share for everyone; a member's view of a group
          also offers the member's own page; edit for the group's owner only. The labels change to
-         "share" where the system share sheet is used (touch only). User pages also offer the #1 as
-         an image (AOTY-70), for every visitor once the chart ranks something. -->
+         "share" where the system share sheet is used (touch only). Both also offer the #1 as an
+         image (AOTY-70, AOTY-71), for every visitor once the ranking shown has one, square or
+         9:16 for stories (AOTY-72). -->
     <div class="page-tools" id="page-tools" hidden>
       <button type="button" class="pill" id="share">copy link</button>
       <button type="button" class="pill" id="share-member" hidden></button>
       <button type="button" class="pill" id="share-image" hidden>share image</button>
+      <div class="switch small" role="group" aria-label="Image format" id="format-switch" hidden>
+        <button type="button" data-format="top1_square" aria-pressed="true">square</button>
+        <button type="button" data-format="top1_story" aria-pressed="false">story</button>
+      </div>
       <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
       <span class="share-url" id="share-url" hidden></span>
       <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>

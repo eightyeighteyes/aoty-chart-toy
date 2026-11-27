@@ -232,6 +232,9 @@ ol {
   color: var(--on-accent); background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .switch button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+/* The share image's square | story switch (AOTY-72), sized to sit among the tool pills. */
+.switch.small { padding: 3px; }
+.switch.small button { padding: 5px 12px; }
 /* Group pages (AOTY-51): the member picker, right-aligned after the switches as in M0, and the
    listener dots (one per member, filled for those who played it). */
 .who { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }

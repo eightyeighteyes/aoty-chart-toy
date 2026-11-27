@@ -429,6 +429,8 @@
     switchesReady = true;
     setupSwitch("view", "aoty-view");
     setupSwitch("rank", "aoty-rank", () => renderChart(current));
+    // The share image's square | story (AOTY-72): remembered per viewer, made ahead like the rest.
+    setupSwitch("format", "aoty-card-format", () => cardSoon());
   }
 
   function paint(chart, raw, lower) {
@@ -1405,6 +1407,7 @@
     // The share image (AOTY-70, AOTY-71): any page whose ranking on screen has a #1.
     const image = $("share-image");
     image.hidden = !cardSubject();
+    $("format-switch").hidden = image.hidden;
     if (!image.hidden && !isBusy(image)) image.textContent = share.imageLabel(nativeFiles());
     cardSoon();
   }
@@ -1449,8 +1452,8 @@
 
   // ---- the share image (AOTY-70) ----------------------------------------------------------------
   //
-  // The #1 as a 1080x1080 PNG in the page's theme, drawn here on a canvas from sharecard.js's
-  // operations. Touch devices that can share files get the share sheet with the PNG alone (the only
+  // The #1 as a PNG in the page's theme, 1080x1080 or a 1080x1920 story (AOTY-72), drawn here on a
+  // canvas from sharecard.js's operations. Touch devices that can share files get the share sheet with the PNG alone (the only
   // way into Instagram from the web, and iOS drops the image if text rides along); everything else
   // downloads it.
   //
@@ -1459,14 +1462,15 @@
   // fetch of the cover). A tap before it's ready makes it, then tries; if that share is refused, the
   // image is ready and the next tap shares it at once.
   const sc = globalThis.aotyShareCard;  // web/src/sharecard.js, loaded first
-  const CARD_FORMAT = "top1_square";
+  // The format the switch shows (data-format on <main>, set by setupSwitch), a known one or square.
+  const cardFormat = () => sc.formatOf(poster.dataset.format);
   // The theme on screen, complete: what applyTheme last painted (the default's tokens for null).
   let shownTokens = th.complete(th.THEMES[th.DEFAULT]);
-  let card = null;  // {key, promise, file}: the last image made or being made
+  // Per format, {key, promise, file}: the last image made or being made. One per format, so
+  // flipping the switch back doesn't throw away a ready image (iOS wants it ready at the tap).
+  const cards = {};
   let cardInView = false, cardTimer = 0;
 
-  // What the image shows now, and a key that changes whenever any of it does: the chart, the name,
-  // the link and the resolved colours ("album of the year" settles after its cover loads).
   // What the image shows (share.imageSubject): the #1 of the ranking on screen, and for a member's
   // view of a group, the member's own (AOTY-71). groupWho and the switch are set by renderGroup
   // before it calls renderShare.
@@ -1479,33 +1483,35 @@
   }
 
   // What the image shows now, and a key that changes whenever any of it does: the chart, the name,
-  // the link and the resolved colours ("album of the year" settles after its cover loads).
+  // the link, the format and the resolved colours ("album of the year" settles after its cover loads).
   function cardInput() {
     const s = cardSubject();
     if (!s) return null;
-    const a = s.album;
+    const a = s.album, format = cardFormat();
     const texts = {title: a.album, artist: a.artist, name: s.name, year: current.year, url: linkFor(s.link),
                    kind: s.kind, played: s.played};
     // A group's file is named by its slug: its name may be all emoji or CJK, which fileName drops.
-    const file = sc.fileName(s.kind === "group" ? s.link.id : s.name, current.year);
+    const file = sc.fileName(s.kind === "group" ? s.link.id : s.name, current.year, format);
     const urls = a.art ? [a.art, ...(a.fallbacks || [])] : [];
     const tokens = shownTokens;
-    return {key: JSON.stringify([current.generated_at, texts, urls[0] || "", tokens]), texts, file, urls, tokens};
+    const key = JSON.stringify([format, current.generated_at, texts, urls[0] || "", tokens]);
+    return {key, format, texts, file, urls, tokens};
   }
 
   // The image for the page as it is now: the one already made, or a promise of it (null on failure).
   function makeCard() {
     const input = cardInput();
     if (!input) return Promise.resolve(null);
-    if (card && card.key === input.key) return card.promise;
+    const had = cards[input.format];
+    if (had && had.key === input.key) return had.promise;
     const mine = {key: input.key, file: null};
     mine.promise = renderCard(input).catch(() => null).then(file => (mine.file = file));
-    card = mine;
+    cards[input.format] = mine;
     return mine.promise;
   }
   const readyCard = () => {
-    const input = card && card.file ? cardInput() : null;
-    return input && input.key === card.key ? card.file : null;
+    const input = cardInput(), had = input && cards[input.format];
+    return had && had.file && had.key === input.key ? had.file : null;
   };
 
   // Ahead of a tap: soon after the button is on screen, again after a theme or chart change.
@@ -1528,7 +1534,7 @@
     $("share-image").addEventListener(type, () => { makeCard(); }, {passive: true});
   }
 
-  async function renderCard({texts, file, urls, tokens}) {
+  async function renderCard({format, texts, file, urls, tokens}) {
     // With the real text, so the unicode-range subsets it needs load (é, Cyrillic, CJK).
     if (document.fonts && document.fonts.load) {
       await Promise.all(sc.fontLoads({texts, tokens}).map(([f, t]) => document.fonts.load(f, t).catch(() => null)));
@@ -1536,21 +1542,21 @@
     const img = urls.length ? await loadCover(urls, {cors: true}) : null;
     // A cover that loaded but taints the canvas (no CORS after all) makes toBlob throw: a tainted
     // canvas stays tainted, so the tile goes on a fresh one.
-    const blob = (img && await drawCard(texts, tokens, img)) || await drawCard(texts, tokens, null);
+    const blob = (img && await drawCard(format, texts, tokens, img)) || await drawCard(format, texts, tokens, null);
     return blob ? new File([blob], file, {type: "image/png"}) : null;
   }
 
   // One attempt on a new canvas: the PNG, or null (tainted, or toBlob gave nothing, as iOS can
   // under memory pressure).
-  function drawCard(texts, tokens, img) {
-    const {width, height} = sc.FORMATS[CARD_FORMAT];
+  function drawCard(format, texts, tokens, img) {
+    const {width, height} = sc.FORMATS[format];
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return Promise.resolve(null);
     const measure = (t, f) => { ctx.font = f; return ctx.measureText(t).width; };
-    for (const o of sc.compose({format: CARD_FORMAT, texts, tokens, cover: !!img, measure})) drawOp(ctx, o, img);
+    for (const o of sc.compose({format, texts, tokens, cover: !!img, measure})) drawOp(ctx, o, img);
     return new Promise(resolve => {
       try { canvas.toBlob(b => resolve(b && b.size ? b : null), "image/png"); } catch (_) { resolve(null); }
     });
@@ -1603,23 +1609,24 @@
     if (sharing || isBusy(button)) return;
     msg.textContent = "";
     $("share-url").hidden = true;
+    const format = cardFormat();  // the tap's, even if the switch moves while the image is made
     const ready = readyCard();
-    if (ready) return deliver(ready, true);
+    if (ready) return deliver(ready, true, format);
     busy(button, true, "making…");
     const file = await makeCard();
     busy(button, false);
     if (!file) { msg.textContent = "couldn't make the image. try again in a minute."; return; }
-    deliver(file, false);
+    deliver(file, false, format);
   }
 
   // activated: share() is this tap's first await, so the share sheet may open.
-  async function deliver(file, activated) {
+  async function deliver(file, activated, format) {
     const msg = $("share-msg");
     if (nativeFiles([file])) {
       sharing = true;
       try {
         await navigator.share({files: [file]});
-        track("event", "share_image", {format: CARD_FORMAT, via: "native"});
+        track("event", "share_image", {format, via: "native"});
         return;
       } catch (e) {
         const why = e && e.name;
@@ -1639,7 +1646,7 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);  // Firefox cancels a download revoked at once
-    track("event", "share_image", {format: CARD_FORMAT, via: "download"});
+    track("event", "share_image", {format, via: "download"});
     msg.textContent = "image saved.";
   }
 
