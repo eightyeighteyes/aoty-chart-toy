@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import time
+from urllib.parse import quote
 
 import chart_core as core
 import group_core
@@ -69,6 +70,7 @@ RETRIES = 4
 # user's first chart needed ~50; the next build continues where this one stopped.
 COVER_LOOKUPS = 120
 COVER_BUDGET_S = 90
+CARD_PAYLOAD_MAX = 5_000_000  # under Lambda's 6 MB synchronous request limit (AOTY-91)
 
 
 class Deps:
@@ -78,17 +80,23 @@ class Deps:
   """
 
   def __init__(self, *, s3, ddb, env, lastfm_client=None, clock=time.time, mono=time.monotonic,
-               sleep=time.sleep):  # fmt: skip
+               sleep=time.sleep, lambda_=None):  # fmt: skip
     self.s3, self.ddb, self.env, self.lastfm = s3, ddb, env, lastfm_client
     self.clock, self.mono, self.sleep = clock, mono, sleep
+    self.lambda_ = lambda_  # the card Lambda's client (AOTY-91); None draws no card
 
   @classmethod
   def from_env(cls):
     import boto3  # in the Lambda runtime; not needed by tests
+    from botocore.config import Config
 
     env = os.environ
     key = lastfm.api_key_from_ssm(boto3.client("ssm"), f"{env['SSM_PREFIX']}lastfm_api_key")
-    return cls(s3=boto3.client("s3"), ddb=boto3.client("dynamodb"), env=env, lastfm_client=lastfm.Client(key))
+    deps = cls(s3=boto3.client("s3"), ddb=boto3.client("dynamodb"), env=env, lastfm_client=lastfm.Client(key))
+    # The card Lambda (AOTY-91), called synchronously: its 20 s timeout plus a cold start, never
+    # retried by the SDK (a retry would only repeat a slow render; the build falls back instead).
+    deps.lambda_ = boto3.client("lambda", config=Config(read_timeout=40, retries={"max_attempts": 1}))
+    return deps
 
 
 _deps = None
@@ -254,9 +262,11 @@ def restyle(deps, username):
   row = _get_user(deps, username)
   if not row.get("chart_built_at"):
     return False
-  key = chart_key(deps.env.get("SITE_PREFIX", ""), username)
-  if not _restyle_published(deps, key, row.get("theme")):
+  prefix = deps.env.get("SITE_PREFIX", "")
+  chart = _restyle_published(deps, chart_key(prefix, username), row.get("theme"))
+  if chart is None:
     return False
+  _put_preview(deps, og_key(prefix, username), og.user_page, chart)  # the card is in the theme (AOTY-91)
   log.info("chart %s restyled", _tag(username))
   return True
 
@@ -273,17 +283,19 @@ def restyle_group(deps, group_id):
   meta, _ = _load_group(deps, group_id)
   if meta is None:
     return False
-  key = group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id)
-  if not _restyle_published(deps, key, meta.get("theme")):
+  prefix = deps.env.get("SITE_PREFIX", "")
+  chart = _restyle_published(deps, group_chart_key(prefix, group_id), meta.get("theme"))
+  if chart is None:
     return False
+  _put_preview(deps, group_og_key(prefix, group_id), og.group_page, chart)  # the card is in the theme
   log.info("group %s restyled", group_id)
   return True
 
 
 def _restyle_published(deps, key, theme):
-  """Set (or clear) the theme of the chart.json published at key. False when there's no chart, or it
-  already has that theme. The role has no s3:ListBucket on the site bucket, so a missing chart can
-  answer 403 rather than 404: either way there's nothing to restyle."""
+  """Set (or clear) the theme of the chart.json published at key: the restyled chart, or None when
+  there's no chart, or it already has that theme. The role has no s3:ListBucket on the site bucket,
+  so a missing chart can answer 403 rather than 404: either way there's nothing to restyle."""
   try:
     body = _get_object(deps, deps.env["SITE_BUCKET"], key)
   except Exception as e:
@@ -291,13 +303,13 @@ def _restyle_published(deps, key, theme):
       raise
     body = None
   if body is None:
-    return False
+    return None
   chart = json.loads(body)
   before = chart.get("theme")
   if core.with_theme(chart, theme).get("theme") == before:
-    return False
+    return None
   _put_json(deps, deps.env["SITE_BUCKET"], key, chart, CacheControl="no-cache")
-  return True
+  return chart
 
 
 def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finished_at=0):
@@ -375,24 +387,68 @@ def delete_group_chart(deps, group_id):
     return build_group(deps, group_id)
   prefix = deps.env.get("SITE_PREFIX", "")
   deps.s3.delete_object(Bucket=deps.env["SITE_BUCKET"], Key=group_chart_key(prefix, group_id))
-  deps.s3.delete_object(Bucket=deps.env["SITE_BUCKET"], Key=group_og_key(prefix, group_id))
+  og_html = group_og_key(prefix, group_id)
+  deps.s3.delete_object(Bucket=deps.env["SITE_BUCKET"], Key=og_html)
+  deps.s3.delete_object(Bucket=deps.env["SITE_BUCKET"], Key=og_html[: -len("og.html")] + "og.png")  # AOTY-91
   log.info("group %s: chart deleted", group_id)
   return True
 
 
 def _put_preview(deps, key, page, chart, totals=None):
-  """The chart's link preview page (AOTY-85, og.py), beside its chart.json. Best effort: a failed
-  write is logged and counted, never the build's failure, since the chart itself is published."""
+  """The chart's link preview page (AOTY-85, og.py), beside its chart.json, with the rendered card
+  (AOTY-91) when the card Lambda draws one. Best effort: a failed write is logged and counted, never
+  the build's failure, since the chart itself is published."""
+  card = _card(deps, chart, key[: -len("og.html")] + "og.png", totals)
   try:
-    body = page(chart, deps.env.get("PUBLIC_ORIGIN", "https://kamp.fm"), deps.env.get("BASE_PATH", "/"))
+    body = page(chart, deps.env.get("PUBLIC_ORIGIN", "https://kamp.fm"), deps.env.get("BASE_PATH", "/"), card)
     deps.s3.put_object(
       Bucket=deps.env["SITE_BUCKET"], Key=key, Body=body.encode(),
       ContentType="text/html; charset=utf-8", CacheControl="max-age=300",
     )  # fmt: skip
   except Exception:
     log.exception("could not write the link preview page")
-    if totals is not None:
-      totals["og_failed"] = totals.get("og_failed", 0) + 1
+    _bump(totals, "og_failed")
+
+
+def _bump(totals, name):
+  if totals is not None:
+    totals[name] = totals.get(name, 0) + 1
+
+
+def _card(deps, chart, key, totals=None):
+  """The link preview card's public URL (AOTY-91), or None for og.html's bare cover.
+
+  The card Lambda (lambdas/card) draws Everyone's #1 square from the chart and writes og.png at
+  key. It's called synchronously, and this Lambda runs one build at a time, so og.html and og.png
+  are always written in order and can't race. No card when the Lambda isn't configured (tests, the
+  placeholder code before its first deploy), when nothing ranks yet or the text needs glyphs its
+  fonts lack (by design), or when it fails or times out (counted in card_failed, never the build's
+  failure). The ?v= is the build, for platforms that cache by image URL.
+  """
+  fn, client = deps.env.get("CARD_FUNCTION"), getattr(deps, "lambda_", None)
+  if not fn or client is None:
+    return None
+  payload = json.dumps({"chart": chart, "key": key}, ensure_ascii=False, separators=(",", ":")).encode()
+  if len(payload) > CARD_PAYLOAD_MAX:
+    log.warning("chart too big for the card Lambda's payload; no card")
+    _bump(totals, "card_failed")
+    return None
+  try:
+    out = client.invoke(FunctionName=fn, InvocationType="RequestResponse", Payload=payload)
+    answer = json.loads(out["Payload"].read() or b"null")
+    if out.get("FunctionError") or not isinstance(answer, dict):
+      raise RuntimeError(f"card Lambda error: {out.get('FunctionError') or 'no answer'}")
+  except Exception:
+    log.exception("could not draw the preview card")
+    _bump(totals, "card_failed")
+    return None
+  if not answer.get("ok"):
+    if answer.get("reason") not in ("empty", "glyphs"):  # those two are by design
+      log.warning("no preview card: %s", answer.get("reason"))
+      _bump(totals, "card_failed")
+    return None
+  version = quote(str(chart.get("generated_at") or ""), safe="")
+  return f"{deps.env.get('PUBLIC_ORIGIN', 'https://kamp.fm')}/{key}?v={version}"
 
 
 def _groups_with(deps, *usernames):
@@ -625,6 +681,7 @@ def _emit(deps, totals, elapsed, lastfm_calls=0):
     **{n: v for n, (v, _) in values.items()},
     "pending_checked": totals["checked"],
     "og_failed": totals.get("og_failed", 0),  # preview pages not written (AOTY-85); not a metric
+    "card_failed": totals.get("card_failed", 0),  # preview cards not drawn, by failure (AOTY-91)
   }
   print(json.dumps(line, separators=(",", ":")))
 
