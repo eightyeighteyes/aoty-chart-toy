@@ -57,8 +57,10 @@
   <p class="account-msg" id="account-msg" role="status" aria-live="polite"></p>
 </div>
 
-<!-- The front door (AOTY-23): shown only on the bare base path; app.js reveals it. -->
-<section class="intro" id="intro" hidden>
+<!-- The front door (AOTY-23): shown only on the bare base path; app.js reveals it. Its own main
+     landmark (AOTY-45): the poster's main is hidden here, and HTML allows several mains while all
+     but one are hidden. showIntro hides the poster, and nothing shows it again after routing. -->
+<main class="intro" id="intro" hidden>
   <div class="eyebrow intro-eyebrow">{{NAME}}</div>
   <h1 class="intro-title">your {{YEAR}}, <span class="year">pressed to wax</span></h1>
   <p class="intro-sub">type your last.fm username. we'll find the albums released this year that you actually lived with, and press them into a chart you can share.</p>
@@ -74,7 +76,7 @@
   </form>
   <p class="intro-groups" id="intro-groups" hidden>listening with friends? <button type="button" class="link-button" id="intro-start">start a group</button> and see the albums you all played.</p>
   <p class="privacy">we read your public last.fm plays. no login needed, nothing sold.</p>
-</section>
+</main>
 
 <main class="poster" id="poster" data-view="poster" data-rank="listener" data-content="top1" data-shape="square">
   <header>

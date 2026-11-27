@@ -251,6 +251,40 @@ def test_one_footer_on_every_page_with_the_credits(tmp_path):
   assert {"https://www.last.fm/", "https://musicbrainz.org/", "https://coverartarchive.org/"} <= in_footer
 
 
+class _Mains(HTMLParser):
+  """Each <main>'s attributes, and the id of the main each <h1> sits in."""
+
+  def __init__(self):
+    super().__init__()
+    self.mains, self.h1_in, self.open = [], [], None
+
+  def handle_starttag(self, tag, attrs):
+    if tag == "main":
+      self.mains.append(dict(attrs))
+      self.open = dict(attrs).get("id")
+    elif tag == "h1":
+      self.h1_in.append(self.open)
+
+  def handle_endtag(self, tag):
+    if tag == "main":
+      self.open = None
+
+
+def test_every_page_has_exactly_one_visible_main(tmp_path):
+  # AOTY-45: the intro is its own main, hidden until showIntro hides the poster's. Several mains
+  # are fine while all but one are hidden.
+  bs.build(BASE, out=tmp_path / "web")
+  p = _Mains()
+  p.feed((tmp_path / "web" / "index.html").read_text())
+  assert [m.get("id") for m in p.mains] == ["intro", "poster"]
+  assert [m.get("id") for m in p.mains if "hidden" in m] == ["intro"]  # a chart page shows the poster
+  assert "intro" in p.h1_in
+  # So the two are never shown together: only showIntro changes either, hiding the poster.
+  js = (bs.SRC / "app.js").read_text()
+  assert "poster.hidden = false" not in js and '$("intro").hidden = true' not in js
+  assert re.search(r"poster\.hidden = true;\s*\$\(\"intro\"\)\.hidden = false;", js)
+
+
 def test_new_bands_for_old_heads_is_in_the_top_bar_apart_from_kamp(tmp_path):
   # A primary endorsement in the header (user, 2026-11-23), never inside kamp's own nav.
   p = _shell_links(tmp_path)
