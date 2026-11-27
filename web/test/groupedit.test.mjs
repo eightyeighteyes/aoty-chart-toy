@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const ge = require("../src/groupedit.js");
-const {checkName, answer, isOwner, shareUrl, rebuild, removeText, MESSAGES: MSG} = ge;
+const {checkName, answer, isOwner, rebuild, removeText, MESSAGES: MSG} = ge;
 const intro = require("../src/intro.js");
 
 test("group names collapse whitespace and keep their casing", () => {
@@ -83,10 +83,6 @@ test("only the owner edits, member or not", () => {
   assert.equal(isOwner(null, {owner: "alice"}), false);
   assert.equal(isOwner("alice", null), false);
   assert.equal(isOwner("alice", {}), false);
-});
-
-test("the share link has no query", () => {
-  assert.equal(shareUrl("https://kamp.fm", "/toys/aoty/", "the-crew"), "https://kamp.fm/toys/aoty/group/the-crew");
 });
 
 test("a rebuild is watched until the chart is newer and everyone's in", () => {

@@ -56,6 +56,9 @@ test("events keep only listed params and values", () => {
   assert.deepEqual(clean("group_loaded", {group_size: "25"}), {});
   assert.deepEqual(clean("group_loaded", {group_size: -1}), {});
   assert.deepEqual(clean("share_copy", {url: "https://kamp.fm/toys/aoty/user/alice"}), {});
+  // AOTY-84: a native share says nothing about which page either.
+  assert.deepEqual(EVENTS.share_native, {});
+  assert.deepEqual(clean("share_native", {url: "https://aoty.kamp.fm/alice", title: "alice's albums"}), {});
   // AOTY-43: an album link's click says nothing about which album, or whose page.
   assert.deepEqual(EVENTS.album_click, {});
   assert.deepEqual(clean("album_click", {album: "1989", artist: "Taylor Swift", user: "alice"}), {});
@@ -181,7 +184,8 @@ test("a username anywhere on the page never reaches a hit", () => {
   for (const event of Object.keys(EVENTS)) {
     p.stats.event(event, {outcome: name, result: name, control: name, value: name, group_size: name,
                           theme: name, name, username: name, url: `${ORIGIN}${BASE}user/${name}`,
-                          album: name, artist: name, link_url: `https://www.last.fm/user/${name}`});
+                          album: name, artist: name, link_url: `https://www.last.fm/user/${name}`,
+                          title: `${name}'s albums`, short: `https://aoty.kamp.fm/${name}`});
   }
   p.stats.event("not_listed", {name});
   p.stats.markSignIn();

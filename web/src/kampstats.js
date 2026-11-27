@@ -35,6 +35,8 @@
     control_change: {control: ["view", "rank", "filter"],
                      value: ["poster", "list", "listener", "album", "weighted", "member", "everyone"]},
     share_copy: {},
+    // The system share sheet shared a page's link (AOTY-84): which page is never sent.
+    share_native: {},
     // An owner saved their page's theme (AOTY-65): the theme id only, never whose page.
     theme_set: {theme: ["poster", "kamp", "strawberry-switchblade", "beach-house", "blackpink", "deep-purple",
                         "green-day", "foxy-brown", "golden-smog", "white-stripes", "tangerine-dream",

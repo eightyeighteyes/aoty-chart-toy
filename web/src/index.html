@@ -103,9 +103,12 @@
       <span class="tool-msg" id="theme-msg" role="status" aria-live="polite"></span>
     </div>
     <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
-    <!-- Group pages (AOTY-52): share for everyone, edit for the owner only. -->
-    <div class="group-tools" id="group-tools" hidden>
+    <!-- User and group pages (AOTY-84, AOTY-52): share for everyone; a member's view of a group
+         also offers the member's own page; edit for the group's owner only. The labels change to
+         "share" where the system share sheet is used (touch only). -->
+    <div class="page-tools" id="page-tools" hidden>
       <button type="button" class="pill" id="share">copy link</button>
+      <button type="button" class="pill" id="share-member" hidden></button>
       <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
       <span class="share-url" id="share-url" hidden></span>
       <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>
