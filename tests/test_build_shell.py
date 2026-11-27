@@ -144,6 +144,7 @@ def test_share_links_are_short_only_on_prod(tmp_path):
   html = (tmp_path / "a" / "index.html").read_text()
   assert '<meta name="aoty-short" content="">' in html
   assert html.index(published["share.js"]) < html.index(published["app.js"])
+  assert html.index(published["sharecard.js"]) < html.index(published["app.js"])  # AOTY-70
   bs.build(bs.SHORT_BASE, out=tmp_path / "b", short_host="aoty.kamp.fm")
   assert '<meta name="aoty-short" content="aoty.kamp.fm">' in (tmp_path / "b" / "index.html").read_text()
 

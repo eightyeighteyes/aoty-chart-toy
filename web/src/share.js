@@ -27,7 +27,8 @@
   // that have navigator.share still copy, which is what people expect there.
   function useNative(nav, coarse, data) {
     if (!coarse || !nav || typeof nav.share !== "function") return false;
-    if (typeof nav.canShare !== "function") return true;
+    // A link shares anywhere share() exists; files only where canShare can confirm them (AOTY-70).
+    if (typeof nav.canShare !== "function") return !(data && data.files);
     try { return !!nav.canShare(data); } catch (_) { return false; }
   }
 
@@ -46,7 +47,19 @@
       : {main: "copy group link", member: `copy ${member}'s link`};
   }
 
-  const api = {shareUrl, useNative, shareTitle, shareLabels};
+  // The share image (AOTY-70): user pages only (a group, and a member's view of one, has no card
+  // yet), once the chart ranks something. Every visitor, signed in or not.
+  function imageVisible(target, chart) {
+    if (!target || target.kind !== "user" || !chart || !chart.rankings) return false;
+    const top = chart.rankings.album;
+    return Array.isArray(top) && top.length > 0;
+  }
+  // Its label says what a tap does: the share sheet (touch, where files can be shared), or a download.
+  function imageLabel(native) {
+    return native ? "share image" : "save image";
+  }
+
+  const api = {shareUrl, useNative, shareTitle, shareLabels, imageVisible, imageLabel};
   root.aotyShare = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

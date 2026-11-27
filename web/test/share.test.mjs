@@ -4,7 +4,7 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {shareUrl, useNative, shareTitle, shareLabels} = require("../src/share.js");
+const {shareUrl, useNative, shareTitle, shareLabels, imageVisible, imageLabel} = require("../src/share.js");
 
 const PROD = {origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm"};
 const STAGING = {origin: "https://kamp.fm", base: "/toys/aoty-staging/", short: ""};
@@ -59,4 +59,31 @@ test("labels: one button, or the group and the member in a member's view", () =>
   assert.deepEqual(shareLabels(true, null), {main: "share", member: null});
   assert.deepEqual(shareLabels(false, "bob"), {main: "copy group link", member: "copy bob's link"});
   assert.deepEqual(shareLabels(true, "bob"), {main: "share group", member: "share bob"});
+});
+
+test("files go through the share sheet only where canShare confirms them (AOTY-70)", () => {
+  const files = {files: [{name: "aoty-2026-alice.png", type: "image/png"}]};
+  const share = () => Promise.resolve();
+  assert.equal(useNative({share, canShare: d => !!d.files}, true, files), true);
+  // Firefox Android: a coarse pointer and share(), but no file sharing.
+  assert.equal(useNative({share, canShare: d => !d.files}, true, files), false);
+  assert.equal(useNative({share}, true, files), false);  // no canShare: can't tell, so download
+  assert.equal(useNative({share, canShare: () => true}, false, files), false);  // desktop downloads
+});
+
+test("the share image shows on user pages whose chart ranks something", () => {
+  const user = {kind: "user", id: "Alice", name: "Alice"};
+  const ranked = {rankings: {album: [["k", 9.5]]}};
+  assert.equal(imageVisible(user, ranked), true);
+  assert.equal(imageVisible(user, {rankings: {album: []}}), false);  // a first visit's chart
+  assert.equal(imageVisible(user, {}), false);
+  assert.equal(imageVisible(user, null), false);
+  // A group, and a member's view of one (its share target is the group): no card yet.
+  assert.equal(imageVisible({kind: "group", id: "full-house", name: "Full House"}, ranked), false);
+  assert.equal(imageVisible(null, ranked), false);
+});
+
+test("the share image's label says what a tap does", () => {
+  assert.equal(imageLabel(true), "share image");
+  assert.equal(imageLabel(false), "save image");
 });
