@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const {FORMATS, layout, palette, PALETTE, graphemes, fitText, caption, printedUrl, fileName, compose,
-       fontLoads} = require("../src/sharecard.js");
+       fontLoads, formatOf} = require("../src/sharecard.js");
 const {THEMES, complete, contrast, mix, TEXT_MIN} = require("../src/theme.js");
 
 // A stand-in for canvas measureText: every character is 0.6em wide, read off the font string.
@@ -72,14 +72,27 @@ test("CJK with no spaces wraps, and emoji and accents are never split", () => {
   }
 });
 
-test("the boxes sit inside the canvas, in order, without overlapping", () => {
-  const L = layout("top1_square");
-  assert.deepEqual([L.width, L.height], [FORMATS.top1_square.width, FORMATS.top1_square.height]);
-  const stack = [L.brand, L.caption, L.cover, L.title, L.url];
-  for (const b of stack) {
-    assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= L.width && b.y + b.h <= L.height);
+test("the boxes sit inside each format's safe band, in order, without overlapping", () => {
+  for (const [format, f] of Object.entries(FORMATS)) {
+    const L = layout(format);
+    assert.deepEqual([L.width, L.height], [f.width, f.height]);
+    const stack = [L.brand, L.caption, L.cover, L.title, L.url];
+    for (const b of stack) {
+      assert.ok(b.x >= 0 && b.y >= f.safe.top && b.x + b.w <= L.width && b.y + b.h <= L.height - f.safe.bottom,
+                format);
+    }
+    for (let i = 1; i < stack.length; i++) assert.ok(stack[i].y >= stack[i - 1].y + stack[i - 1].h, `${format} ${i}`);
   }
-  for (let i = 1; i < stack.length; i++) assert.ok(stack[i].y >= stack[i - 1].y + stack[i - 1].h, `box ${i}`);
+});
+
+test("the story is 9:16 and keeps clear of Instagram's and TikTok's UI", () => {
+  assert.deepEqual([FORMATS.top1_story.width, FORMATS.top1_story.height], [1080, 1920]);
+  assert.deepEqual(FORMATS.top1_story.safe, {top: 250, bottom: 340});
+});
+
+test("unknown formats are the square", () => {
+  assert.equal(formatOf("top1_story"), "top1_story");
+  for (const x of [undefined, null, "", "nope", "__proto__", "toString"]) assert.equal(formatOf(x), "top1_square", x);
 });
 
 const TEXTS = {title: "1989", artist: "Taylor Swift", name: "alice", year: 2026, url: "https://aoty.kamp.fm/alice"};
@@ -92,8 +105,8 @@ test("every preset's text colours read at 4.5:1 on the card's background", () =>
       assert.ok(contrast(fg, t.bg) >= TEXT_MIN, `${id}: ${what} (${PALETTE[what]}) on bg`);
     }
     // And as drawn: every text op over bg or, on the tile, over its gradient's start and middle.
-    for (const cover of [true, false]) {
-      for (const o of textOps(compose({texts: TEXTS, tokens: t, cover, measure}))) {
+    for (const [format, cover] of [["top1_square", true], ["top1_square", false], ["top1_story", false]]) {
+      for (const o of textOps(compose({format, texts: TEXTS, tokens: t, cover, measure}))) {
         const under = o.on === "tile" ? [t.tile, mix(t.tile, t.tileEnd, 0.5)] : [t.bg];
         for (const bg of under) assert.ok(contrast(o.color, bg) >= TEXT_MIN, `${id}: "${o.text}" on ${o.on}`);
       }
@@ -115,6 +128,48 @@ test("the card: background, mark, brand, caption, cover, title, artist and link,
   }
 });
 
+// Every op but the background, as a box: text from an ascender of one em above its baseline to a
+// descender of 0.3 em below (generous for Bricolage, Inter and Arial), the rest as drawn.
+function extent(o) {
+  if (o.op === "text") {
+    const s = sizeOf(o.font), w = measure(o.text, o.font);
+    const left = o.align === "center" ? o.x - w / 2 : o.align === "right" ? o.x - w : o.x;
+    return {top: o.y - s, bottom: o.y + 0.3 * s, left, right: left + w};
+  }
+  const size = o.op === "mark" ? o.size : null;
+  return {top: o.y, bottom: o.y + (size ?? o.h), left: o.x, right: o.x + (size ?? o.w)};
+}
+
+test("nothing but the background is drawn in a format's covered strips, whatever the texts", () => {
+  const long = {title: "Everything Everywhere All at Once and Then Some More And More Again", artist: "A".repeat(90),
+                name: "x".repeat(60), year: 2026, url: "https://kamp.fm/toys/aoty-staging/user/" + "x".repeat(40)};
+  const group = {...long, kind: "group", played: "25 of 25 members"};
+  for (const [format, f] of Object.entries(FORMATS)) {
+    for (const id of ["poster", "gabbie", "white-stripes"]) {
+      for (const texts of [TEXTS, long, group, {...TEXTS, artist: "Godspeed You! Black Emperor"}]) {
+        for (const cover of [true, false]) {
+          const ops = compose({format, texts, tokens: complete(THEMES[id]), cover, measure});
+          assert.equal(ops[0].op, "fill");
+          assert.deepEqual([ops[0].w, ops[0].h], [f.width, f.height]);
+          for (const o of ops.slice(1)) {
+            const e = extent(o), what = `${format} ${id} ${o.op} "${o.text || ""}"`;
+            assert.ok(e.top >= f.safe.top && e.bottom <= f.height - f.safe.bottom, what);
+            assert.ok(e.left >= 0 && e.right <= f.width + 0.01, what);
+          }
+        }
+      }
+    }
+  }
+});
+
+test("the story's link sits well clear of the bottom strip, for real fonts' sake", () => {
+  const f = FORMATS.top1_story;
+  const url = textOps(compose({format: "top1_story", texts: TEXTS, tokens: complete(THEMES.poster), cover: true,
+                               measure})).at(-1);
+  assert.equal(url.text, "aoty.kamp.fm/alice");
+  assert.ok(url.y + 0.3 * sizeOf(url.font) <= f.height - f.safe.bottom - 40);
+});
+
 test("with no usable cover, the artist-name tile in the theme's tile colours", () => {
   const t = complete(THEMES["white-stripes"]);
   const ops = compose({texts: {...TEXTS, artist: "Godspeed You! Black Emperor"}, tokens: t, cover: false, measure});
@@ -130,13 +185,15 @@ test("with no usable cover, the artist-name tile in the theme's tile colours", (
 test("the title wraps to two lines and the artist follows it without overlapping the link", () => {
   const t = complete(THEMES.poster);
   const long = {...TEXTS, title: "Everything Everywhere All at Once and Then Some More", artist: "A".repeat(80)};
-  const ops = textOps(compose({texts: long, tokens: t, cover: true, measure}));
-  const [, , t1, t2, artist, url] = ops;
-  assert.ok(t2.y > t1.y);
-  assert.ok(artist.y > t2.y);
-  assert.ok(artist.y + 10 < url.y - sizeOf(url.font));
-  assert.ok(artist.text.endsWith("…"));
-  for (const o of ops) assert.ok(measure(o.text, o.font) <= 952 + 0.01, o.text);
+  for (const format of Object.keys(FORMATS)) {
+    const ops = textOps(compose({format, texts: long, tokens: t, cover: true, measure}));
+    const [, , t1, t2, artist, url] = ops;
+    assert.ok(t2.y > t1.y, format);
+    assert.ok(artist.y > t2.y, format);
+    assert.ok(artist.y + 10 < url.y - sizeOf(url.font), format);
+    assert.ok(artist.text.endsWith("…"), format);
+    for (const o of ops) assert.ok(measure(o.text, o.font) <= 952 + 0.01, o.text);
+  }
 });
 
 test("a long link (off prod) is fitted too", () => {
@@ -223,4 +280,8 @@ test("file names are safe everywhere", () => {
   assert.equal(fileName("東京", 2026), "aoty-2026.png");
   assert.equal(fileName("", 2026), "aoty-2026.png");
   assert.ok(fileName("x".repeat(200), 2026).length <= 80);
+  assert.equal(fileName("Alice", 2026, "top1_square"), "aoty-2026-Alice.png");
+  assert.equal(fileName("Alice", 2026, "top1_story"), "aoty-2026-Alice-story.png");
+  assert.equal(fileName("東京", 2026, "top1_story"), "aoty-2026-story.png");
+  assert.equal(fileName("Alice", 2026, "nope"), "aoty-2026-Alice.png");
 });

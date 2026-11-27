@@ -5,14 +5,19 @@
 // Every text sits on the plain page colour (bg), never over the cover, so the contrast rules the
 // theme tests already hold (ink, muted, both accents and kamp's periwinkle on bg) hold here too.
 // The artist-name tile that stands in for a missing cover uses the page's tile tokens, as .noart.
-// Group pages (AOTY-71) use the same top1_square card with a group caption and a member count.
-// AOTY-72 to AOTY-74 add formats beside it.
+// Group pages (AOTY-71) use the same card with a group caption and a member count. top1_story
+// (AOTY-72) is the vertical 9:16 for Stories, Reels and TikTok; AOTY-73 and AOTY-74 add top 3 and
+// top 10 beside them.
 (function (root) {
   "use strict";
 
+  // safe: the strips the target app covers with its own UI, kept free of text and the mark. Stories,
+  // Reels and TikTok cover about the top 250 px and the bottom 340 px of a 1080x1920 (AOTY-72).
   const FORMATS = {
-    top1_square: {width: 1080, height: 1080},
+    top1_square: {width: 1080, height: 1080, safe: {top: 0, bottom: 0}},
+    top1_story: {width: 1080, height: 1920, safe: {top: 250, bottom: 340}, suffix: "story"},
   };
+  const DEFAULT_FORMAT = "top1_square";
 
   const DISPLAY = '"Bricolage Grotesque", sans-serif';
   const ARIAL = "Arial, Helvetica, sans-serif";  // gabbie's headings (AOTY-75)
@@ -32,19 +37,27 @@
   ];
 
   // The boxes, in canvas pixels. Text boxes are centred on the canvas; `sizes` run largest first.
-  function layout(format = "top1_square") {
-    const {width, height} = FORMATS[format];
+  // The story keeps the square's stack, moved inside its safe band and with a bigger cover; the
+  // band ends at 1580 and the link at about 1536, slack for real fonts' descenders.
+  const TOPS = {
+    top1_square: {brand: 64, caption: 128, cover: 196, coverSize: 520, title: 752, url: 976},
+    top1_story: {brand: 290, caption: 360, cover: 440, coverSize: 760, title: 1236, url: 1496},
+  };
+  function layout(format = DEFAULT_FORMAT) {
+    const {width, height, safe} = FORMATS[format], y = TOPS[format];
     const pad = 64, inner = width - 2 * pad;
     return {
-      width, height, pad,
-      brand: {x: pad, y: pad, w: inner, h: 40, mark: 40},
-      caption: {x: pad, y: 128, w: inner, h: 44, lines: 1, sizes: [34, 30, 26, 22]},
-      cover: {x: (width - 520) / 2, y: 196, w: 520, h: 520},
-      title: {x: pad, y: 752, w: inner, h: 148, lines: 2, sizes: [64, 58, 52, 46, 40], leading: 1.15},
+      width, height, pad, safe,
+      brand: {x: pad, y: y.brand, w: inner, h: 40, mark: 40},
+      caption: {x: pad, y: y.caption, w: inner, h: 44, lines: 1, sizes: [34, 30, 26, 22]},
+      cover: {x: (width - y.coverSize) / 2, y: y.cover, w: y.coverSize, h: y.coverSize},
+      title: {x: pad, y: y.title, w: inner, h: 148, lines: 2, sizes: [64, 58, 52, 46, 40], leading: 1.15},
       artist: {x: pad, gap: 12, w: inner, h: 48, lines: 1, sizes: [40, 36, 32, 28, 26]},
-      url: {x: pad, y: 976, w: inner, h: 40, lines: 1, sizes: [30, 26, 22, 20]},
+      url: {x: pad, y: y.url, w: inner, h: 40, lines: 1, sizes: [30, 26, 22, 20]},
     };
   }
+  // A format id from anywhere (a saved choice, the page): a known one, else the square.
+  const formatOf = id => (Object.prototype.hasOwnProperty.call(FORMATS, id) ? id : DEFAULT_FORMAT);
 
   // The fonts a theme draws with: gabbie's headings are Arial, everything else Bricolage.
   function fonts(tokens) {
@@ -126,11 +139,13 @@
   function printedUrl(url) {
     return String(url || "").replace(/^https?:\/\//, "");
   }
-  // aoty-2026-alice.png: letters, digits, - and _ only (USERNAME_RE allows a ".").
-  function fileName(name, year) {
+  // aoty-2026-alice.png: letters, digits, - and _ only (USERNAME_RE allows a "."). A story is
+  // aoty-2026-alice-story.png, so both can sit side by side in a downloads folder.
+  function fileName(name, year, format = DEFAULT_FORMAT) {
     const safe = String(name ?? "").normalize("NFKD").replace(/\p{M}/gu, "").replace(/[^A-Za-z0-9_-]+/g, "-")
         .replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 64);
-    return `aoty-${year}${safe ? `-${safe}` : ""}.png`;
+    const suffix = FORMATS[formatOf(format)].suffix;
+    return `aoty-${year}${safe ? `-${safe}` : ""}${suffix ? `-${suffix}` : ""}.png`;
   }
 
   // The caption as drawn. A group name that's too long is cut, never the year after it: at the
@@ -158,8 +173,8 @@
   //   {op: "text", text, font, color, x, y, align: "left" | "center", on: "bg" | "tile"}   (y: baseline)
   //   {op: "cover", x, y, w, h, shadow}
   //   {op: "tile", x, y, w, h, from, to}   (a 135-degree gradient, as .noart)
-  function compose({format = "top1_square", texts, tokens, cover, measure}) {
-    const L = layout(format), F = fonts(tokens), C = palette(tokens), ops = [];
+  function compose({format = DEFAULT_FORMAT, texts, tokens, cover, measure}) {
+    const L = layout(formatOf(format)), F = fonts(tokens), C = palette(tokens), ops = [];
     const centre = L.width / 2;
     ops.push({op: "fill", color: tokens.bg, x: 0, y: 0, w: L.width, h: L.height});
 
@@ -220,7 +235,7 @@
             [F.body(30, 600), caption(texts.name, texts.year, texts.kind)], [F.brand(28), "a kamp toy"]];
   }
 
-  const api = {FORMATS, MARK, layout, fonts, palette, PALETTE, graphemes, wrap, fitText, caption, printedUrl,
+  const api = {FORMATS, DEFAULT_FORMAT, formatOf, MARK, layout, fonts, palette, PALETTE, graphemes, wrap, fitText, caption, printedUrl,
                fileName, compose, fontLoads};
   root.aotyShareCard = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
