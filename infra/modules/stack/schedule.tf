@@ -1,6 +1,12 @@
-# Hourly backstop for the mb lane (AOTY-19): if a sync's async poke was lost, this starts the
-# drain anyway. With both queues empty a run exits without contacting MusicBrainz, so it costs
-# one short invocation an hour.
+# Starts the mb lane every 5 minutes (AOTY-19, AOTY-58). It's how a run that ran out of time
+# with work left gets its successor: the lane never invokes itself, because each self-invoke was
+# another hop in one request chain and Lambda's recursive loop detection stopped the chain after
+# about 16 (a big backlog). A Scheduler start is outside any chain. It also covers a lost sync
+# poke. A start during a run is throttled (reserved concurrency 1) and retried by Lambda, so runs
+# follow each other within about 5 minutes. An empty run makes no MusicBrainz request: two short
+# long polls and the depth reads, about 288 a day.
+#
+# The resource keeps its "backstop" name, so the change didn't recreate it.
 #
 # EventBridge Scheduler rather than an EventBridge rule: a rule needs a lambda:AddPermission
 # for events.amazonaws.com, which the sandbox deploy role is denied (AOTY-33). Scheduler invokes
@@ -44,7 +50,7 @@ resource "aws_iam_role_policy" "mb_schedule" {
 resource "aws_scheduler_schedule" "mb" {
   name                = "${local.prefix}-mb-backstop"
   group_name          = "default"
-  schedule_expression = "rate(1 hour)"
+  schedule_expression = "rate(5 minutes)"
   state               = "ENABLED"
 
   flexible_time_window {
@@ -56,7 +62,7 @@ resource "aws_scheduler_schedule" "mb" {
     role_arn = aws_iam_role.mb_schedule.arn
     input    = "{}"
 
-    # A missed hour is covered by the next one.
+    # A missed tick is covered by the next one.
     retry_policy {
       maximum_retry_attempts = 0
     }

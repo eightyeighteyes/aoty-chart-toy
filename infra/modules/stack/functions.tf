@@ -142,8 +142,9 @@ locals {
         resources = ["${aws_s3_bucket.store.arn}/index/*"]
       },
       {
-        # Out of time with work left, it starts its own next run (it queues behind this one).
-        # It also pokes the chart builder as albums land (AOTY-21).
+        # It pokes the chart builder as albums land (AOTY-21). Its own ARN is left over from the
+        # self-invoke that AOTY-58 removed: Terraform applies before the code deploys, so the old
+        # code still needed it. It goes once that release is in prod.
         actions = ["lambda:InvokeFunction"]
         resources = [
           "arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-mb",
@@ -319,7 +320,8 @@ resource "aws_lambda_function" "fn" {
   depends_on = [aws_cloudwatch_log_group.fn, aws_iam_role_policy.fn]
 }
 
-# mb is started by async invokes (sync's poke, the hourly schedule, itself). While a run is
+# mb is started by async invokes (sync's poke, the 5-minute schedule; never itself, AOTY-58).
+# Throttled starts queue here, so a backlog's runs follow each other. While a run is
 # going, every other start is throttled, and Lambda retries throttled events by itself until
 # maximum_event_age, whatever maximum_retry_attempts says. Each retry finds the queues empty or
 # drains them, so that's harmless; an hour bounds the pile-up, and the schedule covers any
