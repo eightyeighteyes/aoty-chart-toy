@@ -40,6 +40,12 @@
     return pairs.map(([i, s], k) => ({...chart.albums[i], score: s, rank: k + 1}));
   }
 
+  // The #1 on screen for one mode and member (the share image's album, AOTY-71), or null when that
+  // ranking is empty: Weighted's listener floor, a member with no plays from the year.
+  function top(chart, mode, who = -1) {
+    return rows(chart, mode, who)[0] || null;
+  }
+
   // "3 of 8 still loading" while members' first syncs run; "" once everyone is in.
   function loadingLine(chart) {
     const total = chart.members.length + (chart.waiting || 0);
@@ -77,7 +83,7 @@
         && Array.isArray(chart.members) && Array.isArray(chart.albums) && !!chart.rankings;
   }
 
-  const api = {MODES, ID_RE, memberIndex, rows, loadingLine, checkingLine, valid, syncWatch,
+  const api = {MODES, ID_RE, memberIndex, rows, top, loadingLine, checkingLine, valid, syncWatch,
                SYNC_GRACE_MS, SYNC_WATCH_MAX_MS};
   root.aotyGroup = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

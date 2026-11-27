@@ -52,6 +52,20 @@ test("ties go to the group's listeners", () => {
   assert.deepEqual(names(rows(tie, "listener", 0)), ["Many", "Few"]);
 });
 
+test("the share image's #1 is the one on screen, or null for an empty ranking", () => {
+  const {top} = require("../src/group.js");
+  assert.equal(top(chart, "listener").album, "Shared");
+  assert.equal(top(chart, "album").album, "Loop");
+  assert.equal(top(chart, "weighted").album, "Shared");
+  assert.equal(top(chart, "listener", memberIndex(chart, "bob")).album, "Loop");
+  const old = {...chart, rankings: {album: [[1, 20], [0, 0.8]]}};
+  assert.equal(top(old, "listener").album, "Loop");  // no listener ranking yet: By Play
+  assert.equal(top({...chart, rankings: {...chart.rankings, weighted: []}}, "weighted"), null);
+  assert.equal(top(old, "weighted"), null);
+  const silent = {...chart, members: [...chart.members, "dave"]};
+  assert.equal(top(silent, "listener", 3), null);  // a member with no plays from the year
+});
+
 test("unknown names are everyone", () => {
   assert.equal(memberIndex(chart, "nobody"), -1);
   assert.equal(memberIndex(chart, ""), -1);
