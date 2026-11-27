@@ -21,6 +21,8 @@
     top1_story: {...STORY, count: 1, suffix: "story"},
     top3_square: {...SQUARE, count: 3, suffix: "top3"},
     top3_story: {...STORY, count: 3, suffix: "top3-story"},
+    top10_square: {...SQUARE, count: 10, suffix: "top10"},
+    top10_story: {...STORY, count: 10, suffix: "top10-story"},
   };
   const DEFAULT_FORMAT = "top1_square";
 
@@ -69,7 +71,25 @@
     title: {x, y, w, h: lines * 36, lines, sizes: [30, 27, 24, 21, 19], leading: 1.15, align: "left"},
     artist: {x, gap: 6, w, h: 30, lines: 1, sizes: [24, 22, 20, 18], align: "left"},
   });
+  // A top 10 (AOTY-74): a 5x2 grid of covers, each badged with its rank, so a cover can be matched
+  // to its line in the list under the grid, which reads down two columns (1–5, then 6–10).
+  const GRID = 176, GRID_GAP = 18, BADGE_H = 34;
+  function top10(gridY, listY, rowH, lines, titleSizes, artistSizes) {
+    return Array.from({length: 10}, (_, i) => {
+      const cover = coverBox(PAD + (i % 5) * (GRID + GRID_GAP), gridY + Math.floor(i / 5) * (GRID + GRID_GAP), GRID);
+      const x = i < 5 ? PAD : PAD + 492, y = listY + (i % 5) * rowH, w = 460;
+      return {
+        rank: i + 1, cover, badge: true,
+        title: {x, y, w, h: lines * titleSizes[0] * 1.2, lines, sizes: titleSizes, leading: 1.15, align: "left"},
+        artist: {x, gap: lines > 1 ? 6 : 4, w, h: artistSizes[0] * 1.2, lines: 1, sizes: artistSizes, align: "left"},
+      };
+    });
+  }
   const LAYOUTS = {
+    top10_square: {brand: 64, caption: 128, url: 976,
+                   slots: top10(196, 600, 70, 1, [26, 24, 22, 20, 18], [20, 18, 16])},
+    top10_story: {brand: 290, caption: 360, url: 1496,
+                  slots: top10(420, 836, 120, 2, [34, 31, 28, 25, 22], [26, 24, 22, 20, 18])},
     top1_square: {brand: 64, caption: 128, url: 976, slots: solo(196, 520, 752)},
     top1_story: {brand: 290, caption: 360, url: 1496, slots: solo(440, 760, 1236)},
     // #1 big on the left, #2 and #3 stacked beside it, #1's names under everything (user, 2026-11-27).
@@ -115,7 +135,8 @@
   }
 
   // Each text's colour token, all on bg (a test checks every preset at 4.5:1).
-  const PALETTE = {brand: "kamp", played: "muted", caption: "accent", title: "ink", artist: "muted", url: "accent2"};
+  const PALETTE = {brand: "kamp", played: "muted", caption: "accent", title: "ink", artist: "muted", url: "accent2",
+                   badge: "accent"};
   function palette(tokens) {
     const out = {};
     for (const [what, key] of Object.entries(PALETTE)) out[what] = tokens[key];
@@ -221,9 +242,11 @@
   // tile), or cover for a #1 alone; measure(text, font). Each op is one of:
   //   {op: "fill", color, x, y, w, h}
   //   {op: "mark", x, y, size, circles}
-  //   {op: "text", text, font, color, x, y, align: "left" | "center" | "right", on: "bg" | "tile"}
+  //   {op: "text", text, font, color, x, y, align: "left" | "center" | "right",
+  //       on: "bg" | "tile" | "badge"}   (a badge is a bg fill over a grid cover's corner)
   //       (y: baseline)
-  //   {op: "cover", slot, x, y, w, h, shadow}   (slot: the album's index, for its image)
+  //   {op: "cover", slot, x, y, w, h, shadow, blur?, drop?}   (slot: the album's index, for its image;
+  //       blur and drop only on small covers, else 48 and 18)
   //   {op: "tile", slot, x, y, w, h, from, to}   (a 135-degree gradient, as .noart)
   function compose({format = DEFAULT_FORMAT, texts, tokens, cover, covers, measure}) {
     const L = layout(formatOf(format)), F = fonts(tokens), C = palette(tokens), ops = [];
@@ -259,21 +282,38 @@
     const capFont = s => F.body(s, 600);
     line(L.caption, captionFitted(texts, L.caption, capFont, measure, L.count), capFont, C.caption, L.caption.y);
 
-    // Each album: its cover or tile, then its title (ranked on a top N) and artist.
+    // Every album's cover or tile first, then all the names, so no cover's shadow falls on a title
+    // drawn before it (AOTY-74's grid sits right above its list).
     L.slots.forEach((s, slot) => {
       const a = albums[slot] || {};
       const c = s.cover;
       if (drawn[slot]) {
-        ops.push({op: "cover", slot, x: c.x, y: c.y, w: c.w, h: c.h, shadow: tokens.scheme === "light" ? 0.18 : 0.5});
+        const op = {op: "cover", slot, x: c.x, y: c.y, w: c.w, h: c.h, shadow: tokens.scheme === "light" ? 0.18 : 0.5};
+        // A small cover's shadow scales down with it (the #1's 48 px blur, 18 px drop at 520).
+        if (c.w < 520) Object.assign(op, {blur: Math.round(48 * c.w / 520), drop: Math.round(18 * c.w / 520)});
+        ops.push(op);
       } else {
         ops.push({op: "tile", slot, x: c.x, y: c.y, w: c.w, h: c.h, from: tokens.tile, to: tokens.tileEnd});
         // The artist's name centred on the tile, as .noart: up to 5 lines, 9% side padding.
-        const fit = fitText({text: a.artist, maxWidth: c.w * 0.82, maxLines: 5, sizes: c.tile, font: F.display, measure});
+        // A badged tile keeps its name above the badge's strip, and to 4 lines.
+        const area = c.h - (s.badge ? BADGE_H + 6 : 0);
+        const fit = fitText({text: a.artist, maxWidth: c.w * 0.82, maxLines: s.badge ? 4 : 5, sizes: c.tile,
+                             font: F.display, measure});
         const step = fit.size * 1.05, block = fit.lines.length * step;
         fit.lines.forEach((t, i) => ops.push({op: "text", text: t, font: F.display(fit.size), color: tokens.tileInk,
-                                              x: c.x + c.w / 2, y: c.y + (c.h - block) / 2 + i * step + fit.size * 0.8,
+                                              x: c.x + c.w / 2, y: c.y + (area - block) / 2 + i * step + fit.size * 0.8,
                                               align: "center", on: "tile"}));
       }
+      // A grid cover's rank, on a corner of page colour so it reads over any cover (AOTY-74).
+      if (s.badge) {
+        const size = 22, font = F.body(size, 700), text = String(s.rank);
+        const w = Math.ceil(measure(text, font)) + 16, h = BADGE_H;
+        ops.push({op: "fill", color: tokens.bg, x: c.x, y: c.y + c.h - h, w, h, slot});
+        ops.push({op: "text", text, font, color: C.badge, x: c.x + 8, y: c.y + c.h - 10, align: "left", on: "badge"});
+      }
+    });
+    L.slots.forEach((s, slot) => {
+      const a = albums[slot] || {};
       // fitText cuts the end, so the rank at the start always shows. A no-break space ties it to the
       // title's first word, so a title that breaks (CJK, one long word) keeps going after it.
       const title = L.count > 1 ? `#${s.rank}${NBSP}${a.title ?? ""}` : a.title;

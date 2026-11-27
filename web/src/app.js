@@ -1417,12 +1417,15 @@
     image.hidden = !s;
     $("shape-switch").hidden = !s;
     if (!image.hidden && !isBusy(image)) image.textContent = share.imageLabel(nativeFiles());
-    // #1 | top 3 (AOTY-73) only with three on screen. Hiding it keeps the saved choice: a view with
-    // fewer draws the #1, and the next view with three is a top 3 again. The pressed button is the
-    // one the image will be; focus on a switch that hides goes to the image button.
-    const contents = $("content-switch"), can3 = !!s && s.albums.length >= 3;
-    if (!can3 && contents.contains(document.activeElement) && !image.hidden) image.focus();
-    contents.hidden = !can3;
+    // #1 | top 3 | top 10 (AOTY-73, AOTY-74): each only with that many on screen, and the switch
+    // only once there's a choice (three). Hiding keeps the saved choice: a view with fewer draws the
+    // biggest that fits, and the next view with enough is the saved one again. The pressed button
+    // is the one the image will be; focus on a button that hides goes to the image button.
+    const contents = $("content-switch"), count = s ? s.albums.length : 0;
+    const focused = document.activeElement;
+    contents.hidden = count < share.CONTENTS.top3;
+    for (const b of contents.querySelectorAll("button[data-content]")) b.hidden = count < share.CONTENTS[b.dataset.content];
+    if (contents.contains(focused) && (contents.hidden || focused.hidden) && !image.hidden) image.focus();
     const shown = cardContentFor(s);
     contents.querySelectorAll("button[data-content]")
         .forEach(b => b.setAttribute("aria-pressed", String(b.dataset.content === shown)));
@@ -1479,7 +1482,9 @@
   // fetch of each cover). A tap before it's ready makes it, then tries; if that share is refused,
   // the image is ready and the next tap shares it at once.
   const sc = globalThis.aotyShareCard;  // web/src/sharecard.js, loaded first
-  const COVER_WAIT_MS = 8000;  // a cover still loading after this is drawn as its tile
+  // A cover still loading after this is drawn as its tile: a top 10 waits less, so ten covers on
+  // a cold cache still come to an image within a few seconds (AOTY-74).
+  const coverWaitMs = count => (count >= 10 ? 5000 : 8000);
   // What the image will show for subject s: the saved content when there are enough albums on
   // screen, else the #1 (data-content and data-shape on <main>, set by setupSwitch).
   const cardContentFor = s => share.cardContent(poster.dataset.content, s ? s.albums.length : 0);
@@ -1498,8 +1503,8 @@
     if (!shareTarget || !current || !current.rankings) return null;
     const group = shareTarget.kind === "group" && current.kind === "group";
     if (shareTarget.kind === "group" && !group) return null;
-    const tops = group ? grp.tops(current, groupMode(), grp.memberIndex(current, groupWho), 3)
-        : share.userTops(current, 3);
+    const tops = group ? grp.tops(current, groupMode(), grp.memberIndex(current, groupWho), 10)
+        : share.userTops(current, 10);
     return share.imageSubject({target: shareTarget, chart: current, tops, member: group ? groupWho : ""});
   }
 
@@ -1562,9 +1567,10 @@
       await Promise.all(sc.fontLoads({texts, tokens, format})
           .map(([f, t]) => document.fonts.load(f, t).catch(() => null)));
     }
-    // Every cover at once, each given up on after COVER_WAIT_MS, and each one that would taint the
+    // Every cover at once, each given up on after coverWaitMs, and each one that would taint the
     // canvas (it loaded without CORS after all) dropped on its own, so only its slot is a tile.
-    const imgs = await Promise.all(urls.map(u => (u.length ? withTimeout(loadCover(u, {cors: true}), COVER_WAIT_MS)
+    const wait = coverWaitMs(sc.FORMATS[format].count);
+    const imgs = await Promise.all(urls.map(u => (u.length ? withTimeout(loadCover(u, {cors: true}), wait)
         .then(img => (img && readable(img) ? img : null)) : null)));
     // A taint the check missed still makes toBlob throw, and a tainted canvas stays tainted: the
     // tiles go on a fresh one.
@@ -1630,8 +1636,8 @@
       // Cropped to a square from the middle, as object-fit: cover; with a soft shadow under it.
       const s = Math.min(img.naturalWidth, img.naturalHeight);
       ctx.shadowColor = `rgba(0, 0, 0, ${o.shadow})`;
-      ctx.shadowBlur = 48;
-      ctx.shadowOffsetY = 18;
+      ctx.shadowBlur = o.blur ?? 48;  // smaller on small covers (AOTY-74)
+      ctx.shadowOffsetY = o.drop ?? 18;
       ctx.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, o.x, o.y, o.w, o.h);
     } else if (o.op === "tile") {
       const g = ctx.createLinearGradient(o.x, o.y, o.x + o.w, o.y + o.h);  // 135 degrees, as .noart

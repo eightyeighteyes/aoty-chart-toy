@@ -1025,6 +1025,30 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - The cache key covers every album's texts and first cover URL.
 - Files end in `-top3.png` or `-top3-story.png`.
 
+## Top 10 images (AOTY-74, 2026-11-27)
+
+- **Layout:** a 5x2 grid of 176 px covers, reading across, over a numbered list in two columns
+  that reads down (1–5 left, 6–10 right).
+  - Each grid cover has its rank on a **page-colour badge** in its corner, so a cover can be matched
+    to its line. Badge text is `on: "badge"`: accent on `bg`, which the contrast test covers.
+  - A tile's artist name keeps above the badge strip, at 4 lines at most.
+  - The square's list is 1-line titles, in rows of 70 px. The story's is 2-line titles, in rows of
+    120.
+- **Every cover and tile is drawn before any text**, so no cover's shadow falls on a title drawn
+  before it. With one slot that's the old order, so the #1 snapshot still passes.
+  - Small covers carry `blur`/`drop` (their shadow scaled from the #1's 48/18). Covers of 520 px
+    and up carry neither, so #1 ops are unchanged.
+- **The content rule falls back to the biggest that fits**, never past the saved choice: a saved top
+  10 with 5 on screen draws a top 3 (`share.cardContent`).
+  - Each content button shows only with that many on screen. The switch shows from three.
+  - Focus on a button that hides goes to the image button.
+- **Covers:** a top 10 waits at most **5 s per cover** (`coverWaitMs`), so a cold cache still gives an
+  image within a few seconds. #1 and top 3 keep 8 s.
+- Test fixtures: the overlap and safe-band tests use 10-album texts and 10-long cover mixes
+  (`TOP10`, `LONG10`, `COVER_MIXES`). The box test checks every slot, not only #1's.
+- Files end in `-top10.png` or `-top10-story.png`. Analytics adds the `top10_*` formats and content
+  `top10`.
+
 ## Monitoring (AOTY-27, 2026-11-23)
 
 - **One SNS topic for everything**, `kamp-aoty-alerts` in `infra/global/`: every env's alarms,
