@@ -14,7 +14,10 @@
 #   metric filter on the access log counts 5xx that aren't the api's 503 (api.tf).
 # - Lambda Throttles aren't alarmed: mb and chart hold one slot, so throttles are normal. The
 #   chart builder's async event age and dropped events are (AOTY-26: a backlog drops builds after
-#   the 1 h max event age). mb's drops are by design; its hourly backstop covers them.
+#   the 1 h max event age). mb's drops are by design; its 5-minute schedule covers them.
+# - Recursive loop drops: any. Lambda stops a request chain after about 16 hops; mb's old
+#   self-invoke hit that on a big backlog (AOTY-58). sync's continuations, and the pokes they
+#   carry to mb and chart, are the other chain that could.
 
 locals {
   alerts_topic_arn = "arn:aws:sns:${local.region}:${local.account}:kamp-aoty-alerts"
@@ -78,6 +81,21 @@ locals {
         evals     = 1
         op        = "GreaterThanOrEqualToThreshold"
         threshold = 2
+        missing   = "notBreaching"
+      }
+    },
+    {
+      for fn in ["sync", "mb", "chart"] : "${fn}-recursion-dropped" => {
+        summary   = "Lambda's recursive loop detection stopped a ${fn} invocation chain."
+        anchor    = "recursion-dropped"
+        namespace = "AWS/Lambda"
+        metric    = "RecursiveInvocationsDropped"
+        dims      = tomap({ FunctionName = aws_lambda_function.fn[fn].function_name })
+        stat      = "Sum"
+        period    = 3600
+        evals     = 1
+        op        = "GreaterThanThreshold"
+        threshold = 0
         missing   = "notBreaching"
       }
     },

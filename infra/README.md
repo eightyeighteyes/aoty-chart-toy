@@ -644,7 +644,7 @@ Every alarm emails the `kamp-aoty-alerts` topic (`global/alerts.tf`) on ALARM an
 The alarm names say which env it is (`kamp-aoty-<env>-<alarm>`). `modules/stack/alarms.tf` has
 the set, and its description links here. `alarms` per env: prod `full`, staging `basic` (the DLQs
 and the uptime check), sandbox `none` (its deploy role can't write alarms: any branch can use it).
-About 18 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
+About 21 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
 $0.10 each a month.
 
 ```sh
@@ -705,7 +705,7 @@ hard stop on the mapping and fix it first.
 ### `mb-hot-age`
 
 An album users are waiting on has sat in mb-hot over 30 min, so the mb lane isn't draining.
-Check `/aws/lambda/kamp-aoty-<env>-mb` for errors and that the hourly `mb-backstop` schedule runs.
+Check `/aws/lambda/kamp-aoty-<env>-mb` for errors and that the 5-minute `mb-backstop` schedule runs.
 Start it by hand with the invoke in "Syncs: the API, or by hand".
 
 ### `mb-throttled`
@@ -748,6 +748,25 @@ fix it with `put-parameter --overwrite` or delete it (back to the default). See 
 was dropped). The chart builder runs one at a time, so a crowd of syncs piles up builds. A
 dropped build is redone at the user's next sync, or by hand ("Charts"). If it keeps happening,
 slow the syncs down (`pause_new_users`) until the line clears.
+
+### `recursion-dropped`
+
+`sync-recursion-dropped`, `mb-recursion-dropped`, `chart-recursion-dropped`: Lambda's recursive
+loop detection stopped an invocation, because the request chain it was in reached about 16 hops
+(Lambda → Lambda, or through SQS). AWS Health also sends an
+`AWS_LAMBDA_RUNAWAY_TERMINATION_NOTIFICATION` (readable only in the Health console).
+
+- **mb:** it shouldn't happen any more. The lane used to invoke itself when it ran out of time,
+  and a large backlog chained more than 16 runs (AOTY-58). Now the 5-minute schedule starts each
+  next run. Check that the deployed code is current: an old build still self-invokes.
+- **sync:** a long first sync continues in fresh messages (AOTY-46, up to 20), sync → SQS → sync,
+  all one chain. The sync worker's pokes to mb and chart carry it too, so a deep continuation can
+  also show as an mb or chart drop. A dropped sync continuation re-receives its message; a
+  dropped mb start is covered by the schedule; a dropped chart build is redone by the next poke
+from mb (pending albums) or the user's next sync.
+
+Don't fix it with `put-function-recursion-config --recursive-loop Allow`: that removes the guard
+against a real runaway.
 
 ## Dashboard (AOTY-41)
 
