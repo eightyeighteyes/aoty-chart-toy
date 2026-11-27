@@ -22,10 +22,12 @@ group chart.json (version 1):
    "members": [usernames, ready ones, page order], "waiting": n, "unavailable": n,
    "pending": albums not yet dated, "pending_top": those in some member's top 150,
    "weighted_min_listeners",
-   "albums": [{"artist", "album", "plays", "listeners", "by": {member index: plays}, "tracks",
-               "single", "art", "fallbacks": [...]}],
+   "albums": [{"artist", "album", "lastfm", "plays", "listeners", "by": {member index: plays},
+               "tracks", "single", "art", "fallbacks": [...]}],
    "rankings": {"listener" | "album" | "weighted": [[album index, score]]},
    "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-76)}
+"lastfm" is the Last.fm album name the page links to, as in chart_core (AOTY-43): the first
+member's, in page order, whose store has one, so a build is deterministic.
 Charts built before AOTY-63 have "track" instead of "listener"; the page falls back to "album".
 """
 
@@ -108,8 +110,8 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
   index = {k: i for i, k in enumerate(order)}
   member_index = {m: i for i, m in enumerate(members)}
   meta = {}
-  for store in stores.values():
-    for k, m in (store.get("albums") or {}).items():
+  for member in members:  # page order, so the names and covers chosen don't depend on dict order
+    for k, m in (stores[member].get("albums") or {}).items():
       prev = meta.setdefault(k, {})
       for field in ("artist", "album", "image"):
         prev[field] = prev.get(field) or m.get(field)
@@ -121,6 +123,7 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
     albums.append({
       "artist": m.get("artist") or "",
       "album": base_title(m.get("album") or ""),  # the root album: editions share its key
+      "lastfm": m.get("album") or "",  # Last.fm's name, for the album's link (AOTY-43)
       "plays": stats[k]["plays"],
       "listeners": len(stats[k]["by"]),
       "by": {str(member_index[w]): p for w, p in sorted(stats[k]["by"].items(), key=lambda wp: member_index[wp[0]])},

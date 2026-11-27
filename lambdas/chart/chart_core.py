@@ -21,11 +21,14 @@ Rules (M0's, CLAUDE.md; user decisions 2026-11-22):
 
 chart.json (CHART_VERSION 1):
   {"version", "username", "display_name", "year", "generated_at", "pending", "pending_top", "top", "featured",
-   "albums": [{"artist", "album", "plays", "tracks", "single", "art", "fallbacks": [...]}],
+   "albums": [{"artist", "album", "lastfm", "plays", "tracks", "single", "art", "fallbacks": [...]}],
    "rankings": {"album": [[album index, album plays]]},
    "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-65)}
-albums holds each album once, only if the ranking shows it, by plays. Charts built before
-AOTY-63 also carry a "track" ranking, which the page ignores.
+albums holds each album once, only if the ranking shows it, by plays. "album" is the root title
+shown (base_title); "lastfm" is the Last.fm album name the store kept for the key, which the page
+links to (AOTY-43): the root title can be another album's page ("1989 (Taylor's Version)" vs
+"1989"). Charts built before AOTY-43 have no "lastfm"; the page links "album" then. Charts built
+before AOTY-63 also carry a "track" ranking, which the page ignores.
 """
 
 import time
@@ -145,6 +148,7 @@ def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=No
     albums.append({
       "artist": m.get("artist") or "",
       "album": base_title(m.get("album") or ""),  # the root album: editions share its key
+      "lastfm": m.get("album") or "",  # Last.fm's name, for the album's link (AOTY-43)
       "plays": plays[k],
       "tracks": item.get("tracks"),
       "single": is_single(track_info(item)),
