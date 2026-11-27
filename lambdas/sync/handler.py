@@ -35,13 +35,13 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time
 
 import sync_core as core
 from common import emf, lastfm
 from common.albumkey import join_key, split_key
 from common.config import TARGET_YEAR
+from common.username import USERNAME_RE
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -59,7 +59,6 @@ SEND_BATCH = 10  # SQS SendMessageBatch limit
 RETRIES = 4
 RETRY_BASE_S = 60  # a failed sync is retried after 60 s, then 120, 240, 480
 RETRY_MAX_S = 900
-USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 DISPLAY_NAME_MAX_AGE = 30 * core.DAY
 
 

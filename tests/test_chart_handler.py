@@ -315,11 +315,20 @@ def test_no_store_means_no_chart(h):
   assert out["skipped"] == 1 and s3.objects == {}
 
 
-@pytest.mark.parametrize("name", ["", "../etc", "a b", None])
+@pytest.mark.parametrize("name", ["", "../etc", "a b", "-lead", ".lead", None])
 def test_invalid_usernames_are_dropped(h, name):
   s3 = FakeS3()
   out = h.handler({"username": name}, None, Deps(s3, FakeDDB()))
   assert out["skipped"] == 1 and s3.objects == {}
+
+
+def test_a_name_starting_with_an_underscore_gets_a_chart(h, world):
+  # AOTY-80: older Last.fm accounts such as "_korps_" start with "_".
+  s3, ddb = world
+  s3.put_store({("Z", "Zed"): 3}, username="_korps_")
+  ddb.users["_korps_"] = {"username": "_korps_"}
+  out = h.handler({"username": "_korps_", "requested_at": NOW}, None, Deps(s3, ddb))
+  assert out["built"] == 1
 
 
 def test_pending_pass_rebuilds_only_users_with_newly_resolved_albums(h, world):

@@ -357,6 +357,15 @@ def test_adding_a_new_member_checks_lastfm_and_queues_their_sync(h):
   assert len([k for k in d.ddb.guard if k.startswith("ip#")]) == 1  # counted against the IP's new names
 
 
+def test_a_member_whose_name_starts_with_an_underscore_can_be_added(h):
+  # AOTY-80: "_korps_" is a real, older Last.fm account.
+  d = deps(h, fm=FakeLastfm(name="_korps_"))
+  d.ddb.seed("g", "alice", ["alice"])
+  status, body = call(h, d, "POST", "groups/g/members", {"username": "_korps_"})
+  assert status == 201 and body["member"] == "_korps_"
+  assert sorted(d.ddb.members("g")) == ["_korps_", "alice"]
+
+
 def test_adding_an_existing_user_skips_lastfm_and_respects_the_cooldown(h):
   d = deps(h)
   d.ddb.seed("g", "alice", ["alice"])
