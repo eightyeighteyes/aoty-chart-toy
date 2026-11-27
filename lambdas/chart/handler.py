@@ -51,6 +51,7 @@ import time
 
 import chart_core as core
 import group_core
+import og
 
 from common import dynamo, lastfm
 from common import groups as grp
@@ -228,6 +229,7 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
     deps, deps.env["SITE_BUCKET"], chart_key(deps.env.get("SITE_PREFIX", ""), username), chart,
     CacheControl="no-cache",
   )  # fmt: skip
+  _put_preview(deps, og_key(deps.env.get("SITE_PREFIX", ""), username), og.user_page, chart, totals)
   _put_json(deps, deps.env["STORE_BUCKET"], pending_key(username, year), {"keys": pending})
   # The status API (AOTY-22) reads these: new plays = sync's total - chart_plays (the same sum),
   # albums checked = chart_albums - chart_pending, hits = this year's albums found so far.
@@ -354,6 +356,7 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finishe
     deps, deps.env["SITE_BUCKET"], group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id), chart,
     CacheControl="no-cache",
   )  # fmt: skip
+  _put_preview(deps, group_og_key(deps.env.get("SITE_PREFIX", ""), group_id), og.group_page, chart)
   _stamp_group(deps, group_id, meta.get("chart_requested_at"), read_at)
   log.info(
     "group %s: %d ready, %d waiting, %d albums shown", group_id, len(stores), waiting, len(chart["albums"])
@@ -370,11 +373,26 @@ def delete_group_chart(deps, group_id):
   meta, _ = _load_group(deps, group_id)
   if meta is not None:
     return build_group(deps, group_id)
-  deps.s3.delete_object(
-    Bucket=deps.env["SITE_BUCKET"], Key=group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id)
-  )
+  prefix = deps.env.get("SITE_PREFIX", "")
+  deps.s3.delete_object(Bucket=deps.env["SITE_BUCKET"], Key=group_chart_key(prefix, group_id))
+  deps.s3.delete_object(Bucket=deps.env["SITE_BUCKET"], Key=group_og_key(prefix, group_id))
   log.info("group %s: chart deleted", group_id)
   return True
+
+
+def _put_preview(deps, key, page, chart, totals=None):
+  """The chart's link preview page (AOTY-85, og.py), beside its chart.json. Best effort: a failed
+  write is logged and counted, never the build's failure, since the chart itself is published."""
+  try:
+    body = page(chart, deps.env.get("PUBLIC_ORIGIN", "https://kamp.fm"), deps.env.get("BASE_PATH", "/"))
+    deps.s3.put_object(
+      Bucket=deps.env["SITE_BUCKET"], Key=key, Body=body.encode(),
+      ContentType="text/html; charset=utf-8", CacheControl="max-age=300",
+    )  # fmt: skip
+  except Exception:
+    log.exception("could not write the link preview page")
+    if totals is not None:
+      totals["og_failed"] = totals.get("og_failed", 0) + 1
 
 
 def _groups_with(deps, *usernames):
@@ -398,6 +416,15 @@ def chart_key(site_prefix, username):
 
 def group_chart_key(site_prefix, group_id):
   return f"{site_prefix}data/groups/{group_id}/chart.json"
+
+
+# Link preview pages (AOTY-85): kamp-site's shell function sends preview bots here.
+def og_key(site_prefix, username):
+  return f"{site_prefix}data/users/{username}/og.html"
+
+
+def group_og_key(site_prefix, group_id):
+  return f"{site_prefix}data/groups/{group_id}/og.html"
 
 
 def store_key(username, year):
@@ -597,6 +624,7 @@ def _emit(deps, totals, elapsed, lastfm_calls=0):
     "Environment": deps.env.get("AOTY_ENV", ""),
     **{n: v for n, (v, _) in values.items()},
     "pending_checked": totals["checked"],
+    "og_failed": totals.get("og_failed", 0),  # preview pages not written (AOTY-85); not a metric
   }
   print(json.dumps(line, separators=(",", ":")))
 
