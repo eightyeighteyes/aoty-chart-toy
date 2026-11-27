@@ -408,7 +408,17 @@ aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.j
 ```
 
 Each run logs one EMF line: `ChartsBuilt`, `ChartsSkipped`, `ChartFailures`, `ChartSeconds`,
-`CoverLookups`, `LastfmCalls`.
+`CoverLookups`, `LastfmCalls`, and the field `og_failed`.
+
+**Link previews (AOTY-85).** Every build also writes `og.html` beside the chart.json
+(`data/users/<u>/og.html`, `data/groups/<slug>/og.html`), with `text/html; charset=utf-8` and
+`max-age=300`. It's a tags-only page for crawlers: the name and year, "#1 so far", the canonical
+URL and the #1's cover. kamp-site's shell function sends known preview bots there instead of the
+SPA. A failed write never fails the build (`og_failed`), and a group's delete removes it.
+
+- Charts built before this have no og.html until they rebuild: `tools/rebuild_charts.py --env
+  <env>` (it writes; ask before prod).
+- Check one by hand: `curl -A 'Discordbot/2.0' https://kamp.fm<base>user/<Name>`.
 
 **Page themes (AOTY-65):** the owner's pick (`POST api/users/<name>/theme`) is saved on the users
 row (`theme`), and the api sends the chart Lambda `{"username", "restyle": true}`. That copies the
