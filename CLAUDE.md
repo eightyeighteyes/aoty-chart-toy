@@ -57,7 +57,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule, share link and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -881,8 +881,41 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   short routes like `/g` never collide with a user. A future short route must be one letter too.
 - The function's name rule has no `.`, because the shell function treats a dotted last segment as
   a file. If `USERNAME_RE` ever loosens, check the function too.
-- Share images (AOTY-70) and share links (AOTY-84) move to the short host in their own tickets.
-  Until then, the group page's "copy link" still gives the full kamp.fm URL.
+- Share links use it since AOTY-84 (below). Share images (AOTY-70) move to it in their own ticket.
+
+## Sharing (AOTY-84, 2026-11-27)
+
+- User decisions:
+  - **User pages get the share row** group pages have. It shows once a chart is painted.
+  - **The system share sheet on touch devices only** (`(pointer: coarse)`, `share.useNative`).
+    Desktop browsers with `navigator.share` (Chrome, Safari) still copy, which is what people expect
+    there.
+  - **A member's view of a group (`?user=`) offers both:** "share group" and "share <member>". The
+    member's link goes to their **user page**, not the group view.
+  - Link previews (per-user OG images) are their own ticket.
+- **The link** (`share.shareUrl`) never has a query.
+  - On prod it's `aoty.kamp.fm/<Name>` (display casing) or `aoty.kamp.fm/g/<slug>`.
+  - Everywhere else it's the page's own address.
+  - So is any name the short host won't take: one letter (reserved), a `.` (which `USERNAME_RE`
+    allows), or anything not a slug.
+  - The first visit's queue line names the same link.
+- **The short host is set at build time, never guessed in the page.**
+  - `build_shell --short-host` writes `<meta name="aoty-short">`. It accepts only `aoty.kamp.fm`,
+    and only with `/toys/aoty/`, because the redirects land on prod alone. Prod's deploy passes it.
+  - `serve_shell --short-host` previews it. It's off by default, because its links lead to prod.
+- **The click** (`app.js` `shareOrCopy`):
+  - `navigator.share` is its first await, because it needs the tap's user activation.
+  - A second tap while the sheet is open does nothing (`sharing`). `AbortError` (cancelled) and
+    `InvalidStateError` say nothing.
+  - Any other failure shows the link to copy by hand, then tries the clipboard. Safari uses up the
+    activation on `share()`, so the clipboard usually refuses after it.
+  - The title comes from `share.shareTitle` (name and year), never `document.title`, which reads
+    "(#12) …" in the queue.
+- **Visibility is one function**, `pageTools(target)`. `state()` hides the row only on user routes,
+  because a group's passing error state runs before `showGroupTools` and must not lose its button.
+  `#page-tools` was `#group-tools`.
+- Analytics: `share_copy` (copied) and `share_native` (shared through the sheet), with no params.
+  Which page was shared is never sent.
 
 ## Monitoring (AOTY-27, 2026-11-23)
 

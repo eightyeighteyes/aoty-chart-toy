@@ -150,9 +150,11 @@ jobs:
           # The shell (AOTY-21) is built per env: its asset URLs are absolute and include the base.
           # Analytics (AOTY-38) is prod's alone: kamp.fm's GA4 property, whose measurement id is
           # public (kamp.fm's own page carries it). Staging builds with none and sends nothing.
+          # Share links (AOTY-84) use kamp-site's aoty.kamp.fm, which redirects into prod alone.
           ga_id=""
-          if [ "$AOTY_ENV" = "prod" ]; then ga_id="G-QNJVBYWDYN"; fi
-          python scripts/build_shell.py --base "$BASE_PATH" --out dist/web --ga-id "$ga_id"
+          short_host=""
+          if [ "$AOTY_ENV" = "prod" ]; then ga_id="G-QNJVBYWDYN"; short_host="aoty.kamp.fm"; fi
+          python scripts/build_shell.py --base "$BASE_PATH" --out dist/web --ga-id "$ga_id" --short-host "$short_host"
           dest="s3://$SITE_BUCKET/$S3_PREFIX"
           # 1. Content-hashed assets, cached for a year. Never --delete: an open tab, or an
           #    index.html still cached at the edge for a few seconds, asks for the previous build's

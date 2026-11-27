@@ -399,8 +399,8 @@ html.has-aurora .account {
   outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px;
 }
 
-/* Group pages (AOTY-52): share for everyone, the owner's edit panel. */
-.group-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+/* User and group pages (AOTY-84, AOTY-52): share for everyone, the group owner's edit panel. */
+.page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .pill, .quiet {
   font: 600 13px "DM Sans", system-ui, sans-serif; color: var(--ink); cursor: pointer;
   background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;

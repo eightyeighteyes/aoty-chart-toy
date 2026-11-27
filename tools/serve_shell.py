@@ -600,10 +600,13 @@ def main():
   p.add_argument("--ga-id", default="",
                  help="send analytics to this GA4 property (AOTY-38). Off kamp.fm every hit has "
                       "debug_mode, so it shows in DebugView and stays out of the reports")  # fmt: skip
+  p.add_argument("--short-host", default="",
+                 help="share links on this short host (AOTY-84; only aoty.kamp.fm, with the prod base). "
+                      "Off by default: its links lead to prod, where the preview's users don't exist")  # fmt: skip
   args = p.parse_args()
   if args.sign_in_as and args.proxy != "sandbox":
     p.error("--sign-in-as works only with --proxy sandbox")
-  build_shell.build(args.base, out=OUT, ga_id=args.ga_id)
+  build_shell.build(args.base, out=OUT, ga_id=args.ga_id, short_host=args.short_host)
   if args.sample:
     f = args.data / "users" / args.sample.lower() / "chart.json"
     f.parent.mkdir(parents=True, exist_ok=True)

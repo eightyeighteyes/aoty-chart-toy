@@ -15,6 +15,9 @@
   const YEAR = document.querySelector('meta[name="aoty-year"]').content;
   const intro = globalThis.aotyIntro;  // web/src/intro.js, loaded first
   const lf = globalThis.aotyLastfm;  // web/src/lastfm.js, loaded first (AOTY-43)
+  const share = globalThis.aotyShare;  // web/src/share.js, loaded first (AOTY-84)
+  // The share links' short host: aoty.kamp.fm on prod, empty elsewhere (build_shell --short-host).
+  const SHORT = document.querySelector('meta[name="aoty-short"]').content;
   const fv = globalThis.aotyFirstVisit;  // web/src/firstvisit.js, loaded first
   const grp = globalThis.aotyGroup;  // web/src/group.js, loaded first (AOTY-51)
   const ge = globalThis.aotyGroupEdit;  // web/src/groupedit.js, loaded first (AOTY-52)
@@ -278,6 +281,9 @@
     $("controls").hidden = true;
     $("sub").textContent = "";
     $("footer-user").hidden = true;
+    // A user page with no chart has nothing to share. Group pages decide in showGroupTools, which
+    // runs after their states, so a passing error there never loses the share button.
+    if (routeName() !== null) pageTools(null);
     const box = document.createElement("section");
     box.className = "state";
     box.appendChild(document.createElement("h2")).textContent = title;
@@ -440,6 +446,7 @@
     current = chart;
     heading(display, chart.year, lower);
     $("controls").hidden = false;
+    pageTools({kind: "user", id: display, name: display});
     const updated = new Date(chart.generated_at);
     profileLine(display, isNaN(updated) ? ""
         : updated.toLocaleString(undefined, {dateStyle: "medium", timeStyle: "short"}));
@@ -550,17 +557,20 @@
     copy.textContent = "copy link";
     copy.addEventListener("click", () => {
       track("event", "share_copy");
-      copyLink(copy, block.querySelector(".fv-url"));
+      copyLink(copy, block.querySelector(".fv-url"), queueUrl());
     });
     return block;
   }
 
-  // The page's own address, in the casing the address bar shows.
-  const pageUrl = () => `${location.origin}${location.pathname}`;
+  // The link to a page (AOTY-84): {kind: "user" | "group", id}. Short on prod, else the page's
+  // own address, never with a query.
+  const linkFor = target => share.shareUrl({origin: location.origin, base: BASE, short: SHORT, ...target});
+  // The first visit's queue line names the page's link, in the casing the address bar shows.
+  const queueUrl = () => linkFor({kind: "user", id: routeName() || ""});
 
   // Copy url; with no clipboard (an insecure context, or permission refused), select urlText
   // instead. Says which happened through say(text) (default: the button's own label).
-  async function copyLink(button, urlText, url = pageUrl(), say = null) {
+  async function copyLink(button, urlText, url, say = null) {
     const label = button.textContent;
     const tell = say || (t => { button.textContent = t; });
     try {
@@ -583,9 +593,9 @@
     const q = firstView.queue;
     q.hidden = !position;
     if (!position) return;
-    const lines = fv.queueLines(position, pageUrl(), waitSeconds);
+    const lines = fv.queueLines(position, queueUrl(), waitSeconds);
     q.querySelector(".fv-caller").textContent = lines.caller;
-    const shown = pageUrl().replace(/^https?:\/\//, "");
+    const shown = queueUrl().replace(/^https?:\/\//, "");
     const [before, after] = lines.link.split(shown);
     const link = q.querySelector(".fv-link");
     const url = document.createElement("span");
@@ -945,6 +955,7 @@
     const rows = grp.rows(chart, mode, who);
     groupTotal = chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0);
     groupWho = who < 0 ? "" : chart.members[who];
+    renderShare();  // a member's view also offers the member's own page (AOTY-84)
     // A member's view has one listener, so every mode is By Play: no switch (AOTY-63).
     $("rank-switch").hidden = who >= 0;
     // A member's view names them with their links, as a user page's heading does (AOTY-43).
@@ -1359,10 +1370,79 @@
     window.addEventListener("pageshow", () => { if (isBusy(button)) busy(button, false); });
   })();
 
+  // ---- sharing (AOTY-84) -------------------------------------------------------------------------
+
+  // What the page's share button shares: {kind, id, name}, or null when there's nothing to share.
+  // A member's view of a group (groupWho) adds a second button for the member's own page.
+  let shareTarget = null, sharing = false;
+
+  // The share row, for user and group pages alike. Edit controls are the group owner's alone, so
+  // a user page always hides them.
+  function pageTools(target) {
+    shareTarget = target;
+    $("page-tools").hidden = !target;
+    if (!target || target.kind !== "group") {
+      $("edit").hidden = true;
+      $("edit-toggle").hidden = true;
+    }
+    renderShare();
+  }
+
+  const coarse = () => { try { return matchMedia("(pointer: coarse)").matches; } catch (_) { return false; } };
+  const native = data => share.useNative(navigator, coarse(), data);
+  const memberTarget = () => ({kind: "user", id: groupWho, name: groupWho});
+
+  // The labels say what a tap does: "share" opens the share sheet (touch only), else "copy link".
+  function renderShare() {
+    const member = shareTarget && shareTarget.kind === "group" && groupWho ? groupWho : null;
+    const labels = share.shareLabels(native({url: linkFor(shareTarget || {kind: "user", id: ""})}), member);
+    $("share").textContent = labels.main;
+    $("share-member").hidden = !member;
+    if (member) $("share-member").textContent = labels.member;
+  }
+
+  // The share sheet where it applies, else copy. navigator.share must be the click's first await:
+  // it needs the tap's user activation (and Safari uses it up, so a failed share can't copy to
+  // the clipboard after it; the link is shown to copy by hand instead).
+  async function shareOrCopy(button, target) {
+    if (sharing || !target) return;  // a second tap while the sheet is open does nothing
+    const url = linkFor(target);
+    const span = $("share-url"), msg = $("share-msg");
+    msg.textContent = "";
+    span.textContent = url.replace(/^https?:\/\//, "");
+    span.hidden = true;
+    const year = current ? current.year : YEAR;
+    const data = {url, title: share.shareTitle({kind: target.kind, name: target.name, year, product: NAME})};
+    let shown = false;
+    if (native(data)) {
+      sharing = true;
+      try {
+        await navigator.share(data);
+        track("event", "share_native");
+        return;
+      } catch (e) {
+        // Cancelled, or a sheet already open: nothing to say.
+        if (e && (e.name === "AbortError" || e.name === "InvalidStateError")) return;
+        span.hidden = false;
+        shown = true;
+      } finally {
+        sharing = false;
+      }
+    }
+    track("event", "share_copy");
+    copyLink(button, span, url, text => {
+      msg.textContent = text;
+      span.hidden = !shown && !text.startsWith("couldn't");
+    });
+  }
+
+  $("share").addEventListener("click", () => shareOrCopy($("share"), shareTarget));
+  $("share-member").addEventListener("click", () => shareOrCopy($("share-member"), groupWho ? memberTarget() : null));
+
   // ---- the group page's share and edit controls -------------------------------------------------
 
   function hideGroupTools() {
-    $("group-tools").hidden = true;
+    pageTools(null);
     $("edit").hidden = true;
   }
 
@@ -1370,7 +1450,8 @@
   // else's writes anyway). first: open the panel if the address asks (?edit=1, after a create).
   function showGroupTools(first) {
     if (groupInfo === null || (!groupInfo && !current)) return hideGroupTools();
-    $("group-tools").hidden = false;
+    const name = (groupInfo && groupInfo.name) || (current && current.name) || groupId;
+    pageTools({kind: "group", id: groupId, name});
     const owner = !!groupInfo && canWrite() && ge.isOwner(me.username, groupInfo);
     const toggle = $("edit-toggle");
     toggle.hidden = !owner;
@@ -1402,17 +1483,6 @@
     const open = $("edit").hidden;
     setEditOpen(open);
     if (open) $("edit-title").focus();
-  });
-
-  $("share").addEventListener("click", () => {
-    track("event", "share_copy");
-    const url = ge.shareUrl(location.origin, BASE, groupId);
-    const span = $("share-url");
-    span.textContent = url.replace(/^https?:\/\//, "");
-    copyLink($("share"), span, url, text => {
-      $("share-msg").textContent = text;
-      span.hidden = !text.startsWith("couldn't");
-    });
   });
 
   function renderMembers() {

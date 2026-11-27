@@ -101,11 +101,6 @@
     return !!me && !!group && typeof group.owner === "string" && group.owner === me;
   }
 
-  // The link to share: the group's page with no query (?edit, ?user, ?signin stay behind).
-  function shareUrl(origin, base, id) {
-    return `${origin}${base}group/${encodeURIComponent(id)}`;
-  }
-
   // While watching the chart after an edit. watch = {since: ms, before: generated_at of the
   // chart on screen when the edit was made, or null}; group = GET api/groups/<id> ({ready,
   // total}) or null; chart = the latest chart.json or null. Returns {state, line}:
@@ -138,7 +133,7 @@
   }
 
   const api = {NAME_MAX, MAX_MEMBERS, REBUILD_FOR_MS, LOADING_FOR_MS, MESSAGES, checkName, answer, isOwner,
-               shareUrl, rebuild, removeText};
+               rebuild, removeText};
   root.aotyGroupEdit = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

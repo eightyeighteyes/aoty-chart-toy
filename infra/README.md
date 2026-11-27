@@ -139,7 +139,7 @@ What a deploy (`deploy.yml`) does, as the env's deploy role:
    `publish-version`. Each deploy leaves a new numbered Lambda version described `<sha> by <actor>`,
    a same-commit redeploy included.
 4. **Not in sandbox:** `scripts/build_shell.py --base <base>` builds the user page shell (AOTY-21)
-   into `dist/web`. Prod alone also gets `--ga-id` (kamp.fm's GA4 property, AOTY-38). CD uploads its content-hashed `assets/` with a year's immutable cache, never
+   into `dist/web`. Prod alone also gets `--ga-id` (kamp.fm's GA4 property, AOTY-38) and `--short-host aoty.kamp.fm` (share links, AOTY-84). CD uploads its content-hashed `assets/` with a year's immutable cache, never
    deleting old ones (open tabs still ask for them), then `index.html` with `no-cache`, then
    invalidates `<base>*` on kamp.fm's distribution. `data/` belongs to the chart builder and is
    never touched. Old assets pile up at a few KB per deploy; pruning them is AOTY-39.
