@@ -82,6 +82,16 @@ test("the boxes sit inside each format's safe band, in order, without overlappin
                 format);
     }
     for (let i = 1; i < stack.length; i++) assert.ok(stack[i].y >= stack[i - 1].y + stack[i - 1].h, `${format} ${i}`);
+    // Every slot, not only #1's: its cover and its names' boxes (title, gap, artist) inside the band
+    // and the pad, and above the link.
+    assert.equal(L.slots.length, f.count, format);
+    for (const s of L.slots) {
+      const names = s.title.h + s.artist.gap + s.artist.h;
+      for (const b of [s.cover, {x: s.title.x, y: s.title.y, w: s.title.w, h: names}]) {
+        assert.ok(b.x >= 64 && b.x + b.w <= L.width - 64 && b.y >= L.caption.y + L.caption.h
+                  && b.y + b.h <= L.url.y && b.y + b.h <= L.height - f.safe.bottom, `${format} #${s.rank}`);
+      }
+    }
   }
 });
 
@@ -147,9 +157,10 @@ test("nothing but the background is drawn in a format's covered strips, whatever
   for (const [format, f] of Object.entries(FORMATS)) {
     for (const id of ["poster", "gabbie", "white-stripes"]) {
       for (const texts of [TEXTS, long, group, {...TEXTS, artist: "Godspeed You! Black Emperor"}, TOP3, LONG3,
-                           {...LONG3, kind: "group", name: "y".repeat(50)}]) {
+                           {...LONG3, kind: "group", name: "y".repeat(50)}, LONG10]) {
         for (const cover of [true, false]) {
-          const ops = compose({format, texts, tokens: complete(THEMES[id]), covers: [cover, !cover, cover], measure});
+          const covers = Array.from({length: 10}, (_, i) => (i % 2 ? !cover : cover));
+          const ops = compose({format, texts, tokens: complete(THEMES[id]), covers, measure});
           assert.equal(ops[0].op, "fill");
           assert.deepEqual([ops[0].w, ops[0].h], [f.width, f.height]);
           for (const o of ops.slice(1)) {
@@ -292,6 +303,14 @@ const LONG3 = {...TEXTS, albums: [
   {title: "東京事変の新しいアルバムのタイトルはとても長い", artist: "東京事変".repeat(10)},
 ]};
 
+// A top 10 (AOTY-74): short names, and long ones that must be cut, CJK and "#10" included.
+const TOP10 = {...TEXTS, albums: Array.from({length: 10}, (_, i) => ({title: `Album ${i + 1}`, artist: `Band ${i + 1}`}))};
+const LONG10 = {...TEXTS, albums: Array.from({length: 10}, (_, i) => (i % 3 === 2
+  ? {title: "東京事変の新しいアルバムのタイトルはとても長い", artist: "東京事変".repeat(8)}
+  : {title: `The Most Ridiculously Long Album Title Number ${i + 1} Ever Pressed To Vinyl`, artist: "B".repeat(70)}))};
+// Which covers drew, for every slot up to 10: all, none, and mixed.
+const COVER_MIXES = [Array(10).fill(true), Array(10).fill(false), Array.from({length: 10}, (_, i) => i % 2 === 0)];
+
 // A text op's ink, tighter than the safe-band test's: cap height above the baseline, a short
 // descender below, so lines with 1.05–1.2 leading don't count as touching.
 function ink(o) {
@@ -337,15 +356,16 @@ test("#2 and #3 sit beside #1 on the square, below it on the story", () => {
 
 test("no two texts and no text and cover overlap, at any length, in any format", () => {
   for (const format of Object.keys(FORMATS)) {
-    for (const texts of [TEXTS, TOP3, LONG3, {...LONG3, kind: "group", name: "y".repeat(50), played: "25 of 25 members"}]) {
-      for (const covers of [[true, true, true], [false, false, false], [true, false, true]]) {
+    for (const texts of [TEXTS, TOP3, LONG3, {...LONG3, kind: "group", name: "y".repeat(50), played: "25 of 25 members"},
+                         TOP10, LONG10]) {
+      for (const covers of COVER_MIXES) {
         const ops = compose({format, texts, tokens: complete(THEMES.gabbie), covers, measure});
         const text = textOps(ops), boxes = ops.filter(o => o.op === "cover" || o.op === "tile");
         for (let i = 0; i < text.length; i++) {
           for (let j = i + 1; j < text.length; j++) {
             assert.ok(!touch(ink(text[i]), ink(text[j])), `${format}: "${text[i].text}" / "${text[j].text}"`);
           }
-          if (text[i].on === "tile") continue;
+          if (text[i].on === "tile" || text[i].on === "badge") continue;  // on their own cover, by design
           for (const b of boxes) {
             const box = {top: b.y, bottom: b.y + b.h, left: b.x, right: b.x + b.w};
             assert.ok(!touch(ink(text[i]), box), `${format}: "${text[i].text}" on slot ${b.slot}`);
@@ -403,6 +423,90 @@ test("a top 3 loads every title's and artist's fonts", () => {
   assert.ok(loads.some(([f, s]) => f.includes("Bricolage") && s.includes("Ægis") && s.includes("#3")));
   assert.ok(loads.some(([f, s]) => f.startsWith("500") && s.includes("Björk") && s.includes("Joni Mitchell")));
   assert.ok(loads.some(([, s]) => s === "alice's top 3 albums of 2026"));
+});
+
+// ---- top 10 (AOTY-74) ---------------------------------------------------------------------------
+
+const ALL = Array(10).fill(true);
+
+test("top 10 formats, file names and captions", () => {
+  assert.deepEqual([FORMATS.top10_square.count, FORMATS.top10_story.count], [10, 10]);
+  assert.equal(fileName("Alice", 2026, "top10_square"), "aoty-2026-Alice-top10.png");
+  assert.equal(fileName("Alice", 2026, "top10_story"), "aoty-2026-Alice-top10-story.png");
+  assert.equal(caption("alice", 2026, "user", 10), "alice's top 10 albums of 2026");
+  assert.equal(caption("Full House", 2026, "group", 10), "Full House · top 10 albums of 2026");
+});
+
+test("a top 10 is a 5x2 grid across, then a list down two columns, in rank order", () => {
+  for (const format of ["top10_square", "top10_story"]) {
+    const ops = compose({format, texts: TOP10, tokens: complete(THEMES.poster), covers: ALL, measure});
+    const covers = ops.filter(o => o.op === "cover");
+    assert.deepEqual(covers.map(o => o.slot), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], format);
+    // The grid: five across, then the next five under them.
+    for (let i = 1; i < 5; i++) assert.ok(covers[i].x > covers[i - 1].x && covers[i].y === covers[0].y, format);
+    for (let i = 5; i < 10; i++) assert.ok(covers[i].x === covers[i - 5].x && covers[i].y > covers[0].y, format);
+    // The list: the titles in rank order, 1–5 down the left column and 6–10 down the right.
+    const titles = textOps(ops).filter(o => /^#\d+ /.test(o.text));
+    assert.deepEqual(titles.map(o => o.text), TOP10.albums.map((a, i) => `#${i + 1}${NB}${a.title}`), format);
+    for (let i = 1; i < 5; i++) assert.ok(titles[i].x === titles[0].x && titles[i].y > titles[i - 1].y, format);
+    for (let i = 5; i < 10; i++) assert.ok(titles[i].x > titles[0].x && titles[i].y === titles[i - 5].y, format);
+    // The list starts below the grid.
+    const gridBottom = Math.max(...covers.map(o => o.y + o.h));
+    for (const o of titles) assert.ok(ink(o).top > gridBottom, format);
+  }
+});
+
+test("each grid cover carries its rank on a page-colour badge, over the cover", () => {
+  for (const id of Object.keys(THEMES)) {
+    const t = complete(THEMES[id]);
+    const ops = compose({format: "top10_square", texts: TOP10, tokens: t, covers: ALL, measure});
+    const badges = textOps(ops).filter(o => o.on === "badge");
+    assert.deepEqual(badges.map(o => o.text), ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], id);
+    for (const b of badges) {
+      const fill = ops.find(o => o.op === "fill" && o.slot === Number(b.text) - 1);
+      const cover = ops.find(o => o.op === "cover" && o.slot === Number(b.text) - 1);
+      assert.equal(fill.color, t.bg, id);
+      assert.ok(contrast(b.color, t.bg) >= TEXT_MIN, `${id}: badge ${b.text}`);
+      // Inside its fill, and the fill inside its cover's corner.
+      const e = ink(b);
+      assert.ok(e.left >= fill.x && e.right <= fill.x + fill.w && e.top >= fill.y && e.bottom <= fill.y + fill.h,
+                `${id}: badge ${b.text}`);
+      assert.ok(fill.x === cover.x && fill.y + fill.h === cover.y + cover.h && fill.w < cover.w / 2, id);
+      // Drawn after its cover.
+      assert.ok(ops.indexOf(fill) > ops.indexOf(cover), id);
+    }
+  }
+});
+
+test("every cover is drawn before any title, so no shadow falls on one", () => {
+  for (const format of Object.keys(FORMATS)) {
+    const ops = compose({format, texts: TOP10, tokens: complete(THEMES.poster), covers: ALL, measure});
+    const lastCover = Math.max(...ops.map((o, i) => (o.op === "cover" || o.op === "tile" ? i : -1)));
+    const firstName = ops.findIndex(o => o.op === "text" && o.on === "bg" && o.y > ops.find(c => c.op === "cover").y);
+    assert.ok(firstName > lastCover, format);
+  }
+});
+
+test("small covers cast a smaller shadow; the #1's stays as it was", () => {
+  const ops = compose({format: "top10_square", texts: TOP10, tokens: complete(THEMES.poster), covers: ALL, measure});
+  const grid = ops.find(o => o.op === "cover");
+  assert.deepEqual([grid.blur, grid.drop], [16, 6]);
+  const solo = compose({format: "top1_square", texts: TEXTS, tokens: complete(THEMES.poster), cover: true, measure});
+  const big = solo.find(o => o.op === "cover");
+  assert.ok(!("blur" in big) && !("drop" in big));
+});
+
+test("a badged tile keeps the artist's name clear of the badge", () => {
+  const ops = compose({format: "top10_square", texts: LONG10, tokens: complete(THEMES.poster),
+                       covers: Array(10).fill(false), measure});
+  for (const badge of textOps(ops).filter(o => o.on === "badge")) {
+    const slot = Number(badge.text) - 1;
+    const tile = ops.find(o => o.op === "tile" && o.slot === slot);
+    const names = textOps(ops).filter(o => o.on === "tile" && o.x === tile.x + tile.w / 2 && o.y > tile.y
+                                       && o.y < tile.y + tile.h);
+    assert.ok(names.length >= 1);
+    for (const n of names) assert.ok(ink(n).bottom <= tile.y + tile.h - 34, `slot ${slot}: "${n.text}"`);
+  }
 });
 
 test("the printed link drops its scheme", () => {
