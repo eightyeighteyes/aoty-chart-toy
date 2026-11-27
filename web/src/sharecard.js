@@ -5,7 +5,8 @@
 // Every text sits on the plain page colour (bg), never over the cover, so the contrast rules the
 // theme tests already hold (ink, muted, both accents and kamp's periwinkle on bg) hold here too.
 // The artist-name tile that stands in for a missing cover uses the page's tile tokens, as .noart.
-// AOTY-71 to AOTY-74 add formats beside top1_square.
+// Group pages (AOTY-71) use the same top1_square card with a group caption and a member count.
+// AOTY-72 to AOTY-74 add formats beside it.
 (function (root) {
   "use strict";
 
@@ -56,7 +57,7 @@
   }
 
   // Each text's colour token, all on bg (a test checks every preset at 4.5:1).
-  const PALETTE = {brand: "kamp", caption: "accent", title: "ink", artist: "muted", url: "accent2"};
+  const PALETTE = {brand: "kamp", played: "muted", caption: "accent", title: "ink", artist: "muted", url: "accent2"};
   function palette(tokens) {
     const out = {};
     for (const [what, key] of Object.entries(PALETTE)) out[what] = tokens[key];
@@ -115,10 +116,12 @@
 
   // ---- words --------------------------------------------------------------------------------
 
-  // Always 's, as share.shareTitle (user, 2026-11-27: "chris's").
-  function caption(name, year) {
-    return `${name}'s album of the year ${year}`;
+  // A person's is always 's, as share.shareTitle (user, 2026-11-27: "chris's"). A group's is its
+  // name, then the rest (AOTY-71, user decision 2026-11-27), as share.shareTitle's group form.
+  function caption(name, year, kind = "user") {
+    return kind === "group" ? `${name} · ${captionRest(year)}` : `${name}'s album of the year ${year}`;
   }
+  const captionRest = year => `album of the year ${year}`;
   // The printed link, without its scheme.
   function printedUrl(url) {
     return String(url || "").replace(/^https?:\/\//, "");
@@ -130,9 +133,24 @@
     return `aoty-${year}${safe ? `-${safe}` : ""}.png`;
   }
 
+  // The caption as drawn. A group name that's too long is cut, never the year after it: at the
+  // smallest size, the name loses characters until "name… · album of the year 2026" fits.
+  function captionFitted(texts, box, font, measure) {
+    const full = caption(texts.name, texts.year, texts.kind);
+    if (texts.kind !== "group") return full;
+    const fit = fitText({text: full, maxWidth: box.w, maxLines: box.lines, sizes: box.sizes, font, measure});
+    if (!fit.cut) return full;
+    const f = font(box.sizes[box.sizes.length - 1]), rest = ` · ${captionRest(texts.year)}`;
+    const name = graphemes(String(texts.name ?? "").replace(/\s+/g, " ").trim());
+    while (name.length && measure(name.join("").trimEnd() + ELLIPSIS + rest, f) > box.w) name.pop();
+    return name.join("").trimEnd() + ELLIPSIS + rest;
+  }
+
   // ---- the card -------------------------------------------------------------------------------
 
-  // The draw operations for one card. texts: {title, artist, name, year, url}; tokens: a complete
+  // The draw operations for one card. texts: {title, artist, name, year, url, kind, played}, where
+  // kind "group" switches the caption and played is a group's member count or absent (AOTY-71,
+  // share.imageSubject); tokens: a complete
   // theme (theme.complete); cover: whether a cover image will be drawn (else the artist tile);
   // measure(text, font). Each op is one of:
   //   {op: "fill", color, x, y, w, h}
@@ -148,8 +166,18 @@
     // The brand row: the mark, then "a kamp toy", left-aligned as on the page.
     const b = L.brand;
     ops.push({op: "mark", x: b.x, y: b.y, size: b.mark, circles: MARK});
+    const brandX = b.x + b.mark + 14, brandY = b.y + b.h / 2 + 10;
     ops.push({op: "text", text: "a kamp toy", font: F.brand(28), color: C.brand,
-              x: b.x + b.mark + 14, y: b.y + b.h / 2 + 10, align: "left", on: "bg"});
+              x: brandX, y: brandY, align: "left", on: "bg"});
+    // A group's member count, "7 of 9 members" (AOTY-71), right-aligned in what the brand leaves.
+    if (texts.played) {
+      const left = brandX + measure("a kamp toy", F.brand(28)) + 32, right = L.width - L.pad;
+      const font = s => F.body(s, 500);
+      const fit = fitText({text: texts.played, maxWidth: right - left, maxLines: 1, sizes: [28, 26, 24, 22], font,
+                           measure});
+      fit.lines.forEach(t => ops.push({op: "text", text: t, font: font(fit.size), color: C.played, x: right,
+                                       y: brandY, align: "right", on: "bg"}));
+    }
 
     const line = (box, text, font, color, y) => {
       const fit = fitText({text, maxWidth: box.w, maxLines: box.lines, sizes: box.sizes, font, measure});
@@ -159,7 +187,8 @@
       return fit.lines.length ? fit.size * 0.92 + (fit.lines.length - 1) * step + fit.size * 0.28 : 0;
     };
 
-    line(L.caption, caption(texts.name, texts.year), s => F.body(s, 600), C.caption, L.caption.y);
+    const capFont = s => F.body(s, 600);
+    line(L.caption, captionFitted(texts, L.caption, capFont, measure), capFont, C.caption, L.caption.y);
 
     const c = L.cover;
     if (cover) {
@@ -186,8 +215,9 @@
   function fontLoads({texts, tokens}) {
     const F = fonts(tokens);
     const display = `${texts.title || ""} ${texts.artist || ""}`;
-    return [[F.display(40), display], [F.body(30, 500), `${texts.artist || ""} ${printedUrl(texts.url)}`],
-            [F.body(30, 600), caption(texts.name, texts.year)], [F.brand(28), "a kamp toy"]];
+    const body = `${texts.artist || ""} ${printedUrl(texts.url)} ${texts.played || ""}`;
+    return [[F.display(40), display], [F.body(30, 500), body],
+            [F.body(30, 600), caption(texts.name, texts.year, texts.kind)], [F.brand(28), "a kamp toy"]];
   }
 
   const api = {FORMATS, MARK, layout, fonts, palette, PALETTE, graphemes, wrap, fitText, caption, printedUrl,

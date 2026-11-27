@@ -4,7 +4,7 @@ import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const {shareUrl, useNative, shareTitle, shareLabels, imageVisible, imageLabel} = require("../src/share.js");
+const {shareUrl, useNative, shareTitle, shareLabels, userTop, imageSubject, imageLabel} = require("../src/share.js");
 
 const PROD = {origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm"};
 const STAGING = {origin: "https://kamp.fm", base: "/toys/aoty-staging/", short: ""};
@@ -71,16 +71,45 @@ test("files go through the share sheet only where canShare confirms them (AOTY-7
   assert.equal(useNative({share, canShare: () => true}, false, files), false);  // desktop downloads
 });
 
-test("the share image shows on user pages whose chart ranks something", () => {
-  const user = {kind: "user", id: "Alice", name: "Alice"};
-  const ranked = {rankings: {album: [["k", 9.5]]}};
-  assert.equal(imageVisible(user, ranked), true);
-  assert.equal(imageVisible(user, {rankings: {album: []}}), false);  // a first visit's chart
-  assert.equal(imageVisible(user, {}), false);
-  assert.equal(imageVisible(user, null), false);
-  // A group, and a member's view of one (its share target is the group): no card yet.
-  assert.equal(imageVisible({kind: "group", id: "full-house", name: "Full House"}, ranked), false);
-  assert.equal(imageVisible(null, ranked), false);
+test("a user chart's #1 is its By Play leader, once it ranks something", () => {
+  const ranked = {albums: [{album: "B"}, {album: "A"}], rankings: {album: [[1, 9.5], [0, 2]]}};
+  assert.equal(userTop(ranked).album, "A");
+  assert.equal(userTop({albums: [], rankings: {album: []}}), null);  // a first visit's chart
+  assert.equal(userTop({}), null);
+  assert.equal(userTop(null), null);
+});
+
+const alice = {kind: "user", id: "Alice", name: "Alice"};
+const house = {kind: "group", id: "full-house", name: "Full House"};
+const groupChart = {members: ["alice", "bob", "carol"], unavailable: 1, waiting: 0};
+const hit = {album: "1989", listeners: 3};
+
+test("a user page's image is theirs", () => {
+  const s = imageSubject({target: alice, chart: {}, top: hit, member: ""});
+  assert.deepEqual(s, {kind: "user", name: "Alice", link: alice, album: hit, played: null});
+  assert.equal(imageSubject({target: alice, chart: {}, top: null, member: ""}), null);
+  assert.equal(imageSubject({target: null, chart: {}, top: hit, member: ""}), null);
+  assert.equal(imageSubject({target: alice, chart: null, top: hit, member: ""}), null);
+});
+
+test("a group's image names the group and counts its members once they're all in", () => {
+  const s = imageSubject({target: house, chart: groupChart, top: hit, member: ""});
+  assert.deepEqual(s, {kind: "group", name: "Full House", link: house, album: hit, played: "3 of 4 members"});
+  const loading = imageSubject({target: house, chart: {...groupChart, waiting: 2}, top: hit, member: ""});
+  assert.equal(loading.played, null);
+  const one = imageSubject({target: house, chart: {members: ["alice"]}, top: {album: "x", listeners: 1}, member: ""});
+  assert.equal(one.played, "1 of 1 member");
+  assert.equal(imageSubject({target: house, chart: groupChart, top: null, member: ""}), null);  // empty ranking
+});
+
+test("a member's view shares the member's image, never the group's link", () => {
+  const s = imageSubject({target: house, chart: groupChart, top: hit, member: "bob"});
+  assert.deepEqual(s, {kind: "user", name: "bob", link: {kind: "user", id: "bob", name: "bob"}, album: hit,
+                       played: null});
+  const url = shareUrl({origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm", ...s.link});
+  assert.equal(url, "https://aoty.kamp.fm/bob");
+  assert.ok(!url.includes("/g/") && !url.includes("group"));
+  assert.equal(imageSubject({target: house, chart: groupChart, top: null, member: "bob"}), null);
 });
 
 test("the share image's label says what a tap does", () => {
