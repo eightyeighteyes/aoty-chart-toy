@@ -149,8 +149,14 @@ def test_session_username():
 
 
 def test_routed_names_still_need_validation():
-  _, name = core.route("GET", f"{BASE}api/users/__smoke__/status", BASE)
+  _, name = core.route("GET", f"{BASE}api/users/-smoke-/status", BASE)
   assert not core.USERNAME_RE.match(name)
+  _, name = core.route("GET", f"{BASE}api/users/_korps_/status", BASE)
+  assert core.USERNAME_RE.match(name)
+
+
+def test_a_session_can_name_an_underscore_user():
+  assert core.session_username({"u": "_korps_"}) == "_korps_"
 
 
 # ---- the client IP ------------------------------------------------------------------------

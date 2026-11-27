@@ -4,8 +4,10 @@
 (function (root) {
   "use strict";
 
-  // Last.fm names as the sync worker accepts them (lambdas/sync/handler.py USERNAME_RE).
-  const USERNAME_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+  // Last.fm names as the api, sync and chart builder accept them: a copy of
+  // lambdas/common/username.py USERNAME_RE, kept the same by tests/test_username.py. A leading "_"
+  // is fine (AOTY-80: older accounts like "_korps_").
+  const USERNAME_RE = /^[a-z0-9_][a-z0-9_.-]{0,63}$/;
   // A pasted profile link: last.fm/user/<name>, with or without the scheme and www.
   const PROFILE_RE = /^(?:https?:\/\/)?(?:www\.)?last\.fm\/user\/([^/?#\s]+)/i;
 

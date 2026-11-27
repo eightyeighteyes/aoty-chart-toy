@@ -47,7 +47,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time
 
 import chart_core as core
@@ -57,6 +56,7 @@ from common import dynamo, lastfm
 from common import groups as grp
 from common.albumkey import join_key, split_key
 from common.config import TARGET_YEAR
+from common.username import USERNAME_RE
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -64,7 +64,6 @@ log.setLevel(logging.INFO)
 NAMESPACE = "kamp-aoty"
 BATCH_GET = 100  # DynamoDB BatchGetItem limit
 RETRIES = 4
-USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
 # album.getInfo cover lookups per build: at Last.fm's 0.5 s pacing, ~60 s at most. A heavy
 # user's first chart needed ~50; the next build continues where this one stopped.
 COVER_LOOKUPS = 120

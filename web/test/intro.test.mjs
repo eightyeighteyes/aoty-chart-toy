@@ -11,6 +11,11 @@ test("names are trimmed and lowercased", () => {
   assert.deepEqual(cleanName("dj_k.9-x"), {name: "dj_k.9-x"});
 });
 
+test("names may start with an underscore, as older Last.fm accounts do (AOTY-80)", () => {
+  for (const name of ["_korps_", "__x", "_a_"]) assert.deepEqual(cleanName(name), {name}, name);
+  assert.deepEqual(cleanName("https://www.last.fm/user/_Korps_"), {name: "_korps_"});
+});
+
 test("a leading @ is dropped", () => {
   assert.deepEqual(cleanName("@Alice"), {name: "alice"});
 });
@@ -27,7 +32,7 @@ test("empty and malformed names are caught before any request", () => {
   assert.deepEqual(cleanName(""), {error: "empty"});
   assert.deepEqual(cleanName("   "), {error: "empty"});
   assert.deepEqual(cleanName("@"), {error: "empty"});
-  for (const bad of ["a b", "__smoke__", "<script>", "x".repeat(65), "-lead"]) {
+  for (const bad of ["a b", "-smoke-", "<script>", "x".repeat(65), "-lead", ".lead", "..", "a/b"]) {
     assert.deepEqual(cleanName(bad), {error: "format"}, bad);
   }
 });

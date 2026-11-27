@@ -205,25 +205,27 @@ jobs:
           fi
           # The sync and status routes (AOTY-22), without touching Last.fm or the sync queue:
           # an invalid name is refused before any lookup, and a valid unused one has no row.
+          # "-smoke-" must stay invalid under common/username.py (tests/test_username.py checks):
+          # "__smoke__" was, until AOTY-80 let names start with "_".
           status=$(curl -s -o "$RUNNER_TEMP/body" -D "$RUNNER_TEMP/headers" -w '%{http_code}' -X POST \
-            -H 'content-type: application/json' -d '{}' "${site}api/users/__smoke__/sync")
-          echo "$status POST ${site}api/users/__smoke__/sync"
+            -H 'content-type: application/json' -d '{}' "${site}api/users/-smoke-/sync")
+          echo "$status POST ${site}api/users/-smoke-/sync"
           [ "$status" = "400" ] || { echo "::error::expected 400 from POST sync, got $status"; cat "$RUNNER_TEMP/body"; exit 1; }
           grep -qi '^cache-control: no-store' "$RUNNER_TEMP/headers" \
             || { echo "::error::POST sync errors must be Cache-Control: no-store"; exit 1; }
           check 404 "${site}api/users/smoke-test-none/status"
           # The site bucket is only reachable through kamp.fm's CloudFront.
           if [ "$AOTY_ENV" != "sandbox" ]; then
-            check 404 "${site}data/users/__smoke__/chart.json"
+            check 404 "${site}data/users/-smoke-/chart.json"
           fi
           if [ "$SHELL_DEPLOYED" = "true" ]; then
             check 200 "$site"
             # A deep page path gets the shell too (kamp.fm's shell function), and it must be this
             # build's: every asset it names has to load.
-            check 200 "${site}user/__smoke__"
+            check 200 "${site}user/-smoke-"
             cp "$RUNNER_TEMP/body" "$RUNNER_TEMP/shell.html"
             grep -q "<meta name=\"aoty-base\" content=\"${BASE_PATH}\">" "$RUNNER_TEMP/shell.html" \
-              || { echo "::error::${site}user/__smoke__ isn't the shell for ${BASE_PATH}"; exit 1; }
+              || { echo "::error::${site}user/-smoke- isn't the shell for ${BASE_PATH}"; exit 1; }
             assets=$(grep -oE "${BASE_PATH}assets/[A-Za-z0-9._-]+" "$RUNNER_TEMP/shell.html" | sort -u)
             [ -n "$assets" ] || { echo "::error::the shell names no assets"; exit 1; }
             for path in $assets; do

@@ -422,10 +422,17 @@ def test_json_with_a_charset_is_fine(h):
   assert code == 202
 
 
-@pytest.mark.parametrize("name", ["__smoke__", "a%20b", "x" * 70])
+@pytest.mark.parametrize("name", ["-smoke-", ".lead", "a%20b", "x" * 70])
 def test_bad_names_are_400(h, name):
   code, _ = sync(h, deps(h), name)
   assert code == 400
+
+
+@pytest.mark.parametrize("name", ["_korps_", "__x", "_a_"])
+def test_names_starting_with_an_underscore_sync(h, name):
+  # AOTY-80: older Last.fm accounts start with "_"; they used to be refused before any lookup.
+  code, _ = sync(h, deps(h), name)
+  assert code == 202
 
 
 def test_wrong_methods_are_405(h):

@@ -147,8 +147,10 @@ What a deploy (`deploy.yml`) does, as the env's deploy role:
    - `<base>api/health` → 200, and the body must say `"source": "lambdas/api"` (deployed code, not
      the placeholder) and `"sha"` equal to the checked-out commit (not a stale `$LATEST`). A wrong
      body is retried 5 times, 5 s apart.
-   - `<base>data/users/__smoke__/chart.json` → 404
-   - `<base>` and `<base>user/__smoke__` → 200 with this env's shell, and every asset it names is
+   - `POST <base>api/users/-smoke-/sync` → 400 with `no-store`: a name the username rule refuses
+     (`lambdas/common/username.py`), so it never reaches Last.fm. `<base>api/users/smoke-test-none/status` → 404.
+   - `<base>data/users/-smoke-/chart.json` → 404
+   - `<base>` and `<base>user/-smoke-` → 200 with this env's shell, and every asset it names is
      in this build and loads.
 
 **Rollback** redeploys code and the shell from an older tag without touching infrastructure:

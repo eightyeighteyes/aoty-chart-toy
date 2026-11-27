@@ -532,6 +532,21 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - Last.fm is also called by the chart builder (covers) and the mb lane (track counts), so
   `sync_concurrency` caps the sync worker's rate only. The fake is wired into all four functions.
 
+## Usernames (AOTY-80, 2026-11-27)
+
+- **One rule**, `lambdas/common/username.py` `USERNAME_RE`: lowercase letters, digits, `_`, `.`
+  and `-`, up to 64, starting with a letter, digit or `_`.
+  - The api, sync and chart builder import it.
+  - The page has a copy, `web/src/intro.js`, which `tests/test_username.py` keeps the same.
+  - It's also the path-safety rule: a leading `.` or `-` stays refused, so a name is never a `.`
+    or `..` segment.
+- **Older Last.fm accounts start with `_`** (`_korps_`), even though signup now wants a letter
+  first. They were refused before any lookup until AOTY-80.
+- **CD's smoke test needs a name the rule refuses**: `-smoke-` (POST sync → 400, no Last.fm call).
+  It was `__smoke__` until the rule took a leading `_`. Valid, it would have called Last.fm and
+  written a `not_found` row on every deploy. `test_username.py` checks `deploy.yml`'s smoke name,
+  so loosen the rule and that test fails first.
+
 ## Sign-in (AOTY-47, 2026-11-23)
 
 - **Nothing stored.** The session is an HMAC-signed cookie `{u, iat, exp}` (30 days); Last.fm's
@@ -881,6 +896,9 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   short routes like `/g` never collide with a user. A future short route must be one letter too.
 - The function's name rule has no `.`, because the shell function treats a dotted last segment as
   a file. If `USERNAME_RE` ever loosens, check the function too.
+- **It still wants a letter or digit first.** AOTY-80 let usernames start with `_`, so
+  `_korps_`'s share link is the full kamp.fm URL until AOTY-89 changes kamp-site's function, then
+  `share.js`.
 - Share links use it since AOTY-84 (below). Share images (AOTY-70) move to it in their own ticket.
 
 ## Sharing (AOTY-84, 2026-11-27)
@@ -897,7 +915,7 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   - On prod it's `aoty.kamp.fm/<Name>` (display casing) or `aoty.kamp.fm/g/<slug>`.
   - Everywhere else it's the page's own address.
   - So is any name the short host won't take: one letter (reserved), a `.` (which `USERNAME_RE`
-    allows), or anything not a slug.
+    allows), a leading `_` (AOTY-89), or anything not a slug.
   - The first visit's queue line names the same link.
 - **The short host is set at build time, never guessed in the page.**
   - `build_shell --short-host` writes `<meta name="aoty-short">`. It accepts only `aoty.kamp.fm`,

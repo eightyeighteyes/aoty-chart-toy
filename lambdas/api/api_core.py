@@ -29,8 +29,8 @@ import re
 from urllib.parse import parse_qsl, unquote, urlencode
 
 from common import themes
+from common.username import USERNAME_RE  # noqa: F401 (re-exported: api/handler.py, tools/preview_groups.py)
 
-USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")  # as the sync worker's
 ACTIVE = frozenset({"queued", "syncing", "retrying"})
 FAILED = frozenset({"error", "not_found", "private"})
 STUCK_AFTER = 30 * 60  # a sync that hasn't moved this long is dead (OOM, timeout, lost message)

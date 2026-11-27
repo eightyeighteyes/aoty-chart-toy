@@ -540,6 +540,14 @@ def test_invalid_usernames_are_dropped_without_writes(h):
   assert env.ddb.users == {} and env.s3.objects == {}
 
 
+def test_a_name_starting_with_an_underscore_is_synced(h):
+  # AOTY-80: older Last.fm accounts such as "_korps_" start with "_"; they used to be dropped.
+  env = Env(h, make_world(5))
+  out, _ = env.record(msg={"username": "_korps_"})
+  assert out == {"batchItemFailures": []}
+  assert env.ddb.users["_korps_"]["state"] == "done"
+
+
 def test_covers_come_from_recent_tracks(h):
   env = Env(h, make_world(20))
   env.run()

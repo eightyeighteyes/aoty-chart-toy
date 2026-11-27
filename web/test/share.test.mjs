@@ -30,6 +30,8 @@ test("a name the short host won't take falls back to the full URL", () => {
   assert.equal(shareUrl({...PROD, kind: "user", id: "g"}), "https://kamp.fm/toys/aoty/user/g");
   // USERNAME_RE allows a dot; aoty.kamp.fm's rule doesn't.
   assert.equal(shareUrl({...PROD, kind: "user", id: "a.b"}), "https://kamp.fm/toys/aoty/user/a.b");
+  // So does a leading "_" (AOTY-80): aoty.kamp.fm wants a letter or digit first.
+  assert.equal(shareUrl({...PROD, kind: "user", id: "_korps_"}), "https://kamp.fm/toys/aoty/user/_korps_");
   assert.equal(shareUrl({...PROD, kind: "user", id: "x".repeat(65)}),
                `https://kamp.fm/toys/aoty/user/${"x".repeat(65)}`);
   assert.equal(shareUrl({...PROD, kind: "user", id: "a b"}), "https://kamp.fm/toys/aoty/user/a%20b");
