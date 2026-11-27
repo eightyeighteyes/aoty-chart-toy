@@ -186,10 +186,11 @@ def test_app_js_parses(tmp_path):
   subprocess.run([node, "--check", str(bs.SRC / "app.js")], check=True)
 
 
-def test_the_year_matches_the_lambdas():
-  from common.config import TARGET_YEAR
+def test_the_year_and_name_match_the_lambdas():
+  from common.config import NAME, TARGET_YEAR
 
   assert bs.TARGET_YEAR == TARGET_YEAR
+  assert bs.NAME == NAME  # the chart builder's link preview titles (AOTY-85)
 
 
 def test_the_placeholder_name_avoids_other_brands():
