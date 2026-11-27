@@ -47,19 +47,38 @@
       : {main: "copy group link", member: `copy ${member}'s link`};
   }
 
-  // The share image (AOTY-70): user pages only (a group, and a member's view of one, has no card
-  // yet), once the chart ranks something. Every visitor, signed in or not.
-  function imageVisible(target, chart) {
-    if (!target || target.kind !== "user" || !chart || !chart.rankings) return false;
-    const top = chart.rankings.album;
-    return Array.isArray(top) && top.length > 0;
+  // A user chart's #1 (By Play, its one ranking), or null before it ranks anything.
+  function userTop(chart) {
+    const r = chart && chart.rankings && chart.rankings.album;
+    return Array.isArray(r) && r.length ? chart.albums[r[0][0]] || null : null;
+  }
+
+  // What the share image shows (AOTY-70, AOTY-71), or null for no image: {kind, name, link, album,
+  // played}. Every visitor gets it, signed in or not. top is the #1 on screen (userTop, or
+  // group.top for the ranking and member shown); member is a group's ?user= member, or "".
+  //   - a user page: its name and link.
+  //   - a member's view of a group: the member's own image, linking to their user page, never the
+  //     group's (user decision 2026-11-27).
+  //   - a group: its name and link, and "7 of 9 members" once no member is still loading (a count
+  //     during the first build would undercount, user decision 2026-11-27). The total counts every
+  //     member, unavailable ones included, as the page's dots do.
+  function imageSubject({target, chart, top, member}) {
+    if (!target || !chart || !top) return null;
+    if (target.kind !== "group") return {kind: "user", name: target.name, link: target, album: top, played: null};
+    if (member) {
+      return {kind: "user", name: member, link: {kind: "user", id: member, name: member}, album: top, played: null};
+    }
+    const total = (chart.members || []).length + (chart.unavailable || 0);
+    const counted = !chart.waiting && total > 0 && Number.isInteger(top.listeners);
+    const played = counted ? `${top.listeners} of ${total} ${total === 1 ? "member" : "members"}` : null;
+    return {kind: "group", name: target.name, link: target, album: top, played};
   }
   // Its label says what a tap does: the share sheet (touch, where files can be shared), or a download.
   function imageLabel(native) {
     return native ? "share image" : "save image";
   }
 
-  const api = {shareUrl, useNative, shareTitle, shareLabels, imageVisible, imageLabel};
+  const api = {shareUrl, useNative, shareTitle, shareLabels, userTop, imageSubject, imageLabel};
   root.aotyShare = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

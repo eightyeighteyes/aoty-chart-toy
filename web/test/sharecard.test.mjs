@@ -164,6 +164,52 @@ test("the caption is always 's", () => {
   assert.equal(caption("chris", 2026), "chris's album of the year 2026");
 });
 
+const GROUP = {...TEXTS, name: "Full House", kind: "group", played: "7 of 9 members",
+               url: "https://aoty.kamp.fm/g/full-house"};
+
+test("a group's caption is its name, then the year (AOTY-71)", () => {
+  assert.equal(caption("Full House", 2026, "group"), "Full House · album of the year 2026");
+  const ops = textOps(compose({texts: GROUP, tokens: complete(THEMES.poster), cover: true, measure}));
+  assert.deepEqual(ops.map(o => o.text),
+                   ["a kamp toy", "7 of 9 members", "Full House · album of the year 2026", "1989", "Taylor Swift",
+                    "aoty.kamp.fm/g/full-house"]);
+});
+
+test("a long group name is cut, never the year", () => {
+  for (const name of ["x".repeat(50), "the extremely long-winded listening club of new york", "東".repeat(50)]) {
+    const ops = textOps(compose({texts: {...GROUP, name}, tokens: complete(THEMES.poster), cover: true, measure}));
+    const cap = ops[2];
+    assert.ok(cap.text.endsWith("… · album of the year 2026"), cap.text);
+    assert.ok(measure(cap.text, cap.font) <= 952 + 0.01, cap.text);
+  }
+});
+
+test("the member count sits right of the brand, inside the pad, at any length", () => {
+  const t = complete(THEMES.poster);
+  for (const played of ["7 of 9 members", "25 of 25 members", "a much longer count than any group would ever have"]) {
+    const ops = textOps(compose({texts: {...GROUP, played}, tokens: t, cover: true, measure}));
+    const [brand, count] = ops;
+    assert.equal(count.align, "right");
+    assert.equal(count.x, 1080 - 64);
+    assert.equal(count.y, brand.y);
+    assert.equal(count.color, t.muted);
+    const brandEnd = brand.x + measure(brand.text, brand.font);
+    assert.ok(count.x - measure(count.text, count.font) >= brandEnd + 32 - 0.01, played);
+  }
+});
+
+test("no member count, no op: users, member views and groups still loading", () => {
+  const ops = textOps(compose({texts: {...GROUP, played: null}, tokens: complete(THEMES.poster), cover: true,
+                               measure}));
+  assert.deepEqual(ops.map(o => o.text).slice(0, 2), ["a kamp toy", "Full House · album of the year 2026"]);
+});
+
+test("a group's count and caption load their fonts", () => {
+  const loads = fontLoads({texts: {...GROUP, played: "7 of 9 членов"}, tokens: complete(THEMES.poster)});
+  assert.ok(loads.some(([f, s]) => f.startsWith("500") && f.includes("Inter") && s.includes("членов")));
+  assert.ok(loads.some(([f, s]) => f.startsWith("600") && s === "Full House · album of the year 2026"));
+});
+
 test("the printed link drops its scheme", () => {
   assert.equal(printedUrl("https://aoty.kamp.fm/Alice"), "aoty.kamp.fm/Alice");
   assert.equal(printedUrl("http://localhost:8001/toys/aoty/user/a"), "localhost:8001/toys/aoty/user/a");

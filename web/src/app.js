@@ -949,8 +949,11 @@
     return m ? m[1].toLowerCase() : null;
   }
 
+  // The ranking the switch shows (the page's, so the share image follows it too).
+  const groupMode = () => (grp.MODES.includes(poster.dataset.rank) ? poster.dataset.rank : "listener");
+
   function renderGroup(chart) {
-    const mode = grp.MODES.includes(poster.dataset.rank) ? poster.dataset.rank : "listener";
+    const mode = groupMode();
     const who = grp.memberIndex(chart, $("who").value);
     const rows = grp.rows(chart, mode, who);
     groupTotal = chart.members.length + (chart.waiting || 0) + (chart.unavailable || 0);
@@ -1399,9 +1402,9 @@
     $("share").textContent = labels.main;
     $("share-member").hidden = !member;
     if (member) $("share-member").textContent = labels.member;
-    // The share image (AOTY-70): user pages that rank something.
+    // The share image (AOTY-70, AOTY-71): any page whose ranking on screen has a #1.
     const image = $("share-image");
-    image.hidden = !share.imageVisible(shareTarget, current);
+    image.hidden = !cardSubject();
     if (!image.hidden && !isBusy(image)) image.textContent = share.imageLabel(nativeFiles());
     cardSoon();
   }
@@ -1464,15 +1467,30 @@
 
   // What the image shows now, and a key that changes whenever any of it does: the chart, the name,
   // the link and the resolved colours ("album of the year" settles after its cover loads).
+  // What the image shows (share.imageSubject): the #1 of the ranking on screen, and for a member's
+  // view of a group, the member's own (AOTY-71). groupWho and the switch are set by renderGroup
+  // before it calls renderShare.
+  function cardSubject() {
+    if (!shareTarget || !current || !current.rankings) return null;
+    const group = shareTarget.kind === "group" && current.kind === "group";
+    if (shareTarget.kind === "group" && !group) return null;
+    const top = group ? grp.top(current, groupMode(), grp.memberIndex(current, groupWho)) : share.userTop(current);
+    return share.imageSubject({target: shareTarget, chart: current, top, member: group ? groupWho : ""});
+  }
+
+  // What the image shows now, and a key that changes whenever any of it does: the chart, the name,
+  // the link and the resolved colours ("album of the year" settles after its cover loads).
   function cardInput() {
-    if (!shareTarget || !share.imageVisible(shareTarget, current)) return null;
-    const a = current.albums[current.rankings.album[0][0]];
-    if (!a) return null;
-    const texts = {title: a.album, artist: a.artist, name: shareTarget.name, year: current.year,
-                   url: linkFor(shareTarget)};
+    const s = cardSubject();
+    if (!s) return null;
+    const a = s.album;
+    const texts = {title: a.album, artist: a.artist, name: s.name, year: current.year, url: linkFor(s.link),
+                   kind: s.kind, played: s.played};
+    // A group's file is named by its slug: its name may be all emoji or CJK, which fileName drops.
+    const file = sc.fileName(s.kind === "group" ? s.link.id : s.name, current.year);
     const urls = a.art ? [a.art, ...(a.fallbacks || [])] : [];
     const tokens = shownTokens;
-    return {key: JSON.stringify([current.generated_at, texts, urls[0] || "", tokens]), texts, urls, tokens};
+    return {key: JSON.stringify([current.generated_at, texts, urls[0] || "", tokens]), texts, file, urls, tokens};
   }
 
   // The image for the page as it is now: the one already made, or a promise of it (null on failure).
@@ -1510,7 +1528,7 @@
     $("share-image").addEventListener(type, () => { makeCard(); }, {passive: true});
   }
 
-  async function renderCard({texts, urls, tokens}) {
+  async function renderCard({texts, file, urls, tokens}) {
     // With the real text, so the unicode-range subsets it needs load (é, Cyrillic, CJK).
     if (document.fonts && document.fonts.load) {
       await Promise.all(sc.fontLoads({texts, tokens}).map(([f, t]) => document.fonts.load(f, t).catch(() => null)));
@@ -1519,7 +1537,7 @@
     // A cover that loaded but taints the canvas (no CORS after all) makes toBlob throw: a tainted
     // canvas stays tainted, so the tile goes on a fresh one.
     const blob = (img && await drawCard(texts, tokens, img)) || await drawCard(texts, tokens, null);
-    return blob ? new File([blob], sc.fileName(texts.name, texts.year), {type: "image/png"}) : null;
+    return blob ? new File([blob], file, {type: "image/png"}) : null;
   }
 
   // One attempt on a new canvas: the PNG, or null (tainted, or toBlob gave nothing, as iOS can
