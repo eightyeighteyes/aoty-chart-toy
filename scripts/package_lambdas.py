@@ -1,6 +1,11 @@
 """Build one deployment zip per Lambda (AOTY-17) and per Fargate job (AOTY-20).
 
-  .venv/bin/python scripts/package_lambdas.py   # -> dist/{api,sync,mb,chart,uptime}.zip, dist/index.zip
+  .venv/bin/python scripts/package_lambdas.py   # -> dist/{api,sync,mb,chart,uptime,card}.zip, dist/index.zip
+
+The card Lambda (AOTY-91) is Node, not Python: card_zip packs lambdas/card with its npm
+dependencies installed for linux-arm64-gnu (npm ci --os/--cpu/--libc, whatever machine builds it),
+the page modules it runs (web/src: CARD_WEB, under web/) and its fonts, and checks the native canvas
+binary is the Lambda's and only the Lambda's.
 
 Each zip holds lambdas/<fn>/ (or jobs/<job>/) at its root, plus lambdas/common/ if present,
 plus the packages from lambdas/requirements.txt. Those are installed as Linux arm64 wheels,
@@ -29,14 +34,19 @@ FUNCTIONS = ("api", "sync", "mb", "chart", "uptime")
 JOBS = {"index": "build.py"}  # jobs/<name>/ -> its entry script
 FIXED_DATE = (1980, 1, 1, 0, 0, 0)  # the earliest date a zip entry can carry
 FILE_MODE = 0o100644
-SKIP_PARTS = {"__pycache__", ".pytest_cache"}
+# node_modules: a source tree's own install (lambdas/card's, for its tests) is never packed; the
+# card zip's dependencies come from card_deps' clean linux-arm64 install instead.
+SKIP_PARTS = {"__pycache__", ".pytest_cache", "node_modules"}
 BUILD_FILE = "build.json"
+CARD = "card"
+CARD_WEB = ("share.js", "group.js", "theme.js", "sharecard.js", "carddraw.js")  # what handler.mjs loads
+CARD_NATIVE = "@napi-rs/canvas-linux-arm64-gnu"  # the Lambda's: nodejs22.x on arm64 (AL2023, glibc)
 
 
-def _files(root):
+def _files(root, skip=True):
   for path in sorted(root.rglob("*")):
     rel = path.relative_to(root)
-    if path.is_file() and not SKIP_PARTS & set(rel.parts) and path.suffix != ".pyc":
+    if path.is_file() and not (skip and (SKIP_PARTS & set(rel.parts) or path.suffix == ".pyc")):
       yield rel.as_posix(), path
 
 
@@ -54,8 +64,9 @@ def write_zip(out, roots, extra=None):
   names is an error, because it would be silently replaced.
   """
   entries = {}
-  for root, prefix in roots:
-    for name, path in _files(root):
+  for root, prefix, *raw in roots:
+    # raw: an installed dependency tree, packed whole (its own nested node_modules included).
+    for name, path in _files(root, skip=not (raw and raw[0])):
       entries[f"{prefix}{name}"] = path
   for name, data in (extra or {}).items():
     if name in entries:
@@ -148,11 +159,53 @@ def package_all(
   return built
 
 
+def card_deps(card_dir, target, npm="npm"):
+  """npm ci the card's lockfile into target for linux-arm64-gnu; returns target/node_modules.
+
+  Raises unless the native canvas binary is exactly the Lambda's: a musl or x64 build, or none,
+  would load nowhere or fail on the first invoke.
+  """
+  shutil.rmtree(target, ignore_errors=True)
+  target.mkdir(parents=True)
+  for name in ("package.json", "package-lock.json"):
+    shutil.copyfile(card_dir / name, target / name)
+  subprocess.run(
+    [npm, "ci", "--prefix", str(target), "--omit=dev", "--os=linux", "--cpu=arm64", "--libc=glibc",
+     "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+    check=True,
+  )  # fmt: skip
+  modules = target / "node_modules"
+  check_card_native(modules)
+  return modules
+
+
+def check_card_native(modules):
+  natives = sorted(p.name for p in (modules / "@napi-rs").glob("canvas-*"))
+  want = CARD_NATIVE.split("/", 1)[1]
+  if natives != [want]:
+    raise SystemExit(f"the card zip's canvas binaries are {natives}, not just {want}")
+
+
+def card_zip(lambdas_dir, web_dir, dist_dir, modules, build=None):
+  """dist_dir/card.zip: handler.mjs and its fonts, node_modules, and the page modules under web/."""
+  card_dir = lambdas_dir / CARD
+  if not (card_dir / "handler.mjs").is_file():
+    raise SystemExit(f"{card_dir}/handler.mjs is missing: it's the entry point")
+  web = {f"web/{name}": (web_dir / name).read_bytes() for name in CARD_WEB}
+  extra = {**web, **({BUILD_FILE: build_json(build)} if build is not None else {})}
+  roots = [(modules, "node_modules/", True), (card_dir, "")]
+  return write_zip(dist_dir / f"{CARD}.zip", roots, extra)
+
+
 def main():
-  lambdas, jobs = REPO / "lambdas", REPO / "jobs"
-  sha = git_sha(REPO, [lambdas, jobs])
+  lambdas, jobs, web = REPO / "lambdas", REPO / "jobs", REPO / "web" / "src"
+  sha = git_sha(REPO, [lambdas, jobs, web])
   print(f"build sha: {sha}")
-  for path in package_all(lambdas, REPO / "dist", jobs_dir=jobs, jobs=JOBS, build={"sha": sha}):
+  build = {"sha": sha}
+  paths = package_all(lambdas, REPO / "dist", jobs_dir=jobs, jobs=JOBS, build=build)
+  modules = card_deps(lambdas / CARD, REPO / "dist" / ".card-deps")
+  paths.append(card_zip(lambdas, web, REPO / "dist", modules, build=build))
+  for path in paths:
     print(f"{path.relative_to(REPO)}: {path.stat().st_size} bytes")
 
 

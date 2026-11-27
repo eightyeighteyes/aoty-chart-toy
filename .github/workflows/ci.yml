@@ -46,10 +46,16 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       # Fixtures are recorded MusicBrainz responses (tests/fixtures/mb); nothing hits the network.
       - run: pytest
-      # The page's pure JS (AOTY-23), with the runner's preinstalled Node: no npm, no deps.
+      # Node 22, the card Lambda's runtime (AOTY-91).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      # The page's pure JS (AOTY-23), and the card Lambda's render on real canvas: its one dependency,
+      # installed for this runner (linux-x64), so web/test/card.test.mjs draws a real PNG.
       - name: node tests
         run: |
           node --version
+          npm ci --prefix lambdas/card --no-audit --no-fund
           node --check web/src/app.js
           node --check web/src/intro.js
           node --test web/test/*.test.mjs

@@ -190,6 +190,87 @@ def test_no_requirements_means_no_pip(tree, tmp_path, monkeypatch):
   assert calls == []
 
 
+# ---- the card Lambda (AOTY-91): Node, packed by card_deps and card_zip --------------------------
+
+
+@pytest.fixture
+def card_tree(tree, tmp_path):
+  """lambdas/card with a local test install, web/src with the page modules, and a fake npm tree."""
+  card = tree / "card"
+  (card / "fonts").mkdir(parents=True)
+  (card / "handler.mjs").write_text("export const handler = async () => ({ok: true});\n")
+  (card / "package.json").write_text('{"name": "card"}\n')
+  (card / "package-lock.json").write_text("{}\n")
+  (card / "fonts" / "Inter-500.ttf").write_bytes(b"font")
+  (card / "node_modules" / "@napi-rs" / "canvas-darwin-arm64").mkdir(parents=True)  # a developer's own
+  (card / "node_modules" / "@napi-rs" / "canvas-darwin-arm64" / "skia.node").write_bytes(b"mac")
+  web = tmp_path / "web"
+  web.mkdir()
+  for name in pkg.CARD_WEB:
+    (web / name).write_text(f"// {name}\n")
+  modules = tmp_path / "linux" / "node_modules"
+  for d in ("canvas", "canvas-linux-arm64-gnu"):
+    (modules / "@napi-rs" / d).mkdir(parents=True)
+    (modules / "@napi-rs" / d / "index.js").write_text("// x\n")
+  (modules / "@napi-rs" / "canvas" / "node_modules" / "dep").mkdir(parents=True)  # nested deps go too
+  (modules / "@napi-rs" / "canvas" / "node_modules" / "dep" / "a.js").write_text("// dep\n")
+  return tree, web, modules
+
+
+def test_the_card_zip_holds_the_handler_fonts_page_modules_and_the_linux_install(card_tree, tmp_path):
+  tree, web, modules = card_tree
+  out = pkg.card_zip(tree, web, tmp_path / "dist", modules, build={"sha": "abc"})
+  got = names(out)
+  assert {"handler.mjs", "package.json", "fonts/Inter-500.ttf", "build.json"} <= set(got)
+  assert {f"web/{n}" for n in pkg.CARD_WEB} <= set(got)
+  assert "node_modules/@napi-rs/canvas-linux-arm64-gnu/index.js" in got
+  assert "node_modules/@napi-rs/canvas/node_modules/dep/a.js" in got
+  assert not any("darwin" in n for n in got)  # the developer's own install never ships
+
+
+def test_the_card_zip_is_reproducible(card_tree, tmp_path):
+  tree, web, modules = card_tree
+  a = pkg.card_zip(tree, web, tmp_path / "a", modules, build={"sha": "abc"}).read_bytes()
+  b = pkg.card_zip(tree, web, tmp_path / "b", modules, build={"sha": "abc"}).read_bytes()
+  assert a == b
+
+
+def test_only_the_lambdas_canvas_binary_is_accepted(card_tree, tmp_path):
+  _, _, modules = card_tree
+  pkg.check_card_native(modules)
+  (modules / "@napi-rs" / "canvas-linux-arm64-musl").mkdir()
+  with pytest.raises(SystemExit, match="musl"):
+    pkg.check_card_native(modules)
+  for d in ("canvas-linux-arm64-musl", "canvas-linux-arm64-gnu"):
+    (modules / "@napi-rs" / d / "index.js").unlink(missing_ok=True)
+    (modules / "@napi-rs" / d).rmdir()
+  with pytest.raises(SystemExit, match="not just"):
+    pkg.check_card_native(modules)  # none at all
+
+
+def test_card_deps_installs_for_linux_arm64_glibc(card_tree, tmp_path, monkeypatch):
+  tree, _, modules = card_tree
+  calls = []
+
+  def fake_run(cmd, **k):
+    calls.append(cmd)
+    target = tmp_path / "deps" / "node_modules" / "@napi-rs" / "canvas-linux-arm64-gnu"
+    target.mkdir(parents=True)
+
+  monkeypatch.setattr(pkg.subprocess, "run", fake_run)
+  out = pkg.card_deps(tree / "card", tmp_path / "deps")
+  (cmd,) = calls
+  assert cmd[:2] == ["npm", "ci"] and out == tmp_path / "deps" / "node_modules"
+  for flag in ("--os=linux", "--cpu=arm64", "--libc=glibc", "--omit=dev", "--ignore-scripts"):
+    assert flag in cmd
+
+
+def test_the_card_doesnt_make_the_build_dirty_with_its_test_install(card_tree):
+  # git_sha walks the same files the zips would carry: node_modules is never one of them.
+  tree, _, _ = card_tree
+  assert not any("node_modules" in n for n, _ in pkg._files(tree / "card"))
+
+
 def test_requirements_install_linux_arm64_wheels(tree, tmp_path, monkeypatch):
   (tree / "requirements.txt").write_text("requests==2.34.2\n")
   calls = []
