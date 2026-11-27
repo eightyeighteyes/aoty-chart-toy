@@ -70,7 +70,7 @@ locals {
 
   full_alarms = merge(
     {
-      for fn in ["sync", "mb", "chart"] : "${fn}-errors" => {
+      for fn in ["sync", "mb", "chart", "card"] : "${fn}-errors" => {
         summary   = "The ${fn} Lambda failed at least twice in an hour."
         anchor    = "lambda-errors"
         namespace = "AWS/Lambda"

@@ -19,7 +19,15 @@ locals {
     chart = { timeout = 300, memory = 512, reserved = 1 }
     # The hourly check of kamp.fm (AOTY-27, uptime.tf): three small fetches.
     uptime = { timeout = 60, memory = 128, reserved = null }
+    # Link preview cards (AOTY-91): Node, drawing the page's share card on @napi-rs/canvas. The chart
+    # builder calls it synchronously, one build at a time, so reserved 1 never throttles it; 1024 MB
+    # for Skia's speed. The rest take the Python defaults below.
+    card = { timeout = 20, memory = 1024, reserved = 1, runtime = "nodejs22.x" }
   }
+  # Every function's entry point is handler.handler: handler.py, or the card's handler.mjs.
+  runtime_default = "python3.13"
+  # The share links' short host (AOTY-84), as build_shell.py's rule: prod's base alone.
+  short_host = var.base_path == "/toys/aoty/" ? "aoty.kamp.fm" : ""
 
   function_env = {
     AOTY_ENV       = var.environment
@@ -37,6 +45,8 @@ locals {
     MB_COLD_URL    = aws_sqs_queue.main["mb-cold"].url
     MB_FUNCTION    = "${local.prefix}-mb"
     CHART_FUNCTION = "${local.prefix}-chart"
+    CARD_FUNCTION  = "${local.prefix}-card" # AOTY-91: the chart builder's preview cards
+    SHORT_HOST     = local.short_host       # the card's printed link, as the page's
     SITE_PREFIX    = local.s3_key_prefix
     ENFORCE_ORIGIN = tostring(var.enforce_origin)
     # For the status API's estimated wait (AOTY-26): syncs that run side by side.
@@ -197,6 +207,11 @@ locals {
         resources = ["${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/groups/*"]
       },
       {
+        # Its link preview card (AOTY-91), drawn synchronously after each build and restyle.
+        actions   = ["lambda:InvokeFunction"]
+        resources = ["arn:aws:lambda:${local.region}:${local.account}:function:${local.prefix}-card"]
+      },
+      {
         actions   = ["dynamodb:BatchGetItem"]
         resources = [aws_dynamodb_table.albums.arn]
       },
@@ -212,12 +227,24 @@ locals {
     ]
     # Fetches kamp.fm over the internet; it touches nothing of the stack's (its SSM read is below).
     uptime = []
+    # Writes the card the chart builder asks for, and nothing else (AOTY-91). It reads no S3: the
+    # chart comes in the invoke. Covers come from Last.fm and the Cover Art Archive, over the internet.
+    card = [
+      {
+        actions = ["s3:PutObject"]
+        resources = [
+          "${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/users/*/og.png",
+          "${aws_s3_bucket.site.arn}/${local.s3_key_prefix}data/groups/*/og.png",
+        ]
+      },
+    ]
   }
 
   # SSM names each function may read. uptime reads only its own: it has no use for the API key.
+  # card reads none. A function with none gets no Params statement (an empty resource list is invalid).
   function_params = {
     for fn in keys(local.functions) : fn => (
-      fn == "uptime" ? [local.ssm_params.uptime_user] : values(local.ssm_params)
+      fn == "uptime" ? [local.ssm_params.uptime_user] : fn == "card" ? [] : values(local.ssm_params)
     )
   }
 }
@@ -255,19 +282,26 @@ data "aws_iam_policy_document" "fn" {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.fn[each.key].arn}:*"]
   }
-  statement {
-    sid       = "Params"
-    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [for name in local.function_params[each.key] : "arn:aws:ssm:${local.region}:${local.account}:parameter${name}"]
+  # Only for a function that reads SSM (the card reads none, AOTY-91).
+  dynamic "statement" {
+    for_each = length(local.function_params[each.key]) > 0 ? [1] : []
+    content {
+      sid       = "Params"
+      actions   = ["ssm:GetParameter", "ssm:GetParameters"]
+      resources = [for name in local.function_params[each.key] : "arn:aws:ssm:${local.region}:${local.account}:parameter${name}"]
+    }
   }
-  statement {
-    sid       = "DecryptParams"
-    actions   = ["kms:Decrypt"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${local.region}.amazonaws.com"]
+  dynamic "statement" {
+    for_each = length(local.function_params[each.key]) > 0 ? [1] : []
+    content {
+      sid       = "DecryptParams"
+      actions   = ["kms:Decrypt"]
+      resources = ["*"]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ssm.${local.region}.amazonaws.com"]
+      }
     }
   }
 
@@ -299,8 +333,8 @@ resource "aws_lambda_function" "fn" {
 
   function_name = "${local.prefix}-${each.key}"
   role          = aws_iam_role.fn[each.key].arn
-  runtime       = "python3.13"
-  architectures = ["arm64"] # ~20% cheaper; packaging must use aarch64 wheels
+  runtime       = try(each.value.runtime, local.runtime_default)
+  architectures = ["arm64"] # ~20% cheaper; packaging must use aarch64 wheels (and the card's linux-arm64 canvas)
   handler       = "handler.handler"
   timeout       = each.value.timeout
   memory_size   = each.value.memory

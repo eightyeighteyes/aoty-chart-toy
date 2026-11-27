@@ -442,8 +442,8 @@ def _card(deps, chart, key, totals=None):
     log.exception("could not draw the preview card")
     _bump(totals, "card_failed")
     return None
-  if not answer.get("ok"):
-    if answer.get("reason") not in ("empty", "glyphs"):  # those two are by design
+  if not answer.get("ok") or answer.get("key") != key:  # e.g. Terraform's placeholder answers {"ok": true}
+    if answer.get("ok") or answer.get("reason") not in ("empty", "glyphs"):  # those two are by design
       log.warning("no preview card: %s", answer.get("reason"))
       _bump(totals, "card_failed")
     return None

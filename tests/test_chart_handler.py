@@ -325,6 +325,8 @@ def test_a_build_asks_the_card_lambda_and_its_preview_shows_the_card(h, world):
   (FakeCardLambda({"ok": False, "reason": "error"}), 1),
   (FakeCardLambda({"errorMessage": "boom"}, function_error="Unhandled"), 1),  # a crash, or the placeholder
   (FakeCardLambda(error=TimeoutError("read timeout")), 1),
+  (FakeCardLambda({"ok": True, "placeholder": "kamp-aoty-test-card"}), 1),  # never deployed: no key
+  (FakeCardLambda(drawn(key="toys/aoty-test/data/users/bob/og.png")), 1),  # someone else's card
 ])  # fmt: skip
 def test_without_a_card_the_preview_keeps_the_bare_cover_and_the_build_succeeds(h, world, card, failed):
   s3, ddb = world

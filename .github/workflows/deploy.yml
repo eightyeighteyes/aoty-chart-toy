@@ -115,8 +115,14 @@ jobs:
           ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
-          for fn in api sync mb chart uptime; do
-            name=$(jq -r ".function_names.$fn" "$RUNNER_TEMP/stack.json")
+          for fn in api sync mb chart uptime card; do
+            name=$(jq -r ".function_names.$fn // empty" "$RUNNER_TEMP/stack.json")
+            # The card Lambda (AOTY-91) is newer than older tags: a rollback to one builds no
+            # card.zip, and an env applied before it has no function. Leave it as it is then.
+            if [ ! -f "dist/$fn.zip" ] || [ -z "$name" ]; then
+              echo "skipping $fn: no dist/$fn.zip or no function"
+              continue
+            fi
             # Wait first: a config change from the apply above leaves the function "InProgress",
             # and update-function-code would fail with ResourceConflictException.
             aws lambda wait function-updated --function-name "$name"
