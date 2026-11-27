@@ -99,7 +99,14 @@ def build(base, src=SRC, out=OUT, ga_id="", short_host=""):
   shutil.rmtree(out, ignore_errors=True)
   (out / "assets").mkdir(parents=True)
   published = {}
-  values = {"BASE": base, "NAME": NAME, "TITLE": TITLE, "YEAR": str(TARGET_YEAR), "GA": ga_id, "SHORT": short_host}
+  values = {
+    "BASE": base,
+    "NAME": NAME,
+    "TITLE": TITLE,
+    "YEAR": str(TARGET_YEAR),
+    "GA": ga_id,
+    "SHORT": short_host,
+  }
   for name, placeholder in ASSETS.items():
     data = (src / name).read_bytes()
     hashed = hashed_name(name, data)
@@ -122,7 +129,9 @@ def main():
   p.add_argument("--base", required=True, help="the env's base path, e.g. /toys/aoty/")
   p.add_argument("--out", type=Path, default=OUT)
   p.add_argument("--ga-id", default="", help="GA4 measurement id (prod only); empty for no analytics")
-  p.add_argument("--short-host", default="", help="share links' short host (prod only, aoty.kamp.fm); empty for none")
+  p.add_argument(
+    "--short-host", default="", help="share links' short host (prod only, aoty.kamp.fm); empty for none"
+  )
   args = p.parse_args()
   for name, path in build(args.base, out=args.out, ga_id=args.ga_id, short_host=args.short_host).items():
     print(f"{name} -> {args.base}{path}")
