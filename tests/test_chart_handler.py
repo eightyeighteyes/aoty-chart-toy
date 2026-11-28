@@ -773,6 +773,26 @@ def test_a_burst_of_member_syncs_builds_the_group_once_it_has_read_them(h):
   assert ddb.groups[(f"group#{GROUP}", "meta")]["chart_read_at"] == NOW * 1000
 
 
+def test_the_metric_line_counts_group_builds_and_coalesced_ones(h, capsys):
+  """AOTY-53: plain fields, not metric names, so the load test and the dashboard can see coalescing."""
+  s3, ddb = group_world()
+  group_puts(s3, ddb)
+  for u in ("alice", "bob", "carol"):
+    h.handler({"username": u, "requested_at": NOW - 60}, None, Deps(s3, ddb))
+  lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+  assert [(x["groups_built"], x["groups_coalesced"]) for x in lines] == [(1, 0), (0, 1), (0, 1)]
+  assert lines[0]["group_members_max"] == 5 and lines[0]["group_seconds_max"] >= 0
+  assert lines[1]["group_members_max"] == 0
+  names = {m["Name"] for m in lines[0]["_aws"]["CloudWatchMetrics"][0]["Metrics"]}
+  assert not any(n.startswith("Group") for n in names)
+  # An api request its chart already covers is coalesced too.
+  meta = ddb.groups[(f"group#{GROUP}", "meta")]
+  meta["chart_requested_at"] = meta["chart_built_at"] = NOW
+  h.handler({"group": GROUP, "requested_at": NOW}, None, Deps(s3, ddb))
+  (line,) = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+  assert (line["groups_built"], line["groups_coalesced"]) == (0, 1)
+
+
 def test_a_group_read_in_the_same_second_as_a_sync_finished_rebuilds(h):
   s3, ddb = group_world(chart_read_at=(NOW - 60) * 1000 + 999)  # read in bob's finishing second
   puts = group_puts(s3, ddb)

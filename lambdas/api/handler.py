@@ -192,9 +192,12 @@ def handler(event, context, deps=None):
       **extra,
     )
   elif info.get("action") in AUTH_ACTIONS:
+    # AuthFailures (AOTY-53, alarmed in prod) counts only failures of ours (core.auth_failure);
+    # sign-ins and the visitor-made failures stay in the auth field, free.
+    failed = core.auth_failure(info.get("auth"), info.get("auth_code"))
     emf.emit(
       os.environ.get("AOTY_ENV", ""),
-      {"LastfmCalls": (info.get("lastfm_calls", 0), "Count")},
+      {"LastfmCalls": (info.get("lastfm_calls", 0), "Count"), "AuthFailures": (int(failed), "Count")},
       source="api",
       auth=info.get("auth") or str(out.get("statusCode")),
       action=info["action"],
@@ -498,6 +501,7 @@ def auth_callback(deps, event, headers, nonce, base, info):
   except Exception as e:  # LastfmError (a used or expired token), a timeout, SSM for the API key
     log.warning("auth.getSession failed: %s", getattr(e, "code", type(e).__name__))
     info["auth"] = "lastfm_failed"
+    info["auth_code"] = getattr(e, "code", None)  # a token code is the visitor's, not ours (AOTY-53)
     return _redirect(failed, [clear_state])
   if not name or not core.USERNAME_RE.match(name):
     info["auth"] = "bad_name"
