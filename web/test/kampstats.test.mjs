@@ -151,6 +151,11 @@ test("nothing loads while consent is undecided or denied; a yes loads gtag once,
   assert.deepEqual(p.calls().at(-1), ["consent", "update", {analytics_storage: "denied"}]);
 });
 
+test("wait_abandoned says the stage and nothing else (AOTY-28)", () => {
+  assert.deepEqual(clean("wait_abandoned", {stage: "queued", user: "alice", position: 3}), {stage: "queued"});
+  assert.deepEqual(clean("wait_abandoned", {stage: "idle"}), {});
+});
+
 test("no consent module at all means nothing loads", () => {
   assert.deepEqual(fakePage(BASE, {consent: null}).injected, []);
 });

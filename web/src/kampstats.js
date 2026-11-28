@@ -32,11 +32,18 @@
   // The intro's answers (intro.js MESSAGES keys), plus "ok" for a name that leads to a chart.
   const OUTCOMES = ["ok", "empty", "format", "unknown", "private", "lastfm", "busy", "paused", "tooMany",
                     "throttled", "generic"];
+  // The events audit (AOTY-28) against AOTY-38's original list: username_submitted and
+  // username_invalid are intro_submit's outcomes; sync_started is the page view (every chart page
+  // load requests its sync); sync_completed is first_visit_end; chart_viewed is the page view by
+  // page_type; share_clicked is share_copy, share_native and share_image. Only wait_abandoned was new.
+  //
   // Each event's allowed params: a list of values, or "count" for a small whole number. An
   // unknown event is dropped, and so is any param or value not listed.
   const EVENTS = {
     intro_submit: {outcome: OUTCOMES},
     first_visit_end: {result: ["painted", "none", "stalled", "private", "error"]},
+    // A first visit left while still waiting (AOTY-28): the stage only.
+    wait_abandoned: {stage: ["queued", "reading", "building", "dating"]},
     group_loaded: {group_size: "count"},
     // "content" and "shape" are the share image's #1 | top 3 | top 10 (AOTY-73, AOTY-74) and
     // square | story (AOTY-72).
