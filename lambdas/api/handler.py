@@ -18,6 +18,8 @@ answer, errors included, is Cache-Control: no-store.
   POST <base>api/users/<name>/theme   the signed-in owner's page theme (AOTY-65; see "page
                                       themes" below): 200 {theme} | 400 unknown_theme |
                                       401 | 403 not_owner | 404 no_chart | 415 | 503
+  POST <base>api/users/<name>/background  the owner's page background (AOTY-96), the same way:
+                                      200 {background} | 400 unknown_background | ...
 
 POST sync, in order:
   1. A user with no row (or an expired not_found one) is new. Unless new users are paused, the
@@ -57,13 +59,14 @@ import hashlib
 import json
 import logging
 import os
+import random
 import time
 from pathlib import Path
 
 import api_core as core
 import groups_store
 
-from common import dynamo, emf, guardrails, lastfm, session, themes
+from common import backgrounds, dynamo, emf, guardrails, lastfm, session, themes
 from common import groups as grp
 
 log = logging.getLogger()
@@ -101,8 +104,9 @@ class Deps:
 
   def __init__(self, *, ddb, sqs, env, lastfm_client=None, lastfm_factory=None, clock=time.time,
                settings=None, origin_secrets=None, auth_secrets=None, lam=None,
-               sleep=time.sleep):  # fmt: skip
+               sleep=time.sleep, rng=None):  # fmt: skip
     self.ddb, self.sqs, self.env, self.clock, self.sleep = ddb, sqs, env, clock, sleep
+    self.rng = rng or random  # a new page's starting background (AOTY-96)
     self.lam = lam  # the Lambda client: group changes poke the chart builder (AOTY-48)
     self._lastfm, self._lastfm_factory = lastfm_client, lastfm_factory
     self.settings = settings or (lambda: guardrails.DEFAULTS)
@@ -265,6 +269,8 @@ def _dispatch(event, context, deps, info):
       return _group_dispatch(deps, event, headers, action, arg, ip, trusted, info)
     if action == "theme":
       return post_theme(deps, event, headers, arg, info)
+    if action == "background":
+      return post_background(deps, event, headers, arg, info)
     return post_sync(deps, arg, headers, ip, trusted, info)
   except groups_store.Changed:
     info["group"] = "changed"
@@ -376,7 +382,10 @@ def request_sync(deps, name, row, display, now, info=None, lean=False):
 
   previous = {k: row.get(k) for k in ("state", "sync_requested_at", "queue_ticket")}
   ticket = _take_ticket(deps)
-  if not _mark_queued(deps, name, now, cooldown, display, ticket):
+  # A new page starts with a random background (AOTY-96), stored once so every visitor sees the
+  # same; one with any already (an owner's pick, an earlier try) keeps it.
+  background = backgrounds.random_engine(deps.rng) if new else None
+  if not _mark_queued(deps, name, now, cooldown, display, ticket, background):
     _burn_tickets(deps, ticket)
     if lean:
       return 200, {"queued": False, "reason": "in_progress", "status": None}
@@ -670,7 +679,8 @@ def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
   if action != "group_create" and not grp.SLUG_RE.match(slug or ""):
     info["group"] = "missing"
     return _response(404, {"error": "no such group"})
-  body = _json_body(event) if action in ("group_create", "group_rename", "member_add", "group_theme") else {}
+  with_body = ("group_create", "group_rename", "member_add", "group_theme", "group_background")
+  body = _json_body(event) if action in with_body else {}
   if body is None:
     info["group"] = "bad_json"
     return _response(400, {"error": "send a JSON object"})
@@ -683,23 +693,26 @@ def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
   if action == "member_add":
     return member_add(deps, user, slug, body, headers, ip, trusted, info)
   if action == "group_theme":
-    return group_theme(deps, user, slug, body, info)
+    return group_style(deps, user, slug, body, info, "theme", themes.valid, themes.IDS)
+  if action == "group_background":
+    return group_style(deps, user, slug, body, info, "background", backgrounds.valid, backgrounds.IDS)
   return member_remove(deps, user, slug, arg[1], info)
 
 
-def group_theme(deps, user, slug, body, info):
-  """POST groups/<id>/theme {theme} (AOTY-76): the group owner's page theme, then a restyle of the
-  published chart. Owner means group.owner, not membership (AOTY-52)."""
-  theme = body.get("theme")
-  if not themes.valid(theme):
-    info["group"] = "unknown_theme"
-    return _response(400, {"error": "unknown_theme", "themes": sorted(themes.IDS)})
-  word = groups_store.set_theme(deps, slug, user, theme, int(deps.clock()))
+def group_style(deps, user, slug, body, info, field, valid, ids):
+  """POST groups/<id>/theme {theme} (AOTY-76) or groups/<id>/background {background} (AOTY-96): the
+  group owner's page style, then a restyle of the published chart. Owner means group.owner, not
+  membership (AOTY-52)."""
+  value = body.get(field)
+  if not valid(value):
+    info["group"] = f"unknown_{field}"
+    return _response(400, {"error": f"unknown_{field}", f"{field}s": sorted(ids)})
+  word = groups_store.set_style(deps, slug, user, field, value, int(deps.clock()))
   if word != "set":
     return _refused(word, info)
-  info["group"] = "theme"
+  info["group"] = field
   _request_group_restyle(deps, slug)
-  return _response(200, {"theme": theme})
+  return _response(200, {field: value})
 
 
 def _request_group_restyle(deps, slug):
@@ -741,6 +754,9 @@ def group_get(deps, slug):
   theme = meta.get("theme")
   if themes.valid(theme) and theme != themes.DEFAULT:
     out["theme"] = theme
+  background = backgrounds.engine(meta.get("background"))  # AOTY-96, the same way
+  if background:
+    out["background"] = background
   return _response(200, out)
 
 
@@ -818,7 +834,8 @@ def group_create(deps, user, body, info):
   if len(groups_store.owned_by(deps, user)) >= settings.max_groups_per_owner:
     info["group"] = "too_many_groups"
     return _response(409, {"error": "too_many_groups", "max": settings.max_groups_per_owner})
-  if groups_store.create(deps, slug, name, user, now) == "taken":
+  # A new group starts with a random background (AOTY-96), the same for every visitor.
+  if groups_store.create(deps, slug, name, user, now, backgrounds.random_engine(deps.rng)) == "taken":
     return _refused("taken", info)
   log.info("group %s created by %s", slug, _tag(user))
   info["group"] = "created"
@@ -975,46 +992,59 @@ def put_settings(deps, user, body, info):
 
 
 def post_theme(deps, event, headers, name, info):
+  return _post_style(deps, event, headers, name, info, "theme", themes.valid, themes.IDS)
+
+
+# POST <base>api/users/<name>/background {"background": <common.backgrounds id>} (AOTY-96): the
+# same write for the page's background, "none" included. Its restyle is the theme's: the chart
+# builder copies both from the row.
+def post_background(deps, event, headers, name, info):
+  return _post_style(deps, event, headers, name, info, "background", backgrounds.valid, backgrounds.IDS)
+
+
+def _post_style(deps, event, headers, name, info, field, valid, ids):
+  """The owner's write of one of their page's style fields (field, field_set_at on the row)."""
   if deps.env.get("GROUP_WRITES") != "true":
-    info["theme"] = "disabled"
+    info[field] = "disabled"
     return _response(503, {"error": "writes_off"})
   if not headers.get("content-type", "").lower().startswith("application/json"):
-    info["theme"] = "not_json"
+    info[field] = "not_json"
     return _response(415, {"error": "send content-type: application/json"})
   keys = _auth_keys(deps)
   if not keys:  # not 401: an SSM outage mustn't read as signed out
-    info["theme"] = "signin_unavailable"
+    info[field] = "signin_unavailable"
     return _response(503, {"error": "signin_unavailable"})
   try:
     user, word = session_user(deps, event, keys)
   except SessionUnavailable:
-    info["theme"] = "signin_unavailable"
+    info[field] = "signin_unavailable"
     return _response(503, {"error": "signin_unavailable"})
   if not user:
-    info["theme"] = word
+    info[field] = word
     return _response(401, {"error": "signed_out"})
   if user != name:
-    info["theme"] = "not_owner"
+    info[field] = "not_owner"
     return _response(403, {"error": "not_owner"})
   body = _json_body(event)
-  if body is None or not themes.valid(body.get("theme")):
-    info["theme"] = "unknown_theme"
-    return _response(400, {"error": "unknown_theme", "themes": sorted(themes.IDS)})
-  theme, now = body["theme"], int(deps.clock())
+  if body is None or not valid(body.get(field)):
+    info[field] = f"unknown_{field}"
+    return _response(400, {"error": f"unknown_{field}", f"{field}s": sorted(ids)})
+  value, now = body[field], int(deps.clock())
   try:
-    # Only an existing row: a theme alone mustn't make a users row (it would read as a known user).
+    # Only an existing row: a style alone mustn't make a users row (it would read as a known user).
     deps.ddb.update_item(TableName=deps.env["USERS_TABLE"], Key={"username": {"S": name}},
-                         UpdateExpression="SET theme = :t, theme_set_at = :n",
+                         UpdateExpression="SET #f = :v, #at = :n",
                          ConditionExpression="attribute_exists(username)",
-                         ExpressionAttributeValues={":t": {"S": theme}, ":n": {"N": str(now)}})  # fmt: skip
+                         ExpressionAttributeNames={"#f": field, "#at": f"{field}_set_at"},
+                         ExpressionAttributeValues={":v": {"S": value}, ":n": {"N": str(now)}})  # fmt: skip
   except Exception as e:
     if _error_code(e) != "ConditionalCheckFailedException":
       raise
-    info["theme"] = "no_chart"
+    info[field] = "no_chart"
     return _response(404, {"error": "no_chart"})
   _request_restyle(deps, name)
-  info["theme"] = "set"
-  return _response(200, {"theme": theme})
+  info[field] = "set"
+  return _response(200, {field: value})
 
 
 def _request_restyle(deps, name):
@@ -1098,12 +1128,14 @@ def _update(deps, name, fields, remove=()):
                        ExpressionAttributeValues=values)  # fmt: skip
 
 
-def _mark_queued(deps, name, now, cooldown, display, ticket=None):
+def _mark_queued(deps, name, now, cooldown, display, ticket=None, background=None):
   """Set state=queued and sync_requested_at (and queue_ticket), unless another request beat us
   to it. True if set.
 
   The condition repeats decide_sync atomically: no recent request, and no live sync (one idle
   past STUCK_AFTER counts as dead; decide_sync has already kept a queued row in a long queue).
+  background (a new user's, AOTY-96) is set only where the row has none: if_not_exists, so a
+  retried first sync never re-rolls it and an owner's pick is never overwritten.
   """
   fields = {"state": "queued", "sync_requested_at": now}
   if display:
@@ -1117,6 +1149,11 @@ def _mark_queued(deps, name, now, cooldown, display, ticket=None):
     ":q": "queued", ":sy": "syncing", ":rt": "retrying",
     **{f":f{i}": v for i, v in enumerate(fields.values())},
   })  # fmt: skip
+  sets = [f"#f{i} = :f{i}" for i in range(len(fields))]
+  if background:
+    names["#bg"] = "background"
+    values[":bg"] = {"S": background}
+    sets.append("#bg = if_not_exists(#bg, :bg)")
   condition = (
     "(attribute_not_exists(#rq) OR #rq < :cool)"
     " AND (attribute_not_exists(#s) OR NOT (#s IN (:q, :sy, :rt))"
@@ -1126,9 +1163,7 @@ def _mark_queued(deps, name, now, cooldown, display, ticket=None):
     deps.ddb.update_item(
       TableName=deps.env["USERS_TABLE"],
       Key={"username": {"S": name}},
-      UpdateExpression="SET "
-      + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields)))
-      + " REMOVE expires_at",
+      UpdateExpression="SET " + ", ".join(sets) + " REMOVE expires_at",
       ConditionExpression=condition,
       ExpressionAttributeNames=names,
       ExpressionAttributeValues=values,
