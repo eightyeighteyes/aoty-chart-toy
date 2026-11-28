@@ -1,6 +1,7 @@
 """The preview server's fake first visits (tools/serve_shell.py, AOTY-24) follow the real pipeline."""
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,18 @@ def test_the_preview_theme_route_answers_like_the_api(ss, tmp_path):
   assert ss.fake_theme("POST", "alice", {"theme": "nope"}, "alice", tmp_path)[0] == 400
   assert ss.fake_theme("POST", "carol", {"theme": "kamp"}, "carol", tmp_path)[0] == 404
   assert ss.fake_theme("GET", "alice", {}, "alice", tmp_path)[0] == 405
+
+
+def test_no_image_on_the_page_comes_from_a_blob_url_which_the_csp_refuses(ss):
+  # AOTY-106: kamp.fm's img-src (mirrored here) allows data: but not blob:, so the share image's
+  # preview showed its alt text. The one blob URL left is the download's <a href>, which img-src
+  # doesn't cover. A new one needs a reason, or kamp-site's CSP changing first.
+  img_src = next(p for p in ss.CSP.split(";") if p.strip().startswith("img-src")).split()
+  assert "data:" in img_src and "blob:" not in img_src
+  app = (Path(__file__).resolve().parent.parent / "web" / "src" / "app.js").read_text()
+  uses = [m.start() for m in re.finditer(r"URL\.createObjectURL\(", app)]
+  assert len(uses) == 1, "a new blob: URL in app.js: the CSP refuses it as an image"
+  assert "a.download = file.name" in app[uses[0] : uses[0] + 300]  # the download's, nothing else
 
 
 def test_the_preview_wall_mixes_ready_slow_broken_and_missing_covers(ss):
