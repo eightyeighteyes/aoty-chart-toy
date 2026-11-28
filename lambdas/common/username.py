@@ -8,8 +8,8 @@ segment. It's also the path-safety rule for S3 keys and routes, so loosen it wit
 Copies that must change with it (tests/test_username.py checks the first and last):
   - web/src/intro.js USERNAME_RE (the page; app.js reuses it), the same pattern source.
   - kamp-site's infra/functions/aoty-short.js NAME_RE and web/src/share.js SHORT_NAME_RE: the
-    short link's narrower rule (a letter or digit first, no "."). A name it refuses gets the
-    full kamp.fm link instead.
+    short link's narrower rule (no "."; share.js also wants 2+ characters). Both take a leading
+    "_" since AOTY-89. A name they refuse gets the full kamp.fm link instead.
   - The CD smoke test's name (.github/workflows/deploy.yml, "-smoke-") must stay *invalid*: its
     POST sync expects a 400 without any Last.fm call.
 """

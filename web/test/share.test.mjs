@@ -25,13 +25,18 @@ test("without a short host, links are the full page with no query", () => {
                "https://kamp.fm/toys/aoty/group/the-crew");
 });
 
+test("a name that starts with an underscore gets the short link too (AOTY-89)", () => {
+  assert.equal(shareUrl({...PROD, kind: "user", id: "_korps_"}), "https://aoty.kamp.fm/_korps_");
+});
+
 test("a name the short host won't take falls back to the full URL", () => {
   // One-letter first segments are reserved for short routes (/g), so a one-letter name isn't short.
   assert.equal(shareUrl({...PROD, kind: "user", id: "g"}), "https://kamp.fm/toys/aoty/user/g");
   // USERNAME_RE allows a dot; aoty.kamp.fm's rule doesn't.
   assert.equal(shareUrl({...PROD, kind: "user", id: "a.b"}), "https://kamp.fm/toys/aoty/user/a.b");
-  // So does a leading "_" (AOTY-80): aoty.kamp.fm wants a letter or digit first.
-  assert.equal(shareUrl({...PROD, kind: "user", id: "_korps_"}), "https://kamp.fm/toys/aoty/user/_korps_");
+  // "_" alone is one character, so reserved like "g".
+  assert.equal(shareUrl({...PROD, kind: "user", id: "_"}), "https://kamp.fm/toys/aoty/user/_");
+  assert.equal(shareUrl({...PROD, kind: "user", id: "-x"}), "https://kamp.fm/toys/aoty/user/-x");
   assert.equal(shareUrl({...PROD, kind: "user", id: "x".repeat(65)}),
                `https://kamp.fm/toys/aoty/user/${"x".repeat(65)}`);
   assert.equal(shareUrl({...PROD, kind: "user", id: "a b"}), "https://kamp.fm/toys/aoty/user/a%20b");

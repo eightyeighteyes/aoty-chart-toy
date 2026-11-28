@@ -975,9 +975,8 @@ Notes:
   short routes like `/g` never collide with a user. A future short route must be one letter too.
 - The function's name rule has no `.`, because the shell function treats a dotted last segment as
   a file. If `USERNAME_RE` ever loosens, check the function too.
-- **It still wants a letter or digit first.** AOTY-80 let usernames start with `_`, so
-  `_korps_`'s share link is the full kamp.fm URL until AOTY-89 changes kamp-site's function, then
-  `share.js`.
+- **A leading `_` is fine** (AOTY-89): `aoty.kamp.fm/_korps_` works, since kamp-site's function
+  and `share.js` both take it. A leading `-` or `.` never does.
 - Share links use it since AOTY-84 (below). Share images (AOTY-70) move to it in their own ticket.
 
 ## Link previews (AOTY-85, 2026-11-27)
@@ -1067,8 +1066,8 @@ Notes:
 - **The link** (`share.shareUrl`) never has a query.
   - On prod it's `aoty.kamp.fm/<Name>` (display casing) or `aoty.kamp.fm/g/<slug>`.
   - Everywhere else it's the page's own address.
-  - So is any name the short host won't take: one letter (reserved), a `.` (which `USERNAME_RE`
-    allows), a leading `_` (AOTY-89), or anything not a slug.
+  - So is any name the short host won't take: one letter (reserved, `_` included), a `.` (which
+    `USERNAME_RE` allows), or anything not a slug. A leading `_` is short since AOTY-89.
   - The first visit's queue line names the same link.
 - **The short host is set at build time, never guessed in the page.**
   - `build_shell --short-host` writes `<meta name="aoty-short">`. It accepts only `aoty.kamp.fm`,

@@ -7,9 +7,10 @@
   "use strict";
 
   // What aoty.kamp.fm redirects: a name of 2+ characters (one-letter first segments are reserved
-  // for short routes like /g) with no "." (USERNAME_RE allows one, the redirect doesn't), and a
-  // group slug as group.js ID_RE. Anything else gets the full URL, which always works.
-  const SHORT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$/;
+  // for short routes like /g) with no "." (USERNAME_RE allows one, the redirect doesn't), starting
+  // with a letter, digit or "_" (AOTY-89: _korps_), and a group slug as group.js ID_RE. Anything
+  // else gets the full URL, which always works. kamp-site's aoty-short.js NAME_RE must take it all.
+  const SHORT_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{1,63}$/;
   const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;
 
   // The link for a user page (kind "user", id = the name in its display casing) or a group
