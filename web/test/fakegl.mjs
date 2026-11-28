@@ -18,7 +18,7 @@ export function fakeGl() {
     getUniformLocation: (_, name) => name,
     getExtension: name => (name === "WEBGL_lose_context" ? {loseContext() { gl.lost = true; }} : null),
   };
-  for (const f of ["uniform1f", "uniform2f", "uniform3f", "uniform4f", "uniform1fv", "uniform3fv", "uniform4fv"]) {
+  for (const f of ["uniform1f", "uniform2f", "uniform3f", "uniform4f", "uniform1fv", "uniform2fv", "uniform3fv", "uniform4fv"]) {
     gl[f] = (loc, ...v) => gl.set.set(loc, v.length === 1 ? v[0] : v);
   }
   return gl;
