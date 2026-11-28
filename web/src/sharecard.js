@@ -118,7 +118,7 @@
     // right (AOTY-95). The caption may take two lines in the narrower column, preferring one. The
     // names are anchored to the link (bottom): a one-line title sits low rather than leaving a gap
     // above the link. title.y is the highest the names can start, so its box holds them all.
-    top1_landscape: {pad: 56, col: {x: 632, w: 512}, brand: 55, caption: 128, url: 534,
+    top1_landscape: {pad: 56, col: {x: 632, w: 512, align: "left"}, brand: 55, caption: 128, url: 534,
                      captionBox: {lines: 2, sizes: [30, 26, 24, 22], prefer: 1}, slots: [{
       rank: 1, cover: coverBox(56, 55, 520), bottom: 500,
       title: {x: 632, y: 312, w: 512, h: 132, lines: 2, sizes: [56, 50, 44, 38, 34], leading: 1.15, align: "left"},
@@ -130,14 +130,17 @@
   function layout(format = DEFAULT_FORMAT) {
     const {width, height, safe, count} = FORMATS[format], y = LAYOUTS[format];
     const first = y.slots[0], col = y.col || {x: PAD, w: INNER};
-    const cap = {lines: 1, sizes: [34, 30, 26, 22], ...y.captionBox};
+    // A column's align (AOTY-95: left, beside the cover) applies to its caption and link; the
+    // default is the boxes' own centre.
+    const align = col.align ? {align: col.align} : {};
+    const cap = {lines: 1, sizes: [34, 30, 26, 22], ...align, ...y.captionBox};
     return {
       width, height, pad: y.pad || PAD, col, safe, count, slots: y.slots,
       brand: {x: col.x, y: y.brand, w: col.w, h: 40, mark: 40},
       caption: {x: col.x, y: y.caption, w: col.w, h: cap.lines > 1 ? boxHeight(cap.lines, cap.sizes[0]) : 44, ...cap},
       // #1's boxes, as before slots.
       cover: first.cover, title: first.title, artist: first.artist,
-      url: {x: col.x, y: y.url, w: col.w, h: 40, lines: 1, sizes: [30, 26, 22, 20]},
+      url: {x: col.x, y: y.url, w: col.w, h: 40, lines: 1, sizes: [30, 26, 22, 20], ...align},
     };
   }
   // A format id from anywhere (a saved choice, the page): a known one, else the square.

@@ -570,6 +570,9 @@ test("the landscape card is 1200x630 (1.91:1), with the cover on the left and ev
       for (const o of textOps(ops).filter(o => o.on === "bg")) {
         const e = ink(o);
         assert.ok(e.left >= c.x + c.w + 32 && e.right <= L.col.x + L.col.w + 0.01, `"${o.text}"`);
+        // One left edge for the column, the member count alone right-aligned against its end.
+        if (o.text === texts.played) assert.equal(o.align, "right");
+        else if (o.text !== "a kamp toy") assert.deepEqual([o.align, o.x], ["left", L.col.x], `"${o.text}"`);
       }
     }
   }
