@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {createRequire} from "node:module";
 import test from "node:test";
-import {fakeCanvas, fakeGl, fakePage} from "./fakegl.mjs";
+import {fake2d, fake2dCanvas, fakeCanvas, fakeGl, fakePage} from "./fakegl.mjs";
 
 const require = createRequire(import.meta.url);
 const bg = require("../src/backgrounds.js");
@@ -310,6 +310,109 @@ test("runShader: no WebGL, or a shader that won't compile, gives null", () => wi
   assert.equal(bg.runShader(fakeCanvas(gl), {}, spec), null);
   assert.equal(gl.lost, true);  // its context is freed at once
 }));
+
+// ---- runCanvas (AOTY-102): the same loop on Canvas 2D ---------------------------------------
+
+function canvasSpec() {
+  const log = {frames: [], starts: 0, disposed: 0};
+  return {
+    log,
+    spec: {
+      fps: 30, resScale: 0.5, maxDpr: 2,
+      scene: () => ({
+        onStart() { log.starts++; },
+        draw(ctx, frame) {
+          log.frames.push({...frame, transform: ctx.transform.slice(), composite: ctx.globalCompositeOperation});
+          ctx.globalCompositeOperation = "screen";  // a scene's own state must not leak to the next frame
+          ctx.globalAlpha = 0.3;
+        },
+        setPalette() {},
+        dispose() { log.disposed++; },
+      }),
+    },
+  };
+}
+
+test("runCanvas: every frame starts from --bg in CSS px, whatever the last left behind", () => withPage(page => {
+  globalThis.devicePixelRatio = 3;  // capped at the spec's maxDpr 2
+  const ctx = fake2d(), canvas = fake2dCanvas(ctx, 400, 800), {log, spec} = canvasSpec();
+  const api = bg.runCanvas(canvas, {bg: "#102030"}, spec);
+  assert.deepEqual([canvas.width, canvas.height], [400, 800]);  // 400 x 2 x 0.5
+  page.step(40);
+  page.step(40);
+  for (const f of log.frames) {
+    assert.deepEqual(f.transform, [1, 0, 0, 1, 0, 0]);  // scale 1: 2 x 0.5
+    assert.equal(f.composite, "source-over");
+    assert.deepEqual([f.w, f.h], [400, 800]);
+    assert.equal(f.light, false);
+  }
+  const fills = ctx.ops.filter(o => o.op === "fillRect");
+  assert.equal(fills.length, log.frames.length);
+  assert.ok(fills.every(o => o.fillStyle === "rgb(16,32,48)" && o.alpha === 1 && o.composite === "source-over"));
+  api.destroy();
+}));
+
+test("runCanvas: a resize resets the 2D state, and the next frame sets its transform again", () => withPage(() => {
+  const handlers = new Map();
+  globalThis.addEventListener = (t, fn) => handlers.set(t, fn);
+  globalThis.removeEventListener = t => handlers.delete(t);
+  try {
+    const ctx = fake2d(), canvas = fake2dCanvas(ctx, 400, 800), {log, spec} = canvasSpec();
+    const api = bg.runCanvas(canvas, {reducedMotion: true}, spec);
+    globalThis.devicePixelRatio = 2;
+    handlers.get("resize")();
+    assert.deepEqual([canvas.width, canvas.height], [400, 800]);
+    assert.deepEqual(log.frames.at(-1).transform, [1, 0, 0, 1, 0, 0]);
+    assert.deepEqual([log.frames.at(-1).w, log.frames.at(-1).h], [400, 800]);  // still CSS px
+    assert.equal(log.frames.at(-1).atRest, true);
+    api.destroy();
+  } finally {
+    delete globalThis.addEventListener;
+    delete globalThis.removeEventListener;
+  }
+}));
+
+test("runCanvas: a light --bg says so; a lost context or destroy frees everything", () => withPage(() => {
+  const ctx = fake2d(), canvas = fake2dCanvas(ctx), {log, spec} = canvasSpec();
+  let lost = 0;
+  bg.runCanvas(canvas, {bg: "#ffffff", onLost: () => lost++}, spec);
+  assert.equal(log.frames[0].light, true);
+  canvas.listeners.get("contextlost")({preventDefault() {}});
+  assert.equal(lost, 1);
+  assert.equal(log.disposed, 1);
+  assert.deepEqual([canvas.width, canvas.height], [0, 0]);  // the backing store goes at once
+  assert.equal(bg.runCanvas({getContext: () => null}, {}, spec), null);
+}));
+
+test("isLight: by the page's luminance, the shaders' midpoint", () => {
+  assert.equal(bg.isLight(bg.hexToRgb("#0d0c12")), false);
+  assert.equal(bg.isLight(bg.hexToRgb("#ffffff")), true);
+  assert.equal(bg.isLight(bg.hexToRgb("#fdf6e3")), true);
+  assert.equal(bg.isLight(bg.hexToRgb("#3a3a3a")), false);
+  assert.equal(bg.isLight(null), false);
+});
+
+test("spriteCanvas: OffscreenCanvas where it has a 2D context, else a <canvas>", () => withPage(page => {
+  const off = bg.spriteCanvas(12);
+  assert.equal(off.canvas.width, 12);
+  assert.ok(off.ctx);
+  globalThis.OffscreenCanvas = undefined;
+  const made = [];
+  page.doc.createElement = tag => {
+    const c = {tag, width: 0, height: 0, getContext: () => fake2d()};
+    made.push(c);
+    return c;
+  };
+  const el = bg.spriteCanvas(9);
+  assert.equal(el.canvas, made[0]);
+  assert.equal(el.canvas.width, 9);
+}));
+
+test("the shared walk and pace are the ones Chapel uses", () => {
+  const ch = require("../src/chapel.js");
+  assert.equal(ch.DrunkWalk, bg.DrunkWalk);
+  assert.ok(new ch.RetargetPace() instanceof bg.Pace);
+});
 
 test("the palette uniform is always five full colours", () => {
   for (const colors of [[], [{r: 255, g: 0, b: 0}], bg.accentPalette("#ff6b4a").colors]) {
