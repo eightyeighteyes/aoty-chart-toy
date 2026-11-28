@@ -49,7 +49,7 @@ ASSETS = {
 # The first visit's backgrounds (AOTY-77): id -> file, the one list of them. Each is hashed and
 # published like ASSETS but loaded only when picked: index.html's {{BGMAP}} block carries their URLs
 # (backgrounds.js load()), and the page's ids are that map's keys. Each file registers its own id.
-BACKGROUNDS = {"borealis": "borealis.js", "chapel": "chapel.js"}
+BACKGROUNDS = {"bokeh": "bokeh.js", "borealis": "borealis.js", "chapel": "chapel.js"}
 HASH_LEN = 12
 # The product name is undecided (AOTY-23, user 2026-11-21): a plain description, not a brand.
 # Avoid "AOTY" alone (albumoftheyear.org) and "Wrapped".
