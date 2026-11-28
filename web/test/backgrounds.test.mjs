@@ -158,7 +158,7 @@ test("every engine file registers itself with the contract's mount", async () =>
   // build_shell.BACKGROUNDS is the list; tests/test_build_shell.py checks each file names its id.
   const {createRequire: cr} = await import("node:module");
   for (const [id, surface] of [["bokeh", () => fake2dCanvas(fake2d())], ["borealis", () => fakeCanvas(fakeGl())],
-                               ["chapel", () => fakeCanvas(fakeGl())]]) {
+                               ["chapel", () => fakeCanvas(fakeGl())], ["halation", () => fakeCanvas(fakeGl())]]) {
     cr(import.meta.url)(`../src/${id}.js`);
     const engine = bg.registered(id);
     assert.ok(engine, `${id}.js didn't register`);

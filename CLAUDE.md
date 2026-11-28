@@ -60,7 +60,8 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `consent.js` (the shared analytics choice, AOTY-28: see "Consent"), `backgrounds.js` (the first visit's background registry and what the backgrounds share, AOTY-77:
 see "Background registry"), `borealis.js` (the first aurora, ported from kamp, AOTY-67: see
 "Borealis"; loaded only when picked), `chapel.js` (kamp's colour fields, AOTY-103: see "Chapel"),
-`bokeh.js` (kamp's drifting orbs on Canvas 2D, AOTY-102: see "Bokeh")
+`bokeh.js` (kamp's drifting orbs on Canvas 2D, AOTY-102: see "Bokeh"),
+`halation.js` (kamp's film grain, dust and light leaks, AOTY-99: see "Halation")
 and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`; AOTY-53's `pause_groups`, `max_groups_per_owner`, `max_group_member_adds_per_hour`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
@@ -1081,6 +1082,43 @@ Notes:
   - Redo it after sprite changes.
 - Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=bokeh`. `group/carols-club`
   starts with bokeh.
+
+## Halation (AOTY-99, 2026-11-28)
+
+- **`web/src/halation.js`** is kamp's Halation, ported from kamp commit dfd8033: pixel-locked film
+  grain, drifting dust glints, three breathing light leaks, gate weave, a burn and a hair.
+  - It's a scene on `runShader`, at kamp's tuning: 0.5 scale, 20 fps. Grain blocks up below 0.5.
+  - Dropped: the title mask, the cursor brightening glints, and the art-shown layout. The
+    projection-screen wash and the stronger vignette always show.
+- User decisions:
+  - **The hair stays; the gate jolt is dropped.** A 0.6 s shake reads as the page stuttering.
+  - With no cursor, a hair needs no idle wait. It still waits out a burn. Hairs come every 1–4
+    minutes; `aotyHalation.pop()` in the console brings one now.
+- **The burn** (kamp's track-change burn, fired here by a new palette):
+  - **Paced at 30 s** (`BURN_PACE_S`, with `Pace`). One burn lasts 5.8 s, so a first visit's wall
+    bursts (every ~400 ms) at Chapel's 7 s would keep the page amber about 83% of the time.
+  - **The first palette after mount never burns, whenever it arrives**, and it starts the window.
+    A chart's #1 pixels come from a CORS load after the first live frames, so "before the first
+    live frame" (Chapel's rule) would burn every chart page on load.
+- **Light pages** (kamp aimed glints, the wash and the burn's core at warm white, which vanishes on
+  white), by `smoothstep(0.35, 0.65, lum(uBg))` as in Chapel:
+  - the vignette is a quarter, so the header's solid `--bg` box doesn't sit on grey corners;
+  - glints become dark specks of the palette, and the wash and burn core aim at a deeper amber;
+  - the grain is half.
+  - Measured with headless Chrome and SwiftShader on 400x300: on white, the corners are 234, the
+    header's top centre 253, and the grain's sd about 6 (about 5–7 on the dark `--bg`).
+- **Time:** leaks, weave, the dust drift and every envelope are computed in JS, in float64.
+  `uGlintT` wraps at 600 s; every glint frequency is a whole multiple of 1/600, so the wrap is
+  seamless. The dust drift wraps at `DUST_TILE * CELL`.
+- **highp where there is one:** under mediump the grain hash bands.
+- `uDim` (`setStrength`) scales the wash, the leaks, the burn, the grain, the glints and the hair,
+  but not the vignette.
+- **How it was checked by hand:** the same scratch page as Chapel's, run in headless Chrome with
+  `--use-angle=swiftshader --enable-unsafe-swiftshader --allow-file-access-from-files --dump-dom`.
+  It compiles FRAG, then draws the rest frame, a live frame, a burn and a hair on dark, white and
+  gabbie-like `--bg`, and samples pixels. Redo it after shader edits.
+- Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=halation`. Signed in as bob,
+  `group/paused-crew` starts with halation.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
