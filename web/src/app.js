@@ -26,12 +26,12 @@
   // does may ever break the page, so every call goes through here.
   const kampStats = globalThis.aotyStats;
   const track = (method, ...args) => { try { if (kampStats) kampStats[method](...args); } catch (_) {} };
-  // The shared analytics choice (web/src/consent.js, AOTY-28): the footer lets an asked visitor
+  // The shared analytics choice (web/src/consent.js, AOTY-28): the footer lets every visitor
   // change it. Missing (blocked) means no analytics and no link.
   (() => {
     const consent = globalThis.kampConsent;
     try {
-      if (!consent || !consent.enabled || !consent.asked()) return;
+      if (!consent || !consent.enabled) return;
       document.getElementById("consent-choice").hidden = false;
       document.getElementById("consent-reopen").addEventListener("click", () => consent.reopen());
     } catch (_) { /* never break the page over the choice */ }

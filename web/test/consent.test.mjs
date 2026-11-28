@@ -12,15 +12,13 @@ test("cookies parse leniently", () => {
   assert.deepEqual(c.parseCookies(undefined), {});
 });
 
-test("a choice wins; without one only kamp_ask=0 is granted, and no region cookie means ask", () => {
+test("a choice wins; without one everyone is asked, whatever kamp-site's region cookie says", () => {
   assert.equal(c.decide({kamp_consent: "granted", kamp_ask: "1"}), "granted");
   assert.equal(c.decide({kamp_consent: "denied", kamp_ask: "0"}), "denied");
-  assert.equal(c.decide({kamp_ask: "0"}), "granted");
+  assert.equal(c.decide({kamp_ask: "0"}), "ask");
   assert.equal(c.decide({kamp_ask: "1"}), "ask");
-  assert.equal(c.decide({}), "ask");  // fail closed: a preview, or kamp-site's function missing
-  assert.equal(c.decide({kamp_consent: "maybe", kamp_ask: "1"}), "ask");
-  assert.equal(c.asked({kamp_ask: "0"}), false);
-  assert.equal(c.asked({}), true);
+  assert.equal(c.decide({}), "ask");
+  assert.equal(c.decide({kamp_consent: "maybe"}), "ask");
 });
 
 test("the choice cookie lasts about six months and is Secure on https", () => {
@@ -103,12 +101,11 @@ test("a later no deletes GA's cookies and tells the listeners", () => {
   assert.equal(doc.jar.get("kamp_consent"), "denied");
 });
 
-test("outside the asked regions there's no banner and analytics is on", () => {
+test("a visitor kamp-site marks as outside the EU/UK is still asked, and nothing runs before a yes", () => {
   const doc = fakeDoc({cookie: "kamp_ask=0"});
   const consent = c.create({doc, loc: LOC});
-  assert.equal(consent.state(), "granted");
-  assert.equal(consent.asked(), false);
-  assert.equal(bannerOf(doc), undefined);
+  assert.equal(consent.state(), "ask");
+  assert.ok(bannerOf(doc) && !bannerOf(doc).hidden);
 });
 
 test("a page with no analytics never shows the banner, and stays undecided", () => {

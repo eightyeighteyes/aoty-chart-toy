@@ -441,9 +441,7 @@ def forward(target, method, rest, body=b"", ctype=None, query="", cookie=None):
     return e.code, e.read(), e.headers.get("Content-Type", "application/json")
 
 
-def handler_for(base, out, data, proxy=None, ask=None):
-  """ask: "1" or "0" sets the kamp_ask cookie on the shell, as kamp-site's CloudFront function
-  does (AOTY-28); None sets nothing, which consent.js reads as "ask"."""
+def handler_for(base, out, data, proxy=None):
   syncs = {}  # username -> when its pretend sync started
   polls = {}  # username -> status polls so far (crowded*'s throttled ones)
   groups = preview_groups.FakeGroups()  # sign-in and groups (AOTY-52)
@@ -571,8 +569,7 @@ def handler_for(base, out, data, proxy=None, ask=None):
       f = out / rest
       if rest and f.is_file():
         return self.file(f, "public, max-age=31536000, immutable")
-      extra = [("Set-Cookie", f"kamp_ask={ask}; Path=/; SameSite=Lax")] if ask is not None else []
-      return self.file(out / "index.html", "no-cache", extra)
+      return self.file(out / "index.html", "no-cache")
 
     def file(self, f, cache, extra=()):
       self.send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"), cache, extra)
@@ -606,9 +603,6 @@ def main():
   p.add_argument("--ga-id", default="",
                  help="send analytics to this GA4 property (AOTY-38). Off kamp.fm every hit has "
                       "debug_mode, so it shows in DebugView and stays out of the reports")  # fmt: skip
-  p.add_argument("--ask", choices=["1", "0"],
-                 help="set kamp_ask on the shell as kamp.fm's CloudFront would (AOTY-28): 1 asks for "
-                      "consent (EU/UK/EEA), 0 doesn't. Unset means ask. Only matters with --ga-id")  # fmt: skip
   p.add_argument("--short-host", default="",
                  help="share links on this short host (AOTY-84; only aoty.kamp.fm, with the prod base). "
                       "Off by default: its links lead to prod, where the preview's users don't exist")  # fmt: skip
@@ -626,7 +620,7 @@ def main():
     proxy.sign_in_as(args.sign_in_as, args.base)
   if proxy:
     print(f"api/ and data/ go to {proxy.label}: syncs are real (the API's cooldown still applies)")
-  server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data, proxy, args.ask))
+  server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(args.base, OUT, args.data, proxy))
   who = args.sample or "<name>"
   print(f"serving http://127.0.0.1:{args.port}{args.base}user/{who}  (ctrl-c to stop)")
   try:
