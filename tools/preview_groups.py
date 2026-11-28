@@ -92,6 +92,7 @@ class FakeGroups:
     self.groups["carols-club"] = {"name": "carol's club", "owner": "carol", "changed_at": t, "background": "bokeh",
                                   "members": {"carol": t, "alice": t}}  # fmt: skip
     self.groups["paused-crew"] = {"name": "Paused Crew", "owner": "bob", "changed_at": t,
+                                  "background": "halation",  # AOTY-99
                                   "members": {"bob": t, "carol": t}}  # fmt: skip
     self.items = _items()
     self.blocked = set()  # users with block_group_adds on (AOTY-49)
