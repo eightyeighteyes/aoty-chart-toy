@@ -473,6 +473,11 @@ not daily totals from paging scrobbles (the story text was revised to match).
 - Counts say "plays", not "scrobbles": charts leave out album-less scrobbles.
 - Ends: every album checked and none from the year ("none"); the chart stopped rebuilding with
   albums unchecked, or 10 minutes passed ("stalled").
+- **Never send people away to come back** (user, 2026-11-25: "they'll never come back"; AOTY-79).
+  The queue line says "stay put: it starts pressing the moment you're up." "stalled" isn't a real
+  end: its panel says "this page will catch up on its own", and the page keeps polling every 30 s
+  for 30 minutes (`STALLED_WATCH_MS`), painting a chart that ranks something over it, or turning to
+  "none". Capacity refusals still say "come back soon": they're refusals, not waits.
 - **The wall shows only covers that loaded** (user decision 2026-11-25, AOTY-66).
   - Never a blank, half-loaded or broken cover, and never an artist-name tile; the chart keeps its
     tiles.

@@ -83,6 +83,14 @@ test("a first visit whose chart stopped rebuilding, or that ran out of time, is 
   assert.equal(firstVisitEnd({stage: "idle", albums: {checked: 10, total: 40, hits: 0}}), "stalled");
   assert.equal(firstVisitEnd(dating(10, 40), true), "stalled");
   assert.equal(endMessage("stalled", 2026)[0], "still checking release years");
+  assert.equal(endMessage("stalled", 2026)[1],
+               "this one's taking longer than usual. it keeps pressing, and this page will catch up on its own.");
+});
+
+test("no waiting copy tells people to leave (AOTY-79)", () => {
+  const lines = queueLines(5, "https://kamp.fm/toys/aoty/user/alice", 600);
+  const waiting = [lines.caller, lines.link, lines.wait, ...endMessage("stalled", 2026)];
+  for (const text of waiting) assert.doesNotMatch(text, /close the tab|come back|while you're away|leave/i, text);
 });
 
 test("a first visit still on its way keeps waiting, including a reopen at 0 hits", () => {
@@ -121,8 +129,10 @@ test("position changes are announced at most once a minute", () => {
 test("the request line's words", () => {
   const lines = queueLines(1234, "https://kamp.fm/toys/aoty/user/AliCe", 0);
   assert.equal(lines.caller, "you're caller #1,234. the dj is spinning other people's years first.");
-  assert.equal(lines.link, "this page is yours: kamp.fm/toys/aoty/user/AliCe. close the tab and come back. "
-      + "it'll be pressed and waiting.");
+  assert.equal(lines.link, "this page is yours: kamp.fm/toys/aoty/user/AliCe. "
+      + "stay put: it starts pressing the moment you're up.");
+  // app.js splits the line on the shown address to make it its own element: it appears once.
+  assert.equal(lines.link.split("kamp.fm/toys/aoty/user/AliCe").length, 2);
   assert.equal(lines.wait, "");
   assert.equal(queueLines(3, "x", 700).wait, "about 12 minutes");
 });
