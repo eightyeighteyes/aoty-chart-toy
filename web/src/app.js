@@ -1354,9 +1354,15 @@
     $("create-form").hidden = !canWrite();
     list.replaceChildren();
     $("mygroups-empty").hidden = true;
+    $("optout").hidden = true;
+    $("optout-msg").textContent = "";
     openDialog(d, opener, toCreate && canWrite() ? $("create-name") : $("mygroups-close"));
-    const r = await apiCall("GET", "me/groups");
-    if (r.status === 401) { me = null; renderAccount(); d.close(); return; }
+    const [r, m] = await Promise.all([
+      apiCall("GET", "me/groups"),
+      canWrite() ? apiCall("GET", "me/memberships") : Promise.resolve(null),
+    ]);
+    if (r.status === 401 || (m && m.status === 401)) { signedOutInDialog(); return; }
+    renderOptOut(m);
     const groups = r.status === 200 && r.body && Array.isArray(r.body.groups) ? r.body.groups : null;
     if (!groups) {
       $("mygroups-empty").textContent = "couldn't load your groups just now.";
@@ -1372,11 +1378,109 @@
       li.append(` · ${n} ${n === 1 ? "member" : "members"}`);
       return li;
     }));
-    $("mygroups-empty").textContent = "no groups yet.";
+    $("mygroups-empty").textContent = "you haven't started a group yet.";
     $("mygroups-empty").hidden = groups.length > 0;
   }
   $("mygroups-close").addEventListener("click", () => $("mygroups").close());
   $("intro-start").addEventListener("click", () => openMyGroups($("intro-start"), true));
+
+  // ---- opting out (AOTY-49): leave others' groups, block future adds ----------------------------
+  //
+  // memberOf: the groups someone else owns that the visitor is in ({id, name, owner}), as last
+  // listed and then kept by this page (by_member is eventually consistent, so a fresh list just
+  // after a leave could still show the group).
+  let memberOf = [];
+
+  function signedOutInDialog() {
+    me = null;
+    renderAccount();
+    showGroupTools(false);
+    $("mygroups").close();
+  }
+
+  function renderOptOut(r) {
+    const ok = r && r.status === 200 && r.body && Array.isArray(r.body.groups);
+    if (!ok) {
+      if (r) $("optout-msg").textContent = ge.MESSAGES.listFailed;
+      return;
+    }
+    memberOf = r.body.groups.filter(g => g && typeof g.id === "string");
+    $("block-adds").checked = r.body.block_group_adds === true;
+    renderMemberOf();
+    $("optout").hidden = false;
+  }
+
+  function renderMemberOf() {
+    $("memberof-list").replaceChildren(...memberOf.map(g => {
+      const li = document.createElement("li");
+      const a = li.appendChild(document.createElement("a"));
+      a.className = "member-name";
+      a.href = `${BASE}group/${encodeURIComponent(g.id)}`;
+      a.textContent = g.name || g.id;
+      const b = li.appendChild(document.createElement("button"));
+      b.type = "button";
+      b.className = "quiet danger";
+      b.textContent = "leave";
+      b.setAttribute("aria-label", `leave ${g.name || g.id}`);
+      b.addEventListener("click", () => leaveGroups(b, [g]));
+      return li;
+    }));
+    $("memberof-empty").hidden = memberOf.length > 0;
+    $("leave-all").hidden = memberOf.length < 2;
+  }
+
+  // Leave one group or several, one request at a time; a refusal stops nothing but itself.
+  async function leaveGroups(button, groups) {
+    if (isBusy(button) || !me) return;
+    const [title, text, yes] = groups.length === 1 ? ge.leaveText(groups[0].name || groups[0].id)
+      : ge.leaveAllText(groups.length);
+    if (!await confirmDialog(button, title, text, yes)) return;
+    busy(button, true, "leaving…");
+    $("optout-msg").textContent = "";
+    const left = [];
+    let failed = null;
+    for (const g of groups) {
+      const r = await apiCall("DELETE", `groups/${encodeURIComponent(g.id)}/members/${encodeURIComponent(me.username)}`);
+      const out = ge.answer("remove", r.status, r.body);
+      if (out.signedOut) { signedOutInDialog(); return; }
+      if (out.ok || out.gone) left.push(g.id);  // a group that's gone has no one in it
+      else failed = out;
+    }
+    if (button.isConnected) busy(button, false);
+    memberOf = memberOf.filter(g => !left.includes(g.id));
+    renderMemberOf();
+    $("memberof-title").focus();  // the rows and their buttons may be gone
+    track("event", groups.length === 1 ? "group_leave" : "group_leave_all");
+    const n = left.length;
+    $("optout-msg").textContent = failed && !n ? failed.message
+      : ge.leftLine(n, groups.length, groups.length === 1 ? groups[0].name : null);
+    if (groupId && left.includes(groupId)) refreshGroup();  // the page behind is one they just left
+  }
+  $("leave-all").addEventListener("click", () => leaveGroups($("leave-all"), memberOf.slice()));
+
+  (() => {
+    const box = $("block-adds");
+    let saving = false;
+    box.addEventListener("change", async () => {
+      if (saving) { box.checked = !box.checked; return; }
+      saving = true;
+      const on = box.checked;
+      box.setAttribute("aria-busy", "true");
+      $("optout-msg").textContent = "";
+      const r = await apiCall("PUT", "me/settings", {block_group_adds: on});
+      box.removeAttribute("aria-busy");
+      saving = false;
+      const out = ge.answer("settings", r.status, r.body);
+      if (out.signedOut) { signedOutInDialog(); return; }
+      if (!out.ok) {
+        box.checked = !on;
+        $("optout-msg").textContent = out.message === ge.MESSAGES.generic ? ge.MESSAGES.blockFailed : out.message;
+        return;
+      }
+      track("event", "block_adds", {on: on ? "1" : "0"});
+      $("optout-msg").textContent = on ? ge.MESSAGES.blockOn : ge.MESSAGES.blockOff;
+    });
+  })();
 
   // Create, then go to the new group's page with its edit panel open.
   (() => {

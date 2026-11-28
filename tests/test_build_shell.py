@@ -89,9 +89,10 @@ def test_app_js_has_no_inline_handlers_or_eval():
 
 # The polite live regions. Only the sync banner speaks on its own (chart pages); every other one
 # is empty until it answers something the visitor just did: a form's message (the intro's, and
-# AOTY-52's create, rename and add) or an action's (sign in or out, share or copy a link).
+# AOTY-52's create, rename and add) or an action's (sign in or out, share or copy a link, leave a
+# group or block adds: AOTY-49's optout-msg).
 LIVE_REGIONS = {"banner-msg", "intro-msg", "account-msg", "share-msg", "create-msg", "rename-msg", "add-msg",
-                "theme-msg"}  # fmt: skip
+                "theme-msg", "optout-msg"}  # fmt: skip
 
 
 def test_the_shell_has_one_live_region_that_speaks_on_its_own(tmp_path):

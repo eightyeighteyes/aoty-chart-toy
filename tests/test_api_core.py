@@ -94,6 +94,11 @@ COOL = 600
     ("GET", f"{BASE}api/groupsx", ("not_found", None)),
     ("GET", f"{BASE}api/me/groups", ("my_groups", None)),
     ("POST", f"{BASE}api/me/groups", ("method", None)),
+    ("GET", f"{BASE}api/me/memberships", ("my_memberships", None)),  # AOTY-49
+    ("DELETE", f"{BASE}api/me/memberships", ("method", None)),
+    ("PUT", f"{BASE}api/me/settings/", ("my_settings", None)),
+    ("GET", f"{BASE}api/me/settings", ("method", None)),
+    ("GET", f"{BASE}api/me/other", ("not_found", None)),
   ],
 )
 def test_route(method, path, expected):

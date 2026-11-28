@@ -42,6 +42,11 @@
     groupsPaused: "starting groups and adding people is paused for now. try again later.",
     tooManyGroups: "you can have up to {max} groups. delete one to start another.",
     tooManyAdds: "that's a lot of adds for one hour. try again in a bit.",
+    // Opting out (AOTY-49)
+    blockOn: "done. other people can't add you to their groups now.",
+    blockOff: "done. people can add you to their groups again.",
+    blockFailed: "couldn't save that just now. try again?",
+    listFailed: "couldn't load your groups just now.",
   };
 
   // A group's display name as the API keeps it (groups.clean_name): whitespace collapsed, 1-60
@@ -145,8 +150,23 @@
     return [`remove ${name}?`, "their plays leave the chart. you can add them back any time."];
   }
 
+  // Leaving someone else's group, and leaving all of them (AOTY-49): [title, text, yes].
+  const AFTER_LEAVE = "the owner can add you back, unless you turn on “don't let others add me”.";
+  function leaveText(name) {
+    return [`leave ${name}?`, `your plays leave its chart. ${AFTER_LEAVE}`, "leave"];
+  }
+  function leaveAllText(n) {
+    return [`leave all ${n} groups?`, `your plays leave their charts. ${AFTER_LEAVE}`, "leave all"];
+  }
+
+  // What the dialog says after leaving: n of total left, by name when it was one group.
+  function leftLine(n, total, name) {
+    if (n === total) return total === 1 && name ? `you left ${name}.` : `you left ${n} groups.`;
+    return `left ${n} of ${total}. try again?`;
+  }
+
   const api = {NAME_MAX, MAX_MEMBERS, REBUILD_FOR_MS, LOADING_FOR_MS, MESSAGES, checkName, answer, isOwner,
-               rebuild, removeText};
+               rebuild, removeText, leaveText, leaveAllText, leftLine};
   root.aotyGroupEdit = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

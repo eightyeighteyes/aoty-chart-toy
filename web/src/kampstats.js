@@ -65,6 +65,10 @@
     group_create: {},
     member_add: {},
     member_remove: {},
+    // Opting out (AOTY-49): never which group, and "on" is the block's new state.
+    group_leave: {},
+    group_leave_all: {},
+    block_adds: {on: ["1", "0"]},
     kamp_click: {},
     // An album's Last.fm link was followed (AOTY-43): no album, no user, nothing else.
     album_click: {},

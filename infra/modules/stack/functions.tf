@@ -76,10 +76,11 @@ locals {
       },
       {
         # Groups (AOTY-48). TransactWriteItems has no IAM action of its own: it authorizes as the
-        # Put, Update, Delete and ConditionCheck it carries.
+        # Put, Update, Delete and ConditionCheck it carries. BatchGetItem: the metas of the groups a
+        # member is in (AOTY-49).
         actions = [
           "dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem",
-          "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem",
+          "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem", "dynamodb:BatchGetItem",
         ]
         resources = [aws_dynamodb_table.groups.arn, "${aws_dynamodb_table.groups.arn}/index/*"]
       },

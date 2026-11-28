@@ -464,6 +464,18 @@ html.has-aurora .account {
 .mygroups-list a { color: var(--ink); font-weight: 600; font-size: 15px; text-underline-offset: 3px; }
 .mygroups-list a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 3px; }
 .sheet .lookup { margin-bottom: 8px; }
+/* Opting out (AOTY-49), inside "your groups". */
+.optout { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+.optout .members { margin-bottom: 10px; }
+.optout .members a { color: var(--ink); font-weight: 600; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.optout .members a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 3px; }
+.optout-all { margin: 0 0 14px; }
+.optout-all:has(> [hidden]) { display: none; }
+.optout-block { display: flex; align-items: flex-start; gap: 10px; font-size: 15px; cursor: pointer; }
+.optout-block input { width: 18px; height: 18px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+.optout-block input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.optout-hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 6px 0 0 28px; }
+#optout-msg:empty { min-height: 0; margin: 0; }
 
 /* The intro (AOTY-23). */
 .intro { max-width: 720px; margin: 0 auto; padding: 64px 40px 72px; }

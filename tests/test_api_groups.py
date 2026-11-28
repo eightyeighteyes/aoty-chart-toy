@@ -74,6 +74,8 @@ class FakeGroupsDDB(FakeDDB):
     super().__init__(**kw)
     self.groups, self.conflicts, self.before_transact = {}, 0, None
     self.transactions = []
+    # AOTY-49: by_member rows whose group is gone (the index lags), batch gets to answer unprocessed
+    self.stale_index, self.unprocessed, self.group_batches = [], 0, []
 
   # -- groups table helpers
   def seed(self, slug, owner, members, name=None, **meta):
@@ -149,6 +151,11 @@ class FakeGroupsDDB(FakeDDB):
     if IndexName == "by_owner":
       assert KeyConditionExpression == "#o = :o"
       rows = [it for it in self.groups.values() if it.get("sk") == "meta" and it.get("owner") == v[":o"]]
+    elif IndexName == "by_member":  # keys only (AOTY-49)
+      assert KeyConditionExpression == "username = :u"
+      rows = [{k: it[k] for k in ("pk", "sk", "username")} for _, it in sorted(self.groups.items())
+              if it.get("username") == v[":u"]]  # fmt: skip
+      rows += self.stale_index
     else:
       assert IndexName is None and KeyConditionExpression == "pk = :pk"
       rows = [it for (p, _), it in sorted(self.groups.items()) if p == v[":pk"]]
@@ -181,7 +188,17 @@ class FakeGroupsDDB(FakeDDB):
 
   def batch_get_item(self, RequestItems):
     ((table, req),) = RequestItems.items()
-    assert table == "users" and len(req["Keys"]) <= 100
+    assert len(req["Keys"]) <= 100
+    if table == "groups":  # the metas of a member's groups (AOTY-49)
+      self.group_batches.append(len(req["Keys"]))
+      keys = [self._k(k) for k in req["Keys"]]
+      if self.unprocessed:
+        self.unprocessed -= 1
+        return {"Responses": {table: []}, "UnprocessedKeys": {table: {"Keys": req["Keys"]}}}
+      rows = [self.groups[k] for k in keys if k in self.groups]
+      return {"Responses": {table: [dynamo.to_item({f: r[f] for f in ("pk", "name", "owner") if f in r})
+                                    for r in rows]}, "UnprocessedKeys": {}}  # fmt: skip
+    assert table == "users"
     rows = [self.rows[k["username"]["S"]] for k in req["Keys"] if k["username"]["S"] in self.rows]
     return {"Responses": {table: [dynamo.to_item({k: v for k, v in r.items() if k != "progress"}) for r in rows]},
             "UnprocessedKeys": {}}  # fmt: skip
@@ -554,6 +571,148 @@ def test_remove_is_idempotent_and_the_owner_may_leave(h):
   assert d.ddb.meta("g")["member_count"] == 1 and len(d.lam.events) == 1  # nothing written
   assert call(h, d, "DELETE", "groups/g/members/alice") == (204, None)
   assert d.ddb.members("g") == [] and d.ddb.meta("g")["owner"] == "alice"
+
+
+# ---- opting out (AOTY-49) ------------------------------------------------------------------
+
+
+def test_a_member_may_leave_anyones_group_and_its_chart_rebuilds(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob", "carol"])
+  assert call(h, d, "DELETE", "groups/g/members/bob", user="bob") == (204, None)
+  assert d.ddb.members("g") == ["alice", "carol"] and d.ddb.meta("g")["member_count"] == 2
+  assert d.ddb.meta("g")["chart_requested_at"] == NOW and d.ddb.meta("g")["owner"] == "alice"
+  assert d.lam.events == [{"group": "g", "requested_at": NOW}]
+  # Again, or someone who was never in it: 204, nothing written.
+  assert call(h, d, "DELETE", "groups/g/members/bob", user="bob") == (204, None)
+  assert call(h, d, "DELETE", "groups/g/members/mallory", user="mallory") == (204, None)
+  assert d.ddb.meta("g")["member_count"] == 2 and len(d.lam.events) == 1
+
+
+def test_a_member_cant_remove_anyone_else(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob", "carol"])
+  before = dict(d.ddb.groups)
+  assert call(h, d, "DELETE", "groups/g/members/carol", user="bob") == (403, {"error": "not your group"})
+  assert call(h, d, "DELETE", "groups/g/members/alice", user="bob")[0] == 403
+  assert d.ddb.groups == before and d.lam.events == []
+
+
+def test_leaving_a_missing_group_is_404(h):
+  assert call(h, deps(h), "DELETE", "groups/gone/members/bob", user="bob") == (
+    404,
+    {"error": "no such group"},
+  )
+
+
+def test_a_member_named_me_is_removed_by_name_not_mistaken_for_the_caller(h):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "me"])
+  assert call(h, d, "DELETE", "groups/g/members/me", user="bob")[0] == 403  # bob isn't "me"
+  assert call(h, d, "DELETE", "groups/g/members/me")[0] == 204  # the owner removes the user "me"
+  assert d.ddb.members("g") == ["alice"]
+
+
+def test_memberships_list_others_groups_by_name_with_the_setting(h):
+  d = deps(h)
+  d.ddb.seed("zed", "bob", ["alice", "bob"], name="Zed's")
+  d.ddb.seed("abc", "carol", ["alice", "carol"], name="abc club")
+  d.ddb.seed("mine", "alice", ["alice"])  # their own: me/groups lists it
+  d.ddb.seed("other", "bob", ["bob"])  # not a member
+  d.ddb.stale_index.append({"pk": grp.pk("deleted"), "sk": "member#alice", "username": "alice"})
+  status, body = call(h, d, "GET", "me/memberships", ctype=None)
+  assert status == 200
+  assert body == {"groups": [{"id": "abc", "name": "abc club", "owner": "carol"},
+                             {"id": "zed", "name": "Zed's", "owner": "bob"}],
+                  "block_group_adds": False}  # fmt: skip
+  known(d.ddb, "alice")
+  d.ddb.rows["alice"]["block_group_adds"] = True
+  assert call(h, d, "GET", "me/memberships", ctype=None)[1]["block_group_adds"] is True
+  assert call(h, d, "GET", "me/memberships", user=None)[0] == 401
+
+
+def test_memberships_read_metas_in_batches_of_100_and_retry_unprocessed(h):
+  d = deps(h)
+  for i in range(130):
+    d.ddb.seed(f"g{i:03}", "bob", ["alice"])
+  d.ddb.unprocessed = 1
+  body = call(h, d, "GET", "me/memberships", ctype=None)[1]
+  assert len(body["groups"]) == 130 and d.ddb.group_batches == [100, 100, 30]
+
+
+def test_memberships_with_none_is_empty(h):
+  assert call(h, deps(h), "GET", "me/memberships", ctype=None) == (
+    200,
+    {"groups": [], "block_group_adds": False},
+  )
+
+
+def test_blocking_sets_the_flag_making_the_row_and_unblocking_removes_it(h):
+  d = deps(h)
+  assert call(h, d, "PUT", "me/settings", {"block_group_adds": True}) == (200, {"block_group_adds": True})
+  assert d.ddb.rows["alice"] == {"username": "alice", "block_group_adds": True}
+  assert call(h, d, "PUT", "me/settings", {"block_group_adds": False}) == (200, {"block_group_adds": False})
+  assert d.ddb.rows["alice"] == {"username": "alice"}
+  # Unblocking with no row makes none.
+  assert call(h, d, "PUT", "me/settings", {"block_group_adds": False}, user="bob")[0] == 200
+  assert "bob" not in d.ddb.rows
+
+
+def test_a_row_made_by_blocking_still_counts_as_new_on_its_first_sync(h):
+  d = deps(h, pause_new_users=True)
+  call(h, d, "PUT", "me/settings", {"block_group_adds": True})
+  event = {"rawPath": f"{BASE}api/users/alice/sync", "requestContext": {"http": {"method": "POST"}},
+           "headers": {"content-type": "application/json"}}  # fmt: skip
+  out = h.handler(event, None, d)
+  assert out["statusCode"] == 503 and json.loads(out["body"]) == {"error": "paused"}
+
+
+@pytest.mark.parametrize("body", [{}, {"block_group_adds": "yes"}, {"block_group_adds": 1},
+                                  {"block_group_adds": True, "theme": "kamp"}])  # fmt: skip
+def test_settings_take_only_a_bool(h, body):
+  d = deps(h)
+  assert call(h, d, "PUT", "me/settings", body) == (400, {"error": "bad_settings"})
+  assert d.ddb.rows == {}
+
+
+def test_settings_need_a_session_json_and_writes_on(h):
+  body = {"block_group_adds": True}
+  assert call(h, deps(h), "PUT", "me/settings", body, user=None) == (401, {"error": "signed_out"})
+  assert call(h, deps(h), "PUT", "me/settings", body, ctype="text/plain")[0] == 415
+  off = deps(h, env={"GROUP_WRITES": "false"})
+  assert call(h, off, "PUT", "me/settings", body) == (503, {"error": "groups_unavailable"})
+  assert call(h, deps(h, auth={}), "PUT", "me/settings", body)[0] == 503
+  assert call(h, deps(h), "POST", "me/settings", body)[0] == 405
+
+
+def test_with_the_block_on_every_other_owners_add_is_refused_and_their_own_groups_work(h):
+  d = deps(h)
+  known(d.ddb, "bob", "carol")
+  call(h, d, "PUT", "me/settings", {"block_group_adds": True}, user="bob")
+  d.ddb.seed("alices", "alice", ["alice"])
+  d.ddb.seed("carols", "carol", ["carol"])
+  for owner, slug in (("alice", "alices"), ("carol", "carols")):
+    assert call(h, d, "POST", f"groups/{slug}/members", {"username": "Bob"}, user=owner) == (
+      409, {"error": "cannot_add"},
+    )  # fmt: skip
+  assert call(h, d, "POST", "groups", {"name": "bobs"}, user="bob")[0] == 201
+  assert d.ddb.members("bobs") == ["bob"]
+  d.ddb.groups.pop((grp.pk("bobs"), "member#bob"))
+  d.ddb.meta("bobs")["member_count"] = 0
+  assert call(h, d, "POST", "groups/bobs/members", {"username": "bob"}, user="bob")[0] == 201
+  assert call(h, d, "POST", "groups/bobs/members", {"username": "carol"}, user="bob")[0] == 201
+  call(h, d, "PUT", "me/settings", {"block_group_adds": False}, user="bob")
+  assert call(h, d, "POST", "groups/alices/members", {"username": "bob"})[0] == 201
+
+
+def test_opt_out_writes_emit_their_outcome(h, capsys):
+  d = deps(h)
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  call(h, d, "DELETE", "groups/g/members/bob", user="bob")
+  call(h, d, "PUT", "me/settings", {"block_group_adds": True}, user="bob")
+  lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+  assert [(line["action"], line["outcome"]) for line in lines] == [("member_remove", "left"),
+                                                                    ("my_settings", "blocked")]  # fmt: skip
 
 
 # ---- rename and delete ---------------------------------------------------------------------
