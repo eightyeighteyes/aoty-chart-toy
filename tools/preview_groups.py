@@ -15,7 +15,10 @@ Member names with special answers on add:
 Group names with special answers on create (AOTY-53): "too many*" 409 too_many_groups, "paused
 group*" 503 groups_paused.
 Seeded groups: full-house (alice's, 25 members, so any add is "full"), bobs-crew (bob's, with
-alice in it: no edit controls for alice) and paused-crew (its visits answer as pause_syncs would).
+alice in it: no edit controls for alice), carols-club (carol's, with alice: a second group for
+"leave all") and paused-crew (its visits answer as pause_syncs would). Opting out (AOTY-49): any
+member may leave (DELETE their own name), and me/settings's block_group_adds is kept in memory, so
+after alice blocks, bob's add of alice answers cannot_add.
 A member is "loading" for MEMBER_READY_S after being added, and each change shows up in the chart
 CHART_DELAY_S later, as the chart builder would. A group page's visit (AOTY-55) re-syncs every
 member for RESYNC_S, then the chart rebuilds; reloading within the hour is the group cooldown.
@@ -85,9 +88,12 @@ class FakeGroups:
                                  "members": {"alice": t, **{f"member{i:02d}": t for i in range(24)}}}  # fmt: skip
     self.groups["bobs-crew"] = {"name": "Bob's Crew", "owner": "bob", "changed_at": t,
                                 "members": {"bob": t, "alice": t, "carol": t}}  # fmt: skip
+    self.groups["carols-club"] = {"name": "carol's club", "owner": "carol", "changed_at": t,
+                                  "members": {"carol": t, "alice": t}}  # fmt: skip
     self.groups["paused-crew"] = {"name": "Paused Crew", "owner": "bob", "changed_at": t,
                                   "members": {"bob": t, "carol": t}}  # fmt: skip
     self.items = _items()
+    self.blocked = set()  # users with block_group_adds on (AOTY-49)
 
   # ---- the API -------------------------------------------------------------------------------
 
@@ -122,6 +128,22 @@ class FakeGroups:
       mine = [{"id": s, "name": g["name"], "member_count": len(g["members"]), "updated_at": int(g["changed_at"])}
               for s, g in self.groups.items() if g["owner"] == user]  # fmt: skip
       return 200, {"groups": mine}, []
+    if path == "api/me/memberships" and method == "GET":  # AOTY-49
+      if not user:
+        return 401, {"error": "signed_out"}, []
+      theirs = sorted(({"id": s, "name": g["name"], "owner": g["owner"]} for s, g in self.groups.items()
+                       if user in g["members"] and g["owner"] != user), key=lambda x: x["name"].casefold())  # fmt: skip
+      return 200, {"groups": theirs, "block_group_adds": user in self.blocked}, []
+    if path == "api/me/settings" and method == "PUT":
+      if not (ctype or "").lower().startswith("application/json"):
+        return 415, {"error": "send content-type: application/json"}, []
+      if not user:
+        return 401, {"error": "signed_out"}, []
+      block = (body or {}).get("block_group_adds")
+      if set(body or {}) != {"block_group_adds"} or not isinstance(block, bool):
+        return 400, {"error": "bad_settings"}, []
+      (self.blocked.add if block else self.blocked.discard)(user)
+      return 200, {"block_group_adds": block}, []
     if not path.startswith("api/groups"):
       return None
     parts = path.split("/")[2:]  # after api/groups
@@ -144,7 +166,8 @@ class FakeGroups:
     g = self.groups.get(slug)
     if not g:
       return 404, {"error": "no such group"}, []
-    if g["owner"] != user:
+    leaving = method == "DELETE" and len(parts) == 3 and parts[1] == "members" and parts[2].lower() == user
+    if g["owner"] != user and not leaving:  # anyone may take themselves out (AOTY-49)
       return 403, {"error": "not your group"}, []
     if method == "PATCH" and len(parts) == 1:
       return (*self.rename(slug, body, now), [])
@@ -232,6 +255,8 @@ class FakeGroups:
       return 200, {"member": name, "added": False}
     if len(g["members"]) >= grp.MAX_MEMBERS:
       return 409, {"error": "full", "max": grp.MAX_MEMBERS}
+    if name in self.blocked and name != user:
+      return 409, {"error": "cannot_add"}
     for prefix, refusal in ADD_REFUSALS:
       if name.startswith(prefix) and name != user:
         return refusal

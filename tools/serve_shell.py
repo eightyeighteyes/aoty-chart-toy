@@ -541,6 +541,9 @@ def handler_for(base, out, data, proxy=None):
     def do_DELETE(self):
       return self.write("DELETE")
 
+    def do_PUT(self):  # me/settings (AOTY-49)
+      return self.write("PUT")
+
     def do_GET(self):
       path, _, self.query = self.path.partition("?")
       if not path.startswith(base):
