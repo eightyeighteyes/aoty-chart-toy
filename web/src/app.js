@@ -809,6 +809,9 @@
   const POLL_QUEUED_MS = 20000, POLL_RETRY_MAX_MS = 60000, RETRIES_MAX = 10;
   // The watch only counts once the sync has left the queue: a long wait in line isn't a stall.
   const WATCH_FOR_MS = 10 * 60 * 1000, DATING_FOR_MS = 2 * 60 * 1000;
+  // A stalled first visit keeps watching quietly this long, every POLL_DATING_MS, so its "this page
+  // will catch up on its own" is true (AOTY-79: never send people away to come back).
+  const STALLED_WATCH_MS = 30 * 60 * 1000;
 
   // The banner: #banner-msg is the page's one polite live region and changes only with the
   // stage; the counts beside it change on every poll and are hidden from screen readers.
@@ -836,6 +839,7 @@
     const queue = fv.makeQueue();
     const baseTitle = document.title;
     let delay = POLL_FIRST_MS, timer = null, stopped = false, datingSince = null, watchFrom = null, retries = 0;
+    let stalledSince = null;
     const stop = msg => {
       stopped = true;
       waitingStage = null;
@@ -860,6 +864,7 @@
     // to wait for. True when it handled the status.
     function handleFirstVisit(s) {
       if (current) return false;
+      if (stalledSince !== null) return stalledWatch(s);
       const inLine = s.stage === "queued";
       const place = queue(s, Date.now());
       const position = inLine ? place.position : null;
@@ -869,6 +874,15 @@
         track("event", "first_visit_end", {result: end});
         const [title, text] = fv.endMessage(end, YEAR, s);
         state(title, text, false);
+        if (end === "stalled") {
+          // Not an end after all: the chart keeps pressing, so keep watching, quietly (AOTY-79).
+          stalledSince = Date.now();
+          waitingStage = null;  // the wait is over as far as wait_abandoned goes
+          say("");
+          document.title = baseTitle;
+          schedule(POLL_DATING_MS);
+          return true;
+        }
         stop("");
         return true;
       }
@@ -880,6 +894,20 @@
       document.title = fv.tabTitle(baseTitle, position, percent);
       delay = fv.queuedPollMs(s) ?? Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
       schedule(delay);
+      return true;
+    }
+
+    // After a stall: the panel stays; handle()'s maybeRefresh paints a chart that ranks something
+    // over it. A turn to "none" says so instead; after STALLED_WATCH_MS it stops quietly.
+    function stalledWatch(s) {
+      if (fv.firstVisitEnd(s, false) === "none") {
+        track("event", "first_visit_end", {result: "none"});
+        state(...fv.endMessage("none", YEAR, s), false);
+        stop("");
+        return true;
+      }
+      if (Date.now() - stalledSince > STALLED_WATCH_MS) { stop(""); return true; }
+      schedule(POLL_DATING_MS);
       return true;
     }
 
