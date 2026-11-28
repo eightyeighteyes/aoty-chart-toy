@@ -186,9 +186,11 @@
   //
   // The engine contract. An engine file calls register(id, engine) when it loads, and
   //   engine.mount(canvas, {bg, accent, reducedMotion, onLost})
-  // returns {setPalette(colors), setColors({bg, accent}), destroy()}, or null when it can't run
-  // here (no WebGL, a blocklisted GPU): the page then stays as it was. bg and accent are the page's
-  // --bg and --accent (hex); colors is extractPalette's. While mounted, the engine owns its loop:
+  // returns {setPalette(colors), setColors({bg, accent}), setStrength(s)?, destroy()}, or null when
+  // it can't run here (no WebGL, a blocklisted GPU): the page then stays as it was. bg and accent
+  // are the page's --bg and --accent (hex); colors is extractPalette's; setStrength (optional,
+  // AOTY-96) scales the engine's own strength, 1 on a first visit and calmer behind a built chart.
+  // While mounted, the engine owns its loop:
   // it runs only while the tab is visible, draws a still frame under reduced motion, paints every
   // pixel itself (its canvas is opaque, starting with --bg), and calls onLost if its context goes.
   // destroy() frees everything, WebGL contexts included (browsers cap them at about 16).
@@ -220,14 +222,22 @@
   }
   const ids = (map = readMap()) => Object.keys(map).sort();
 
-  // Which background a first visit shows: a preview's ?bg= when it names one, then the page's own
-  // (AOTY-96 stores it), else one at random. Null with none to pick from.
-  function pick({ids: from, override, saved, random = Math.random}) {
+  // Which background a page shows: a preview's ?bg= when it names one, else the page's own (AOTY-96:
+  // stored server-side, a new page's random start included), else none (null). "none" is never an
+  // id here, so a saved "none" is null too.
+  const NONE = "none";
+  function pick({ids: from, override, saved}) {
     if (!from || !from.length) return null;
     if (from.includes(override)) return override;
     if (from.includes(saved)) return saved;
-    return from[Math.min(from.length - 1, Math.floor(random() * from.length))];
+    return null;
   }
+
+  // The owner's picker (AOTY-96, user decision 2026-11-28): "none" first, as in kamp, then every
+  // background alphabetically. Each label is its id, lowercase like kamp's.
+  const pickerOrder = from => [NONE, ...[...(from || [])].filter(id => id !== NONE).sort()];
+  // Where the owner's pick is saved: the api's POST users/<name>/background or groups/<id>/background.
+  const savePath = target => `${target.kind === "group" ? "groups" : "users"}/${target.id}/background`;
 
   // The engine for id: at once if its file has run, else after adding its <script src> (once; the
   // CSP allows same-origin scripts). Null for an id the map doesn't have, or a script that fails
@@ -251,7 +261,7 @@
 
   const api = {PALETTE_SIZE, extractPalette, accentPalette, paletteChanged, hexToRgb, PaletteCrossfade,
                packPalette, CONTEXT_ATTRS, VERT, createQuad, register, registered, parseMap, readMap, ids, pick,
-               load};
+               load, NONE, pickerOrder, savePath};
   root.aotyBg = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

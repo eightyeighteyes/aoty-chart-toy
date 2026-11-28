@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -96,9 +97,14 @@ class FakeDDB:
     sets, _, removes = UpdateExpression.removeprefix("SET ").partition(" REMOVE ")
     if UpdateExpression.startswith("REMOVE "):
       sets, removes = "", UpdateExpression.removeprefix("REMOVE ")
-    for part in filter(None, sets.split(", ")):
+    for part in filter(None, re.split(r", (?![^()]*\))", sets)):  # not inside if_not_exists(a, b)
       k, v = part.split(" = ")
-      row[names.get(k, k)] = values[v]
+      field = names.get(k, k)
+      m = re.fullmatch(r"if_not_exists\((#?\w+), (:\w+)\)", v)  # a new user's background (AOTY-96)
+      if m:
+        row.setdefault(field, values[m.group(2)])
+      else:
+        row[field] = values[v]
     for k in filter(None, removes.split(", ")):
       row.pop(names.get(k, k), None)
 

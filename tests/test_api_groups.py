@@ -58,6 +58,15 @@ CONDITIONS = {
   "#o = :me AND member_count = :n" + groups_store.THEME_SAME:
     lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count") == v[":n"]
     and it.get("theme_set_at") == v[":ts"],
+  # ... and against a background saved since too (AOTY-96): a rename guards both
+  **{
+    "#o = :me AND member_count = :n" + theme + background:
+      (lambda t, b: lambda it, v: _has(it) and it.get("owner") == v[":me"] and it.get("member_count") == v[":n"]
+       and (("theme_set_at" not in it) if t == "unset" else it.get("theme_set_at") == v[":ts"])
+       and (("background_set_at" not in it) if b == "unset" else it.get("background_set_at") == v[":bs"]))(t, b)
+    for t, theme in (("unset", groups_store.THEME_UNSET), ("same", groups_store.THEME_SAME))
+    for b, background in (("unset", groups_store.BACKGROUND_UNSET), ("same", groups_store.BACKGROUND_SAME))
+  },
   # a group visit's sync claim and release (AOTY-55)
   groups_store.CLAIM_SYNC:
     lambda it, v: _has(it) and ("sync_requested_at" not in it or it["sync_requested_at"] <= v[":cool"]),

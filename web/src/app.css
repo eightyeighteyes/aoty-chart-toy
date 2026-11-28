@@ -296,9 +296,10 @@ ol {
   animation-delay: calc(min(var(--i), 12) * 70ms);
 }
 .wall-art { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
-/* The first visit's aurora (AOTY-67, web/src/borealis.js): a fixed, opaque WebGL canvas behind
-   everything. z-index -1 paints it over the root's background but under body's, so html.has-aurora
-   makes body transparent while it's up; html keeps painting --bg (Seam fix), and the opaque canvas
+/* The page's background (AOTY-67, AOTY-96; web/src/backgrounds.js): a fixed, opaque canvas behind
+   everything, on first visits and built charts alike; the class names keep AOTY-67's "aurora".
+   z-index -1 paints it over the root's background but under body's, so html.has-aurora makes body
+   transparent while it's up; html keeps painting --bg (Seam fix), and the opaque canvas
    covers every pixel, so Seam fix 2's near-flat gradient isn't needed meanwhile. lvh: a phone's
    URL bar showing and hiding mustn't resize it. */
 canvas.aurora {
@@ -308,10 +309,17 @@ canvas.aurora {
 }
 canvas.aurora.on { opacity: 1; }
 html.has-aurora body { background: transparent; }
-/* Text over the curtains: a soft halo in the page colour, so it reads on the brightest frames
-   without a panel (which would shift the layout when the aurora mounts). */
-html.has-aurora header, html.has-aurora .firstvisit, html.has-aurora .credits, html.has-aurora .kampbar,
-html.has-aurora .account {
+/* A page's background (AOTY-96) is never drawn over the art or behind its text (user decision
+   2026-11-28): the hero, cards and list rows are --panel already, and the 11-100 tiles get one
+   while a background shows. The header (title, banner, switches, tools) becomes a solid --bg box,
+   drawn by a spread shadow so nothing in the layout moves when a background mounts (and a shadow
+   never makes a phone scroll sideways). */
+html.has-aurora header { background: var(--bg); box-shadow: 0 0 0 20px var(--bg); border-radius: 4px; }
+html.has-aurora .tile { background: var(--panel); border-radius: 14px; padding: 8px 8px 12px; }
+/* What's left outside the header and the panels: a soft halo in the page colour, so it reads on
+   the brightest frames. */
+html.has-aurora .firstvisit, html.has-aurora .credits, html.has-aurora .kampbar,
+html.has-aurora .account, html.has-aurora .more h2 {
   text-shadow: 0 0 6px var(--bg), 0 0 14px var(--bg), 0 0 24px var(--bg);
 }
 @media (prefers-reduced-motion: reduce) { canvas.aurora { transition: none; } }

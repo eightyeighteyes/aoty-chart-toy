@@ -81,15 +81,29 @@ test("the map keeps same-origin paths and nothing else, and never throws", () =>
   assert.deepEqual(bg.ids({wintermute: "/w.js", borealis: "/b.js"}), ["borealis", "wintermute"]);
 });
 
-test("the pick: a preview's ?bg= when it names one, then the page's own, else at random", () => {
+test("the pick: a preview's ?bg= when it names one, then the page's own, else none", () => {
+  // AOTY-96: the random start is the server's, stored; the page never rolls its own.
   const ids = ["bokeh", "borealis", "sparks"];
   assert.equal(bg.pick({ids, override: "sparks", saved: "bokeh"}), "sparks");
   assert.equal(bg.pick({ids, override: "nonsense", saved: "bokeh"}), "bokeh");
-  assert.equal(bg.pick({ids, override: "", saved: "gone", random: () => 0}), "bokeh");
-  assert.equal(bg.pick({ids, random: () => 0.999999}), "sparks");
-  assert.equal(bg.pick({ids, random: () => 1}), "sparks");  // never past the end
+  assert.equal(bg.pick({ids, override: "", saved: "none"}), null);
+  assert.equal(bg.pick({ids, saved: "gone"}), null);  // an engine since removed shows nothing
+  assert.equal(bg.pick({ids}), null);  // a page from before AOTY-96
+  assert.equal(bg.pick({ids, override: "borealis", saved: "none"}), "borealis");  // a preview still works
   assert.equal(bg.pick({ids: [], override: "borealis"}), null);
   assert.equal(bg.pick({}), null);
+});
+
+test("the picker: none first, then every background alphabetically", () => {
+  assert.equal(bg.NONE, "none");
+  assert.deepEqual(bg.pickerOrder(["wintermute", "bokeh", "borealis"]), ["none", "bokeh", "borealis", "wintermute"]);
+  assert.deepEqual(bg.pickerOrder([]), ["none"]);
+  assert.deepEqual(bg.pickerOrder(["none", "sparks"]), ["none", "sparks"]);  // never twice
+});
+
+test("the owner's pick is saved to the api's user or group background route", () => {
+  assert.equal(bg.savePath({kind: "user", id: "alice"}), "users/alice/background");
+  assert.equal(bg.savePath({kind: "group", id: "full-house"}), "groups/full-house/background");
 });
 
 // A stand-in document: one #aoty-backgrounds block, and scripts that load (registering as they
@@ -147,6 +161,9 @@ test("every engine file registers itself with the contract's mount", async () =>
   assert.ok(engine, "borealis.js didn't register");
   assert.equal(typeof engine.mount, "function");
   assert.equal(engine.mount({getContext: () => null, addEventListener() {}}), null);  // no WebGL: null
+  // setStrength (AOTY-96) is part of what a mounted Borealis offers: its source has it.
+  const src = (await import("node:fs")).readFileSync(new URL("../src/borealis.js", import.meta.url), "utf8");
+  assert.ok(/setStrength\(s\) \{/.test(src));
 });
 
 test("the palette uniform is always five full colours", () => {

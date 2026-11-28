@@ -19,6 +19,10 @@ The users row (written by api, sync and the chart builder) carries:
                      sync worker removes it when the sync starts (queue_place)
   theme, theme_set_at  the owner's page theme, a common.themes id, and when they set it (api,
                      AOTY-65); the chart builder copies theme into chart.json
+  background, background_set_at  the page's background, a common.backgrounds id (api, AOTY-96): a
+                     random engine when the api first queues a new user's sync, then the owner's
+                     pick. Absent (every row from before AOTY-96) means none. The chart builder
+                     copies it into chart.json.
   block_group_adds   true while the user refuses being added to other people's groups (api,
                      AOTY-49; absent otherwise). Set by PUT me/settings, which may create the row.
 """
@@ -30,7 +34,7 @@ import math
 import re
 from urllib.parse import parse_qsl, unquote, urlencode
 
-from common import themes
+from common import backgrounds, themes
 from common.lastfm import TOKEN_CODES
 from common.username import USERNAME_RE  # noqa: F401 (re-exported: api/handler.py, tools/preview_groups.py)
 
@@ -39,19 +43,21 @@ FAILED = frozenset({"error", "not_found", "private"})
 STUCK_AFTER = 30 * 60  # a sync that hasn't moved this long is dead (OOM, timeout, lost message)
 BUILDING_MAX = 5 * 60  # the chart builder runs within seconds of a sync; past this, give up waiting
 DATING_FRESH = 10 * 60  # charts rebuild about once a minute while albums resolve
-_USER_ROUTE = re.compile(r"api/users/([^/]+)/(sync|status|theme)/?")
+_USER_ROUTE = re.compile(r"api/users/([^/]+)/(sync|status|theme|background)/?")
 _CALLBACK_ROUTE = re.compile(r"api/auth/callback/([A-Za-z0-9_-]{1,64})/?")
-USER_ACTIONS = frozenset({"sync", "status", "theme"})
-_USER_METHODS = {"sync": "POST", "status": "GET", "theme": "POST"}  # theme: the owner's, AOTY-65
+USER_ACTIONS = frozenset({"sync", "status", "theme", "background"})
+# theme and background: the owner's (AOTY-65, AOTY-96)
+_USER_METHODS = {"sync": "POST", "status": "GET", "theme": "POST", "background": "POST"}
 # Groups (AOTY-48): path -> {method: action}. <id> is the group's slug; <name> a member.
 _GROUP_ROUTE = re.compile(r"api/groups/([^/]+)/?")
 _MEMBERS_ROUTE = re.compile(r"api/groups/([^/]+)/members/?")
 _MEMBER_ROUTE = re.compile(r"api/groups/([^/]+)/members/([^/]+)/?")
 _GROUP_SYNC_ROUTE = re.compile(r"api/groups/([^/]+)/sync/?")
 _GROUP_THEME_ROUTE = re.compile(r"api/groups/([^/]+)/theme/?")  # the owner's page theme, AOTY-76
+_GROUP_BACKGROUND_ROUTE = re.compile(r"api/groups/([^/]+)/background/?")  # the owner's, AOTY-96
 _GROUP_METHODS = {"GET": "group_get", "PATCH": "group_rename", "DELETE": "group_delete"}
 GROUP_WRITES = frozenset({"group_create", "group_rename", "group_delete", "member_add", "member_remove",
-                          "group_theme", "my_settings"})  # fmt: skip
+                          "group_theme", "group_background", "my_settings"})  # fmt: skip
 # group_sync (AOTY-55) is public like group_get: a visit to a group page syncs its members.
 # my_memberships and my_settings (AOTY-49): the groups a person is in, and their block on adds.
 GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups", "my_memberships", "group_sync"}
@@ -119,6 +125,9 @@ def _group_route(method, rest):
   m = _GROUP_THEME_ROUTE.fullmatch(rest)
   if m:
     return ("group_theme", _part(m.group(1))) if method == "POST" else ("method", None)
+  m = _GROUP_BACKGROUND_ROUTE.fullmatch(rest)
+  if m:
+    return ("group_background", _part(m.group(1))) if method == "POST" else ("method", None)
   m = _MEMBERS_ROUTE.fullmatch(rest)
   if m:
     return ("member_add", _part(m.group(1))) if method == "POST" else ("method", None)
@@ -399,6 +408,11 @@ def status(row, now, cooldown, queue_depth=None, queue=None, concurrency=2):
   theme = row.get("theme")
   if themes.valid(theme) and theme != themes.DEFAULT:
     out["theme"] = theme
+  # The page's background (AOTY-96), for the same reason: a first visit shows it before any chart.
+  # Left out for none, or anything that isn't an engine.
+  background = backgrounds.engine(row.get("background"))
+  if background:
+    out["background"] = background
   ticket = row.get("queue_ticket")
   if out["stage"] == "queued" and ticket is not None and queue is not None:
     out["queue"] = queue_place(ticket, queue_depth, queue, concurrency)

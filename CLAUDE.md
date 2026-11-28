@@ -895,13 +895,13 @@ Notes:
 - User decisions (sprint 1419):
   - kamp's chapel, bokeh, halation, sparks and wintermute are ported, each its own story (AOTY-99
     to AOTY-103).
-  - **The random pick is per page, not per visitor**, stored by AOTY-96. Until then a first visit
-    picks afresh each time. "Random" is never a choice in a picker.
+  - **The random pick is per page, not per visitor**, stored server-side by AOTY-96 (see "Page
+    backgrounds"); the page never rolls its own. "Random" is never a choice in a picker.
 - **`web/src/backgrounds.js`** is loaded on every page, before app.js. It holds:
   - the shared palette code and `createQuad(gl, frag)`;
   - the **engine contract**, documented there: `mount(canvas, {bg, accent, reducedMotion, onLost})`
-    returns `{setPalette, setColors, destroy}` or null;
-  - `register`, `pick`, `load`.
+    returns `{setPalette, setColors, setStrength?, destroy}` or null;
+  - `register`, `pick`, `load`, and the picker's `pickerOrder` and `savePath` (AOTY-96).
 - **One list:** `build_shell.BACKGROUNDS` (id → file).
   - Each engine is a hashed asset that no `<script src>` names.
   - The page gets their URLs in the `#aoty-backgrounds` JSON block (`{{BGMAP}}`), and its ids are
@@ -911,20 +911,69 @@ Notes:
 - **`load(id)` adds the `<script src>` once** and resolves with what the file registered. It gives
   null for an unknown id, a failed load, or a file that registers nothing, and never retries in that
   page session. The CSP's `script-src 'self'` allows it.
-- **On the page:**
-  - Loading starts with the first visit. The mount waits for both the 1.5 s delay and the file,
-    whichever is later.
-  - `stopAurora` bumps `auroraGen` first, before its early return, so a file that arrives after
-    the visit has moved on never mounts.
-  - `?bg=<id>` previews one, and is read once at boot (routing rewrites the address).
+- **On the page:** AOTY-96's backdrop controller replaced AOTY-77's first-visit-only lifecycle
+  (see "Page backgrounds"). `?bg=<id>` previews one, and is read once at boot (routing rewrites the
+  address).
 - **Not extracted yet:** Borealis's rAF / visibility / resize loop. It has subtle rules (`surge.cancel()`
   on start, the `FRAME_MS - 1` slack, the dt clamp, resize-only-on-change), so the second WebGL
   engine (AOTY-99) extracts it, with two users.
 - **No WebGL is final for now:** `mount` → null means no background. A canvas fallback waits for a
   Canvas 2D engine (AOTY-100).
-- **The CSS keeps `canvas.aurora` / `html.has-aurora`**, whatever the engine. AOTY-96, which takes
-  backgrounds onto charts, can rename them with a selector test.
+- **The CSS keeps `canvas.aurora` / `html.has-aurora`**, whatever the engine and on every page.
 - Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=borealis`.
+
+## Page backgrounds (AOTY-96, 2026-11-28)
+
+- User decisions:
+  - **User and group pages.** The owner picks, as for themes: `group.owner` on a group.
+  - **"theme" and "background" are the page's two style options.** The background is a field of
+    its own: `background`, `background_set_at`.
+  - **Choices:** "none" first, then every ported background alphabetically. "Random" isn't one.
+  - **A new page starts with a random engine**, stored once, so every visitor sees the same.
+    **Pages with nothing stored get none.**
+  - **The art comes first once the chart is built.** The background is never drawn over, or seen
+    through, a cover, card, tile or row.
+  - Colours come from the #1 cover (a group's By Listener #1). A built chart is calmer (strength
+    0.6).
+  - No frame-rate changes: kamp's tuning stays. Engines pause while hidden.
+  - Member views keep the group's background. Share images and link previews never show it.
+- **The server picks the random start** (`common/backgrounds.random_engine`, `Deps.rng` in tests):
+  - **users:** `request_sync` passes one to `_mark_queued` for a new sync (no `last_synced_at`),
+    written as `if_not_exists`, so a retry never re-rolls it and a pick is never overwritten;
+  - **groups:** `group_create` passes one to `groups_store.create`.
+  - So users mid-first-sync at deploy counted as existing (none), and a member first synced by a
+    group add is a new page (random).
+- **The allowlist is `common/backgrounds.py`**: `NONE` plus `ENGINES`, which
+  `tests/test_backgrounds.py` keeps equal to `build_shell.BACKGROUNDS` and to `kampstats`'
+  `background_set`.
+  - Reads take only `ENGINES` ids (`backgrounds.engine`): status, `GET groups/<id>`,
+    `chart_core.with_background`. An engine since removed shows nothing.
+  - "none" is stored, but never published: absent means none.
+- **Routes:** `POST api/users/<name>/background` and `POST api/groups/<id>/background` share the
+  theme routes' code (`_post_style`, `group_style`, `groups_store.set_style`) and restyle.
+  - The restyle copies both fields (`_restyle_published` returns `(chart, theme_changed)`), and the
+    preview card is redrawn only for a theme change.
+  - A rename's meta delete guards `background_set_at` like `theme_set_at`.
+- **The page's backdrop controller** (`app.js` "the page's background"):
+  - `setBackdrop(id)` keeps a matching id, so polls never remount WebGL. Any other id fades the old
+    out and mounts the new; null fades it out.
+  - **`state()` leaves it alone** (a group's "pressing" panel is redrawn on every poll). The intro
+    and pages that don't exist (not found, private, a refusal, no group) call `clearBackground()`.
+  - **Whose background** mirrors the theme's:
+    - `backgroundForPage` (from `themeForPage`) and `backgroundFromStatus`;
+    - `savedBackground` is null until chart.json or a status says, so a remembered head start
+      (`aoty-bg:<kind>:<id>`) isn't cancelled by a page with no chart yet;
+    - `pickedBackground` wins for the session once picked;
+    - the remembered value moves with a group's rename.
+  - **Colours:** the wall's covers on a first visit, the #1 cover on a chart. `topCoverPixels`
+    shares one CORS load with "album of the year".
+- **CSS while a background shows:**
+  - tiles get `--panel` (cards, hero and rows already had it);
+  - the header becomes a solid `--bg` box, drawn by a spread `box-shadow`, so nothing moves and no
+    phone scrolls sideways;
+  - the labels outside it get the halo.
+- Preview: `tools/serve_shell.py --sample alice --port 8001`. The sample chart, newbies and
+  `group/full-house` start with borealis. Sign in as alice for the picker.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

@@ -187,10 +187,13 @@ def _with_table(deps, items):
   return items
 
 
-def create(deps, slug, name, owner, now):
-  """created or taken. The owner is the first member."""
+def create(deps, slug, name, owner, now, background=None):
+  """created or taken. The owner is the first member. background: the new group's starting page
+  background, a common.backgrounds engine (AOTY-96: random, picked by the caller)."""
   meta = {"name": name, "owner": owner, "member_count": 1, "created_at": now, "updated_at": now,
           "chart_requested_at": now}  # fmt: skip
+  if background:
+    meta["background"] = background
   reasons = _transact(deps, _with_table(deps, [_meta_put(slug, meta), _member_put(slug, owner, now)]))
   return "created" if reasons is None else "taken"
 
@@ -259,18 +262,21 @@ def _owned(deps, slug, owner):
   return (meta, members), None
 
 
-def _meta_delete(slug, owner, count, theme_set_at=False):
+def _meta_delete(slug, owner, count, theme_set_at=False, background_set_at=False):
   """Delete the meta only if nothing changed since it was read (the owner and the count).
 
   theme_set_at (a rename, AOTY-76): also only if no theme was saved since; None when the meta had
   none. A rename copies the meta it read to the new slug, so a theme saved in between would
-  otherwise be lost. The default (False) leaves the theme out of the condition."""
+  otherwise be lost. background_set_at (AOTY-96) is guarded the same way. The default (False)
+  leaves that field out of the condition."""
   condition, values = "#o = :me AND member_count = :n", {":me": owner, ":n": count}
-  if theme_set_at is None:
-    condition += THEME_UNSET
-  elif theme_set_at is not False:
-    condition += THEME_SAME
-    values[":ts"] = theme_set_at
+  for at, unset, same, ref in ((theme_set_at, THEME_UNSET, THEME_SAME, ":ts"),
+                               (background_set_at, BACKGROUND_UNSET, BACKGROUND_SAME, ":bs")):  # fmt: skip
+    if at is None:
+      condition += unset
+    elif at is not False:
+      condition += same
+      values[ref] = at
   return {"Delete": {
     "TableName": None, "Key": _key(slug, g.META),
     "ConditionExpression": condition,
@@ -281,18 +287,21 @@ def _meta_delete(slug, owner, count, theme_set_at=False):
 
 THEME_UNSET = " AND attribute_not_exists(theme_set_at)"
 THEME_SAME = " AND theme_set_at = :ts"
+BACKGROUND_UNSET = " AND attribute_not_exists(background_set_at)"
+BACKGROUND_SAME = " AND background_set_at = :bs"
 
 
-def set_theme(deps, slug, owner, theme, now):
-  """set, missing or forbidden (AOTY-76): the owner's page theme on the group's meta. theme is a
-  common.themes id the caller has checked."""
+def set_style(deps, slug, owner, field, value, now):
+  """set, missing or forbidden: one of the owner's page style fields on the group's meta, with
+  field_set_at: "theme" (AOTY-76, a common.themes id) or "background" (AOTY-96, a
+  common.backgrounds id, "none" included). The caller has checked the value."""
   try:
     deps.ddb.update_item(
       TableName=_table(deps), Key=_key(slug, g.META),
-      UpdateExpression="SET theme = :t, theme_set_at = :now",
+      UpdateExpression="SET #f = :t, #at = :now",
       ConditionExpression="attribute_exists(pk) AND #o = :me",
-      ExpressionAttributeNames={"#o": "owner"},
-      ExpressionAttributeValues=dynamo.to_item({":t": theme, ":now": now, ":me": owner}),
+      ExpressionAttributeNames={"#o": "owner", "#f": field, "#at": f"{field}_set_at"},
+      ExpressionAttributeValues=dynamo.to_item({":t": value, ":now": now, ":me": owner}),
       ReturnValuesOnConditionCheckFailure="ALL_OLD",
     )  # fmt: skip
   except Exception as e:
@@ -350,7 +359,8 @@ def rename(deps, slug, new_slug, name, owner, now):
     fields = {k: v for k, v in meta.items() if k not in ("pk", "sk", "chart_built_at", "chart_read_at")}
     fields |= {"name": name, "updated_at": now, "chart_requested_at": now}
     items = [_meta_put(new_slug, fields),
-             _meta_delete(slug, owner, meta.get("member_count", 0), meta.get("theme_set_at"))]  # fmt: skip
+             _meta_delete(slug, owner, meta.get("member_count", 0), meta.get("theme_set_at"),
+                          meta.get("background_set_at"))]  # fmt: skip
     for m in members:
       items.append(_member_put(new_slug, m, now, condition=False))
       items.append({"Delete": {"TableName": None, "Key": _key(slug, g.member_sk(m))}})

@@ -60,7 +60,7 @@ sys.path[:0] = [str(REPO), str(REPO / "lambdas"), str(REPO / "lambdas" / "chart"
 import api_core  # noqa: E402
 import chart_core  # noqa: E402
 import preview_groups  # noqa: E402  (tools/, beside this script)
-from common import session, themes  # noqa: E402
+from common import backgrounds, session, themes  # noqa: E402
 from common.albumkey import album_key, join_key  # noqa: E402
 from scripts import build_shell  # noqa: E402
 
@@ -104,24 +104,32 @@ def fake_outcome(name):
   return FAKE_OUTCOMES.get(name)
 
 
-def fake_theme(method, name, body, signed_in, data):
-  """POST users/<name>/theme (AOTY-65), as the api answers it: only the signed-in owner (the preview
-  cookie, api/auth/start?as=<name>), only a common.themes id. The restyle is immediate here: the
-  theme goes straight into the preview chart.json."""
+# The owner's page styles: field -> (its allowlist check, its ids, how a chart carries it).
+STYLES = {
+  "theme": (themes.valid, themes.IDS, chart_core.with_theme),  # AOTY-65
+  "background": (backgrounds.valid, backgrounds.IDS, chart_core.with_background),  # AOTY-96
+}
+
+
+def fake_style(method, name, body, signed_in, data, field):
+  """POST users/<name>/theme (AOTY-65) or users/<name>/background (AOTY-96), as the api answers
+  them: only the signed-in owner (the preview cookie, api/auth/start?as=<name>), only an
+  allowlisted id. The restyle is immediate here: the value goes straight into the preview chart.json."""
+  valid, ids, apply = STYLES[field]
   if method != "POST":
     return 405, b'{"error":"method not allowed"}', "application/json"
   if not signed_in:
     return 401, b'{"error":"signed_out"}', "application/json"
   if signed_in.lower() != name:
     return 403, b'{"error":"not_owner"}', "application/json"
-  if not themes.valid(body.get("theme")):
-    return 400, json.dumps({"error": "unknown_theme", "themes": sorted(themes.IDS)}).encode(), "application/json"
+  if not valid(body.get(field)):
+    return 400, json.dumps({"error": f"unknown_{field}", f"{field}s": sorted(ids)}).encode(), "application/json"
   f = data / "users" / name / "chart.json"
   if not f.exists():
     return 404, b'{"error":"no_chart"}', "application/json"
-  chart = chart_core.with_theme(json.loads(f.read_text(encoding="utf-8")), body["theme"])
+  chart = apply(json.loads(f.read_text(encoding="utf-8")), body[field])
   f.write_text(json.dumps(chart), encoding="utf-8")
-  return 200, json.dumps({"theme": body["theme"]}).encode(), "application/json"
+  return 200, json.dumps({field: body[field]}).encode(), "application/json"
 
 
 # Real albums with names Last.fm's URLs treat specially (AOTY-43), at the top of the sample, so
@@ -133,8 +141,9 @@ REAL = [("Taylor Swift", "1989 (Taylor's Version)"), ("AC/DC", "Back in Black"),
         ("Pg.99", "Document #8")]  # fmt: skip
 
 
-def sample_chart(username, n=120):
-  """A synthetic chart: n albums, a few singles, a few without covers or with a broken one."""
+def sample_chart(username, n=120, background="borealis"):
+  """A synthetic chart: n albums, a few singles, a few without covers or with a broken one. It
+  starts with a background, as a new page does (AOTY-96)."""
   store = {"version": 1, "year": 2026, "weeks": {"0": {"plays": {}}}, "albums": {}}
   items = {}
   for i in range(n):
@@ -147,7 +156,7 @@ def sample_chart(username, n=120):
     items[k] = {"year": 2026, "tracks": 4 + i % 11, "tracks_type": "Single" if i % 9 == 4 else "Album",
                 "rg_mbid": None}  # fmt: skip
   chart, _ = chart_core.build_chart(store, items, username=username.lower(), display_name=username,
-                                    now=calendar.timegm((2026, 11, 22, 12, 0, 0)))  # fmt: skip
+                                    now=calendar.timegm((2026, 11, 22, 12, 0, 0)), background=background)  # fmt: skip
   chart["pending"] = 3
   return chart
 
@@ -172,6 +181,8 @@ def fake_status(started, now, chart_file):
   q, r, b = FAKE_SYNC_S
   row = {"username": chart_file.parent.name, "sync_requested_at": s, "chart_built_at": s - 3600,
          "chart_plays": 1000, "chart_albums": 120, "chart_pending": 0, "chart_hits": 120}  # fmt: skip
+  if chart_file.is_file():  # the row's background is the one its chart carries (AOTY-96)
+    row["background"] = json.loads(chart_file.read_text(encoding="utf-8")).get("background", "none")
   if e < q:
     row["state"] = "queued"
     return api_core.status(row, now, COOLDOWN, queue_depth=0)
@@ -298,7 +309,8 @@ def fake_first_status(kind, started, now, name):
     return fake_caller_status(started, now, name)
   kind, started = _as_newbie(kind, started)
   e, s = now - started, int(started)
-  row = {"username": name, "sync_requested_at": s}
+  # A new page's random start (AOTY-96), stored from its first sync on.
+  row = {"username": name, "sync_requested_at": s, "background": "borealis"}
   if e < FIRST_S["queued"]:
     row["state"] = "queued"
     return api_core.status(row, now, COOLDOWN, queue_depth=3)
@@ -477,12 +489,13 @@ def handler_for(base, out, data, proxy=None):
         status, payload, extra = answer
         raw = b"" if payload is None else json.dumps(payload).encode()
         return self.send(status, raw, "application/json", "no-store", extra)
-      parts = rest.split("/")  # api, users, <name>, sync|status|theme
-      if len(parts) != 4 or parts[:2] != ["api", "users"] or parts[3] not in ("sync", "status", "theme"):
+      parts = rest.split("/")  # api, users, <name>, sync|status|theme|background
+      if len(parts) != 4 or parts[:2] != ["api", "users"] or parts[3] not in ("sync", "status", *STYLES):
         return self.send(404, b'{"error":"not found"}', "application/json")
       name, action = parts[2].lower(), parts[3]
-      if action == "theme":
-        return self.send(*fake_theme(method, name, parsed, self.cookies().get(preview_groups.COOKIE), data))
+      if action in STYLES:
+        signed_in = self.cookies().get(preview_groups.COOKIE)
+        return self.send(*fake_style(method, name, parsed, signed_in, data, action))
       now = time.time()
       special = fake_outcome(name) if action == "sync" and method == "POST" else None
       if special:

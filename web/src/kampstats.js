@@ -64,6 +64,9 @@
                         "green-day", "foxy-brown", "golden-smog", "white-stripes", "tangerine-dream",
                         "yellow-magic-orchestra", "mint-royale", "the-blue-nile", "lavender-diamond", "gabbie",
                         "match1"]},
+    // An owner saved their page's background (AOTY-96): the id only, never whose page.
+    // tests/test_backgrounds.py keeps the list equal to common/backgrounds.py IDS.
+    background_set: {background: ["none", "borealis"]},
     sign_in: {},
     group_create: {},
     member_add: {},

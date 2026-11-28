@@ -233,7 +233,7 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
   images = _cover_images(deps, username, year, store, items, now, totals)
   chart, pending = core.build_chart(
     store, items, username=username, display_name=row.get("display_name"), now=now, images=images,
-    theme=row.get("theme"),
+    theme=row.get("theme"), background=row.get("background"),
   )  # fmt: skip
   _put_json(
     deps, deps.env["SITE_BUCKET"], chart_key(deps.env.get("SITE_PREFIX", ""), username), chart,
@@ -254,31 +254,34 @@ def build(deps, username, row, year=TARGET_YEAR, totals=None):
 
 
 def restyle(deps, username):
-  """Copy the users row's theme into the published chart.json (AOTY-65). False when nothing
-  changed: no chart yet, or it already carries that theme.
+  """Copy the users row's theme (AOTY-65) and background (AOTY-96) into the published chart.json.
+  False when nothing changed: no chart yet, or it already carries both.
 
-  The theme comes from the row, never the event: async events repeat and arrive out of order, so a
-  late one for an older pick must not undo a newer one. No chart_built_at means no chart to read
-  (and without s3:ListBucket a missing object answers 403, not 404). Nothing is rebuilt: no store,
-  no Last.fm, no groups."""
+  They come from the row, never the event: async events repeat and arrive out of order, so a late
+  one for an older pick must not undo a newer one. No chart_built_at means no chart to read (and
+  without s3:ListBucket a missing object answers 403, not 404). Nothing is rebuilt: no store, no
+  Last.fm, no groups. The preview card is redrawn only for a new theme: it's in the theme's
+  colours (AOTY-91), and a background is never drawn on it."""
   row = _get_user(deps, username)
   if not row.get("chart_built_at"):
     return False
   prefix = deps.env.get("SITE_PREFIX", "")
-  chart = _restyle_published(deps, chart_key(prefix, username), row.get("theme"))
-  if chart is None:
+  restyled = _restyle_published(deps, chart_key(prefix, username), row.get("theme"), row.get("background"))
+  if restyled is None:
     return False
-  _put_preview(deps, og_key(prefix, username), og.user_page, chart)  # the card is in the theme (AOTY-91)
+  chart, theme_changed = restyled
+  if theme_changed:
+    _put_preview(deps, og_key(prefix, username), og.user_page, chart)
   log.info("chart %s restyled", _tag(username))
   return True
 
 
 def restyle_group(deps, group_id):
-  """Copy the group meta's theme into its published chart.json (AOTY-76), as restyle does for a
-  user. The theme comes from the meta, never the event. No group (deleted, or moved by a rename,
-  whose new slug's build carries the theme) or no published chart (404, or the 403 a missing
-  object answers without ListBucket): nothing to do. Not gated on chart_built_at, which a build
-  stamps only from chart_requested_at."""
+  """Copy the group meta's theme (AOTY-76) and background (AOTY-96) into its published chart.json,
+  as restyle does for a user. They come from the meta, never the event. No group (deleted, or
+  moved by a rename, whose new slug's build carries them) or no published chart (404, or the 403 a
+  missing object answers without ListBucket): nothing to do. Not gated on chart_built_at, which a
+  build stamps only from chart_requested_at."""
   if not grp.SLUG_RE.match(group_id):
     log.warning("invalid group id in event; dropped")
     return False
@@ -286,18 +289,23 @@ def restyle_group(deps, group_id):
   if meta is None:
     return False
   prefix = deps.env.get("SITE_PREFIX", "")
-  chart = _restyle_published(deps, group_chart_key(prefix, group_id), meta.get("theme"))
-  if chart is None:
+  restyled = _restyle_published(
+    deps, group_chart_key(prefix, group_id), meta.get("theme"), meta.get("background")
+  )
+  if restyled is None:
     return False
-  _put_preview(deps, group_og_key(prefix, group_id), og.group_page, chart)  # the card is in the theme
+  chart, theme_changed = restyled
+  if theme_changed:
+    _put_preview(deps, group_og_key(prefix, group_id), og.group_page, chart)  # the card is in the theme
   log.info("group %s restyled", group_id)
   return True
 
 
-def _restyle_published(deps, key, theme):
-  """Set (or clear) the theme of the chart.json published at key: the restyled chart, or None when
-  there's no chart, or it already has that theme. The role has no s3:ListBucket on the site bucket,
-  so a missing chart can answer 403 rather than 404: either way there's nothing to restyle."""
+def _restyle_published(deps, key, theme, background=None):
+  """Set (or clear) the theme and background of the chart.json published at key: (the restyled
+  chart, whether its theme changed), or None when there's no chart, or it already has both. The
+  role has no s3:ListBucket on the site bucket, so a missing chart can answer 403 rather than 404:
+  either way there's nothing to restyle."""
   try:
     body = _get_object(deps, deps.env["SITE_BUCKET"], key)
   except Exception as e:
@@ -307,11 +315,13 @@ def _restyle_published(deps, key, theme):
   if body is None:
     return None
   chart = json.loads(body)
-  before = chart.get("theme")
-  if core.with_theme(chart, theme).get("theme") == before:
+  before = (chart.get("theme"), chart.get("background"))
+  core.with_background(core.with_theme(chart, theme), background)
+  after = (chart.get("theme"), chart.get("background"))
+  if after == before:
     return None
   _put_json(deps, deps.env["SITE_BUCKET"], key, chart, CacheControl="no-cache")
-  return chart
+  return chart, after[0] != before[0]
 
 
 def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finished_at=0, totals=None):
@@ -372,7 +382,7 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finishe
   chart, _ = group_core.build_group_chart(
     stores, items, group_id=group_id, name=str(meta.get("name") or ""), year=year,
     waiting=waiting, unavailable=unavailable, now=int(deps.clock()), images=images,
-    theme=meta.get("theme"),
+    theme=meta.get("theme"), background=meta.get("background"),
   )  # fmt: skip
   _put_json(
     deps, deps.env["SITE_BUCKET"], group_chart_key(deps.env.get("SITE_PREFIX", ""), group_id), chart,
