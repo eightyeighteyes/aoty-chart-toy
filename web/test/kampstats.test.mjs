@@ -101,17 +101,59 @@ test("a sign-in counts only when this browser started one and api/me names someo
   assert.equal(signInDone("1", undefined), false);
 });
 
-// A fake browser: the dataLayer, the injected script and sessionStorage.
-function fakePage(pathname, {search = "", referrer = "", id = "G-TEST", hostname = "kamp.fm"} = {}) {
+// consent.js's kampConsent, as far as kampstats uses it (AOTY-28).
+function fakeConsent(state) {
+  const listeners = [];
+  return {
+    onChange(fn) { listeners.push(fn); fn(state); },
+    set(next) { state = next; for (const fn of listeners) fn(state); },
+  };
+}
+
+// A fake browser: the dataLayer, the injected script and sessionStorage. Consent is granted unless
+// a test says otherwise.
+function fakePage(pathname, {search = "", referrer = "", id = "G-TEST", hostname = "kamp.fm",
+                             consent = fakeConsent("granted")} = {}) {
   const win = {};
   const loc = {pathname, search, origin: ORIGIN, hostname};
   const injected = [];
   const items = new Map();
   const storage = {getItem: k => items.get(k) ?? null, setItem: (k, v) => items.set(k, v), removeItem: k => items.delete(k)};
-  const stats = create({id, base: BASE, win, loc, referrer, storage, inject: src => injected.push(src)});
+  const stats = create({id, base: BASE, win, loc, referrer, storage, inject: src => injected.push(src), consent});
   const calls = () => (win.dataLayer || []).map(a => Array.from(a));
-  return {stats, win, loc, injected, items, calls};
+  return {stats, win, loc, injected, items, calls, consent};
 }
+
+const GTAG = "https://www.googletagmanager.com/gtag/js?id=G-TEST";
+
+test("consent mode's default, everything denied, is the first command (AOTY-28)", () => {
+  const p = fakePage(BASE);
+  assert.deepEqual(p.calls()[0], ["consent", "default", {analytics_storage: "denied", ad_storage: "denied",
+                                                         ad_user_data: "denied", ad_personalization: "denied"}]);
+  assert.deepEqual(p.calls().find(c => c[0] === "consent" && c[1] === "update"),
+                   ["consent", "update", {analytics_storage: "granted"}]);
+});
+
+test("nothing loads while consent is undecided or denied; a yes loads gtag once, page view queued", () => {
+  const p = fakePage(`${BASE}user/alice`, {consent: fakeConsent("ask")});
+  p.stats.pageView();
+  p.stats.event("kamp_click");
+  assert.deepEqual(p.injected, []);
+  p.consent.set("denied");
+  assert.deepEqual(p.injected, []);
+  p.consent.set("granted");
+  p.consent.set("granted");
+  assert.deepEqual(p.injected, [GTAG]);
+  // The page view and the event were queued before the yes, and go out when gtag loads.
+  assert.ok(p.calls().some(c => c[0] === "event" && c[1] === "page_view"));
+  // A no after the yes stops measuring.
+  p.consent.set("denied");
+  assert.deepEqual(p.calls().at(-1), ["consent", "update", {analytics_storage: "denied"}]);
+});
+
+test("no consent module at all means nothing loads", () => {
+  assert.deepEqual(fakePage(BASE, {consent: null}).injected, []);
+});
 
 test("no measurement id: nothing loads and nothing is pushed", () => {
   const p = fakePage(`${BASE}user/alice`, {id: ""});

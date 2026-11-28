@@ -13,6 +13,12 @@
 //
 // Named kampstats, not analytics: filter lists block same-origin paths containing "analytics.".
 // app.js still guards against this file never loading.
+//
+// Consent (AOTY-28): gtag.js is injected only once consent.js says granted (Consent Mode's basic
+// setup: nothing reaches Google before a yes). The dataLayer still queues the page view and events
+// meanwhile, so a yes sends them without a reload. Consent Mode's default (everything denied) is the
+// first command; a yes pushes an update granting analytics_storage only. No consent module (the file
+// was blocked) means nothing loads.
 (function (root) {
   "use strict";
 
@@ -126,7 +132,12 @@
 
   const NOOP = {pageView() {}, setPage() {}, event() {}, introSubmit() {}, markSignIn() {}, checkSignIn() {}};
 
-  // The live wrapper. deps: {id, base, win, loc, referrer, storage, inject}; tests pass stubs.
+  // Consent Mode v2's default, before anything else: we use no ads, so the ad signals stay denied.
+  const CONSENT_DEFAULT = {analytics_storage: "denied", ad_storage: "denied", ad_user_data: "denied",
+                           ad_personalization: "denied"};
+
+  // The live wrapper. deps: {id, base, win, loc, referrer, storage, inject, consent}; tests pass
+  // stubs. consent: consent.js's kampConsent ({onChange(fn)}), or null.
   function create(deps) {
     const {id, base, win, loc, storage} = deps;
     if (!id) return NOOP;
@@ -135,14 +146,25 @@
     function gtag() { win.dataLayer.push(arguments); }
     const referrer = templateReferrer(deps.referrer, loc.origin, base);
     const fields = () => pageFields(loc.pathname, loc.origin, base, referrer);
-    let viewed = false;
+    let viewed = false, loaded = false;
 
+    gtag("consent", "default", CONSENT_DEFAULT);
     gtag("js", new Date());
     gtag("set", fields());
     const config = {send_page_view: false};
     if (loc.hostname !== PROD_HOST) config.debug_mode = true;
     gtag("config", id, config);
-    deps.inject(GTAG_URL + encodeURIComponent(id));
+    if (deps.consent && typeof deps.consent.onChange === "function") {
+      deps.consent.onChange(state => {
+        if (state === "granted" && !loaded) {
+          loaded = true;
+          gtag("consent", "update", {analytics_storage: "granted"});
+          deps.inject(GTAG_URL + encodeURIComponent(id));
+        } else if (state === "denied" && loaded) {
+          gtag("consent", "update", {analytics_storage: "denied"});  // gtag stays, but stops measuring
+        }
+      });
+    }
 
     const store = (fn) => { try { return fn(); } catch (_) { return null; } };
     function event(name, params) {
@@ -173,7 +195,7 @@
     };
   }
 
-  const api = {TITLES, OUTCOMES, EVENTS, NOOP, template, templateReferrer, pageFields, clean, outcomeCode,
+  const api = {TITLES, OUTCOMES, EVENTS, NOOP, CONSENT_DEFAULT, template, templateReferrer, pageFields, clean, outcomeCode,
                signInDone, create};
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 
@@ -189,6 +211,7 @@
       loc: root.location,
       referrer: document.referrer,
       storage: (() => { try { return root.sessionStorage; } catch (_) { return null; } })(),
+      consent: root.kampConsent || null,  // consent.js runs first (index.html's script order)
       inject(src) {
         const s = document.createElement("script");
         s.async = true;
