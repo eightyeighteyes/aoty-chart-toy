@@ -15,6 +15,9 @@
 //                           then they're asked again)
 // Nothing else is stored, and neither cookie names anyone.
 //
+// The banner styles itself from the page's colour tokens: the toy's names first (--panel, --ink,
+// --line, --accent, --on-accent), then kamp.fm's (--surface, --text, --border), then fixed fallbacks.
+//
 // The banner only shows on a page that has analytics to consent to: a non-empty
 // <meta name="aoty-ga"> (the toy's prod build) or <meta name="kamp-analytics" content="1"> (kamp.fm).
 (function (root) {
@@ -74,14 +77,14 @@
   const STYLE = `
 .kamp-consent { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 50; box-sizing: border-box;
   max-width: 560px; margin: 0 auto; padding: 14px 16px; display: flex; flex-wrap: wrap; align-items: center;
-  gap: 10px 14px; background: var(--panel, #17151f); color: var(--ink, #f4f1ea);
-  border: 1px solid var(--line, #2c2937); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  gap: 10px 14px; background: var(--panel, var(--surface, #17151f)); color: var(--ink, var(--text, #f4f1ea));
+  border: 1px solid var(--line, var(--border, #2c2937)); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.35);
   font: 14px/1.45 "DM Sans", system-ui, sans-serif; }
 .kamp-consent[hidden] { display: none; }
 .kamp-consent p { margin: 0; flex: 1 1 240px; }
 .kamp-consent-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .kamp-consent button { font: 600 14px "DM Sans", system-ui, sans-serif; border-radius: 999px; padding: 8px 16px;
-  cursor: pointer; border: 1px solid var(--line, #2c2937); background: transparent; color: var(--ink, #f4f1ea); }
+  cursor: pointer; border: 1px solid var(--line, var(--border, #2c2937)); background: transparent; color: var(--ink, var(--text, #f4f1ea)); }
 .kamp-consent button.kamp-consent-yes { background: var(--accent, #ff6b4a); border-color: var(--accent, #ff6b4a);
   color: var(--on-accent, #1a1014); }
 .kamp-consent button:focus-visible { outline: 2px solid var(--accent-2, #ffc24b); outline-offset: 2px; }
