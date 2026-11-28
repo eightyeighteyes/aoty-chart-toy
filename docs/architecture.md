@@ -242,7 +242,9 @@ because losing one revives that user's revoked sessions.
 ## Groups (AOTY-48)
 
 Built: the api, the table and the editing UI (AOTY-52: the group page's owner-only edit panel,
-"your groups" and create in a dialog). Opting out is AOTY-49. After each write the page re-reads
+"your groups" and create in a dialog) and opting out (AOTY-49: in "your groups", `GET
+api/me/memberships` via `by_member` and a BatchGetItem of the metas, leaving by `DELETE
+.../members/<own name>`, and `PUT api/me/settings` for `block_group_adds`). After each write the page re-reads
 `GET api/groups/<id>` and polls the group's chart.json every 5 s until the chart is rebuilt and
 every member is ready (`groupedit.rebuild`), with one poller per page so a rename's old slug is
 never read again. A group is
@@ -429,8 +431,8 @@ and the next day's run starts over.
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
 | `guard` table | api (`ip#` new-name sets, `adds#` per-owner member-add sets (AOTY-53), the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
-| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`, the owner's `theme` and `theme_set_at` (AOTY-65)), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
-| `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`; the owner's `theme` and `theme_set_at` on meta, AOTY-76), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
+| `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`, the owner's `theme` and `theme_set_at` (AOTY-65)), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); api's `block_group_adds` (AOTY-49, `PUT me/settings`, which may create the row) | api (status, cooldown, a group's ready count, blocked adds), chart builder |
+| `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`; the owner's `theme` and `theme_set_at` on meta, AOTY-76), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`, `by_member` for AOTY-49's memberships), chart builder (members, `by_member`) |
 | site bucket `data/users/*/chart.json` | chart builder (builds, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-65) |
 | site bucket `data/groups/*/chart.json` | chart builder (writes, deletes, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-76) |
 | site bucket `data/users/*/og.html`, `data/groups/*/og.html` (AOTY-85) | chart builder (every build; a group's delete) | link-preview bots, through CloudFront: kamp-site's shell function sends them there |

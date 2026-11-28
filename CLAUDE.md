@@ -699,6 +699,34 @@ Notes:
 - Preview: any seeded group's first load re-syncs it for 45 s; a reload is the cooldown;
   `paused-crew` is `pause_syncs`.
 
+## Opting out (AOTY-49, 2026-11-27)
+
+- User decisions:
+  - **Blocking stops future adds only.** The person stays in their current groups; "your groups"
+    has a separate **"leave all"**.
+  - **"leave" shows only for groups someone else owns.** Owned groups stay in the owned list; an
+    owner can still take themselves out on the group page.
+- **Leaving is `DELETE api/groups/<id>/members/<own name>`**, not the ticket's `members/me`: `me` is
+  a valid Last.fm name, so `members/me` would collide with an owner removing the user "me".
+  `groups_store.remove_member` drops the owner check only when the caller removes themselves; same
+  transaction, so the count and `chart_requested_at` stay in one place and the chart rebuilds.
+- **`GET api/me/memberships`** = `{groups: [{id, name, owner}], block_group_adds}`. `by_member` is
+  keys only, so the metas come from a BatchGetItem (the api's one on the groups table). Groups the
+  caller owns are left out. The GSI is eventually consistent: a meta that's gone is dropped, and
+  the page keeps its own list after a leave rather than re-fetching at once.
+- **`PUT api/me/settings {block_group_adds: bool}`**, behind `group_writes` like every write. On, it
+  **creates the users row** if there's none (unlike the theme write): a signed-in name is a real
+  Last.fm user, and with no `last_synced_at` its first sync still counts as new. Off is a
+  conditional REMOVE, so it never makes a bare row.
+- **The refusal stays `member_add`'s neutral 409 `cannot_add`**, checked before `check_new_user`. A
+  blocked person always has a row, so there's no `user.getInfo` either way. Accepted residual: only
+  an opt-out produces `cannot_add`, so a persistent owner could infer the person signed in once.
+- A member who blocks but stays in a group is still skipped by its visit syncs (AOTY-55's
+  `blocked`), so their plays there wait for their own page visit.
+- Analytics: `group_leave`, `group_leave_all`, `block_adds` (`on` "1"/"0"), never which group.
+- Preview: sign in as alice; "your groups" lists bobs-crew and carols-club. After she blocks, sign
+  in as bob (`api/auth/start?as=bob`) and add alice.
+
 ## Analytics (AOTY-38, 2026-11-24)
 
 - User decisions: **kamp.fm's GA4 property** (`G-QNJVBYWDYN`, kamp-site's), content group `aoty`,
