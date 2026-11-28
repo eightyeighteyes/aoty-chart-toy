@@ -59,7 +59,8 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `consent.js` (the shared analytics choice, AOTY-28: see "Consent"), `backgrounds.js` (the first visit's background registry and what the backgrounds share, AOTY-77:
 see "Background registry"), `borealis.js` (the first aurora, ported from kamp, AOTY-67: see
-"Borealis"; loaded only when picked), `chapel.js` (kamp's colour fields, AOTY-103: see "Chapel")
+"Borealis"; loaded only when picked), `chapel.js` (kamp's colour fields, AOTY-103: see "Chapel"),
+`bokeh.js` (kamp's drifting orbs on Canvas 2D, AOTY-102: see "Bokeh")
 and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`; AOTY-53's `pause_groups`, `max_groups_per_owner`, `max_group_member_adds_per_hour`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
@@ -915,18 +916,33 @@ Notes:
 - **On the page:** AOTY-96's backdrop controller replaced AOTY-77's first-visit-only lifecycle
   (see "Page backgrounds"). `?bg=<id>` previews one, and is read once at boot (routing rewrites the
   address).
-- **The WebGL loop is `backgrounds.runShader(canvas, opts, spec)`** (extracted from Borealis by
-  AOTY-103, the second WebGL engine). It owns the context, the rAF at `spec.fps` with `FRAME_MS - 1`
-  slack, the 0.25 s clock clamp, resize-only-on-change, visibility, `onLost`, `destroy`, and the
-  `uRes`/`uTime`/`uBg` uniforms. An engine file is a **scene**: `draw(gl, quad, frame)` sets the
-  rest, and it owns its own palette fade. Borealis's `surge.cancel()` is its `onStart`.
-  - `frame.still` is any repaint outside the loop. `frame.atRest` is reduced motion's rest frame
-    only, so a theme repaint never snaps an animation to its rest pose.
-  - Canvas 2D engines (Sparks, AOTY-100) don't use it.
-  - `web/test/fakegl.mjs` is a stand-in context, canvas and rAF clock. With it, tests check that a
-    mounted engine sets every uniform it declares.
-- **No WebGL is final for now:** `mount` → null means no background. A canvas fallback waits for a
-  Canvas 2D engine (AOTY-100).
+- **One loop, two ways to draw.** `backgrounds.runLoop` is private.
+  - It was extracted from Borealis by AOTY-103; AOTY-102 split it to add Canvas 2D.
+  - It owns the rAF at `spec.fps` with `FRAME_MS - 1` of slack, the 0.25 s clock clamp, resizing
+    only on a real change, visibility, `onLost`, `destroy`, and `scene.dispose`.
+  - An engine file is a **scene**: it draws, and it owns its own palette fade. Borealis's
+    `surge.cancel()` is its `onStart`.
+- **`runShader`** (WebGL 1): it sets `uRes`/`uTime`/`uBg`, and the scene's `draw(gl, quad, frame)`
+  sets the rest. `destroy` calls `WEBGL_lose_context`.
+- **`runCanvas`** (Canvas 2D, AOTY-102):
+  - The context is `{alpha: false}`. Every frame starts with `--bg`, in CSS px, at alpha 1 and
+    source-over. A resize resets a 2D context's whole state, so all of it is set every frame.
+    Never `clearRect`, which paints black on an opaque canvas.
+  - `draw(ctx, frame)` gets `w`/`h` in CSS px, `scale`, `bg` and `light`.
+  - `contextlost` ends it the way a lost WebGL context does. `destroy` sets the canvas to 0×0.
+  - Sparks (AOTY-100) and Wintermute (AOTY-101) reuse it.
+- **Shared helpers:**
+  - `isLight(bg)` is `lum > 0.5`, the midpoint of the shaders' smoothstep. Canvas engines draw
+    `multiply` on light pages instead of `screen`/`lighter`.
+  - `spriteCanvas(side)` is an `OffscreenCanvas` with a 2D context, else a `<canvas>`.
+  - `DrunkWalk` and `Pace` (Chapel's `RetargetPace`) live here.
+- **Frames:** `frame.still` is any repaint outside the loop. `frame.atRest` is reduced motion's
+  rest frame only, so a theme repaint never snaps an animation to its rest pose.
+- **Tests:** `web/test/fakegl.mjs` has stand-ins for a WebGL context, a 2D context (it records ops
+  and gradients), `OffscreenCanvas` (with or without `filter`), a canvas, and the rAF clock. With
+  them, tests check that a mounted WebGL engine sets every uniform it declares.
+- **No context means no background:** if `mount` gives null, the page stays as it was. Canvas 2D
+  always gets a context, so it has no "slow GPU" exit.
 - **The CSS keeps `canvas.aurora` / `html.has-aurora`**, whatever the engine and on every page.
 - Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=borealis`.
 
@@ -1021,6 +1037,50 @@ Notes:
   - Redo it after shader edits.
 - Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=chapel`. Signed in as bob,
   `group/bobs-crew` starts with chapel.
+
+## Bokeh (AOTY-102, 2026-11-28)
+
+- **`web/src/bokeh.js`** is kamp's Bokeh, ported from kamp commit d8ea676: eight soft orbs that
+  drift on bounded walks, breathe, and now and then rack one or two small ones into focus.
+  - It's the first Canvas 2D port, on `runCanvas`, at kamp's tuning: 0.25 scale, dpr capped at 2,
+    30 fps.
+  - Dropped: the pointer parallax, the art pane (`art` is null), the vignette, the `__kampGL` hooks.
+- User decisions:
+  - **Bokeh built the canvas base**, which AOTY-100 had been meant to.
+  - **Fireflies stay**, always due, since there's no pointer to wait out.
+- **Density:** kamp's bar holds with no art: over an hour, never blank, and a single orb under 2%
+  of the time. It holds on 1600×1000, a 390×844 phone and a 1024×1366 tablet. Don't loosen the
+  test to pass; bring the numbers.
+- **The blur:**
+  - Where `ctx.filter` exists (Chrome, Firefox), sprites are baked kamp's way.
+  - **Safari and every iOS browser have no `ctx.filter`.** There `blurredStops` computes the same
+    blur as a gradient of radius r + 3σ: a 2D Gaussian over the stops' hat functions, on
+    premultiplied colour, cached per geometry.
+  - Measured in headless Chrome, the fallback is within 1–3 alpha levels (of 255) of the real
+    filter for heroes, mids, accents and the firefly.
+  - The sharp disc has no blur there; its 1.5 px edge is only an anti-alias floor.
+- **Palettes:**
+  - The palette set right after mount lands, with no fade and no bloom.
+  - Later ones crossfade over 1 s and bloom, at most once per `BLOOM_PACE_S` (7 s, `Pace`).
+  - `onStart` drops a stale bloom, as kamp's `start()` does.
+- **Light pages** draw orbs and the still gradient `multiply`. The firefly is `multiply` too, its
+  core in its own colour.
+  - No thicker paint was needed: one orb multiplied on white moves the page about as far as it
+    screens on dark (127 against 121, summed RGB). Only yellow is fainter.
+  - **Measure light against dark on the same orb**, never on two random frames. Two random frames
+    once read as 81 against 148 and nearly led to a wrong fix.
+- **Compositing:** screening onto `--bg` against kamp's transparent canvas over `--bg` differs by
+  at most 4/255 on the dark `--bg`.
+- `atRest` paints kamp's two-swatch gradient. Any other still draws the frozen field.
+- `aotyBokeh.pop()` in the console brings a firefly at once.
+- **How it was checked by hand:** a scratch page in headless Chrome
+  (`--allow-file-access-from-files --dump-dom`).
+  - It bakes each sprite with `ctx.filter`, then through a Proxy that hides `filter` (Safari), and
+    compares their pixels.
+  - Then it mounts the scene on dark and light pages.
+  - Redo it after sprite changes.
+- Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=bokeh`. `group/carols-club`
+  starts with bokeh.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

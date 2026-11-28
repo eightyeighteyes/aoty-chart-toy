@@ -328,7 +328,8 @@ test("every uniform the shader declares is set, and kamp's dropped ones are gone
   assert.deepEqual([...declared()].sort(), [...ch.UNIFORMS].sort());
   const from = SRC.indexOf("draw(gl, quad, frame) {"), to = SRC.indexOf("setPalette(colors, running) {");
   assert.ok(from >= 0 && to > from, "the scene's draw() and setPalette() must be in chapel.js, in that order");
-  const loop = BG_SRC.slice(BG_SRC.indexOf("function draw(still, dt)"), BG_SRC.indexOf("function frame(now)"));
+  const loop = BG_SRC.slice(BG_SRC.indexOf("function runShader("), BG_SRC.indexOf("function runCanvas("));
+  assert.ok(loop.includes('quad.u("uBg")'), "runShader's uniforms must sit before runCanvas");
   const draw = SRC.slice(from, to) + loop;
   for (const name of ch.UNIFORMS) {
     assert.ok(draw.includes(`quad.u("${name}")`) || draw.includes(`quad.u("${name}[0]")`), `${name} is never set`);

@@ -182,69 +182,116 @@
     };
   }
 
-  // ---- the shader loop (shaderEngine.ts, trimmed; extracted from Borealis in AOTY-103) --------
+  // ---- slow motion the backgrounds share ------------------------------------------------------
   //
-  // What every WebGL background does the same way, so each engine file is only its scene. A spec is
-  //   {frag, fps, resScale, scene({accent, reducedMotion}) -> scene}
+  // DrunkWalk (kamp's drunkWalk.ts): a bounded, smooth drunkard's walk. It kicks the velocity,
+  // damps it, and pulls the value gently back toward the centre, so the path is smooth, never
+  // periodic, and stays near the centre more than chance would; a hard reflection at the bound
+  // catches excursions. Chapel's hues and Bokeh's orbs wander on it (moved here in AOTY-102).
+  const WALK_VEL_TAU_S = 4, WALK_PULL_S = 20, WALK_SIGMA = 0.032, WALK_DT_MAX = 0.1;
+  const clampDt = (dt, max) => Math.min(Math.max(0, dt), max);
+  function gauss(rng) {
+    const u = Math.max(1e-9, rng());
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
+  }
+  class DrunkWalk {
+    constructor(rng, max) {
+      this.rng = rng;
+      this.max = max;
+      this.u = 0;  // value / max
+      this.v = 0;  // velocity, in bounds per second
+    }
+    get value() { return this.u * this.max; }
+    tick(rawDt) {
+      const dt = clampDt(rawDt, WALK_DT_MAX);
+      if (dt <= 0) return;
+      const pull = this.u / (WALK_PULL_S * WALK_PULL_S);
+      this.v += (-this.v / WALK_VEL_TAU_S - pull) * dt + WALK_SIGMA * Math.sqrt(dt) * gauss(this.rng);
+      this.u += this.v * dt;
+      if (Math.abs(this.u) > 1) {
+        this.u = Math.sign(this.u);
+        this.v = -0.5 * this.v;
+      }
+    }
+  }
+
+  // At most one of something per windowS on an animation clock (AOTY-103's re-proportion pace,
+  // shared since AOTY-102): the first goes at once, and any asked for inside the window fold into
+  // one more when it ends. A first visit's wall bursts (every 400 ms while covers stream in) would
+  // otherwise fire a palette effect on every one.
+  class Pace {
+    constructor(windowS) {
+      this.windowS = windowS;
+      this.lastAt = -Infinity;
+      this.pending = false;
+    }
+    // A request at clock now: true to act now, false if it waits for the window to end.
+    request(now) {
+      if (now - this.lastAt >= this.windowS) {
+        this.lastAt = now;
+        this.pending = false;
+        return true;
+      }
+      this.pending = true;
+      return false;
+    }
+    // Every live frame: true once a waiting request's window has ended.
+    due(now) {
+      if (!this.pending || now - this.lastAt < this.windowS) return false;
+      this.lastAt = now;
+      this.pending = false;
+      return true;
+    }
+  }
+
+  // ---- the loop (shaderEngine.ts and kamp's canvas engines, trimmed; AOTY-103, AOTY-102) ------
+  //
+  // What every background does the same way, so each engine file is only its scene. There are two
+  // ways to draw on it, runShader (WebGL 1) and runCanvas (Canvas 2D); both take a spec
+  //   {fps, resScale, maxDpr?, scene({accent, reducedMotion}) -> scene}   (runShader: frag too)
   // and a scene is
-  //   draw(gl, quad, frame)        set its own uniforms (the loop sets uRes, uTime and uBg), ticking
-  //                                its own state first when !frame.still
+  //   draw(target, frame)          paint, ticking its own state first when !frame.still
   //   setPalette(colors, running)  a new palette from the covers
-  //   setColors({accent}, running)?, setStrength(s)?, onStart()?  (the loop just started)
-  // frame is {w, h, elapsed, dt, still, atRest}: dt is the raw seconds since the last frame (0 on a
-  // still), elapsed the animation clock (a stalled tab adds at most MAX_STEP_S), still any frame
+  //   setColors({accent}, running)?, setStrength(s)?, onStart()? (the loop just started), dispose()?
+  // frame has elapsed, dt, still and atRest: dt is the raw seconds since the last drawn frame (0 on
+  // a still), elapsed the animation clock (a stalled tab adds at most MAX_STEP_S), still any frame
   // drawn outside the loop (mount, a hidden tab, a stopped repaint), atRest only reduced motion's
   // designed rest frame (kamp's rule: a theme repaint is still but not at rest).
   //
   // The loop's rules, all kamp's: 30 fps unless the spec says, with FRAME_MS - 1 of slack (rAF
   // timestamps jitter, and a 30 fps cap without it runs at 20); only while the tab is visible; a
   // still frame at once, so the canvas is never blank; under reduced motion nothing but stills; a
-  // resize clears the buffer, so a same-size one (a phone's URL bar, constantly) is skipped and a
-  // real one redrawn; destroy() calls WEBGL_lose_context, because browsers cap live contexts (~16).
-  // Canvas 2D engines (Sparks, AOTY-100) are not this.
-  const DEFAULT_FPS = 30, DEFAULT_RES_SCALE = 0.25, MAX_DPR = 1.5, MAX_STEP_S = 0.25;
+  // resize clears the buffer (and a 2D context's whole state), so a same-size one (a phone's URL
+  // bar, constantly) is skipped and a real one redrawn. kamp's canvas engines clamp dt to 0.1 s on
+  // every rAF; here it's per drawn frame, so scenes clamp their own ticks.
+  const DEFAULT_FPS = 30, DEFAULT_RES_SCALE = 0.25, DEFAULT_MAX_DPR = 1.5, MAX_STEP_S = 0.25;
   const DEFAULT_BG = {r: 13, g: 12, b: 18};
 
-  function loseContext(gl) {
-    const lose = gl.getExtension && gl.getExtension("WEBGL_lose_context");
-    if (lose) lose.loseContext();
-  }
-
-  // Run spec on canvas. opts: {bg, accent, reducedMotion, onLost()}. Returns the engine contract's
-  // {setPalette, setColors, setStrength, destroy}, or null when WebGL isn't there (no context, a
-  // blocklisted GPU, a shader that won't compile).
-  function runShader(canvas, opts = {}, spec) {
+  // surface: {lostEvent, resize(w, h, scale), paint(scene, frame), dispose()}, one per drawing API.
+  function runLoop(canvas, opts, spec, surface) {
     const doc = root.document;
-    let gl = null;
-    try { gl = canvas.getContext("webgl", CONTEXT_ATTRS); } catch (_) { gl = null; }
-    if (!gl) return null;
-    const quad = createQuad(gl, spec.frag);
-    if (!quad) { loseContext(gl); return null; }
     const reduced = !!opts.reducedMotion;
     const scene = spec.scene({accent: opts.accent, reducedMotion: reduced});
     const frameMs = 1000 / (spec.fps || DEFAULT_FPS), resScale = spec.resScale || DEFAULT_RES_SCALE;
+    const maxDpr = spec.maxDpr || DEFAULT_MAX_DPR;
     let bg = hexToRgb(opts.bg) || DEFAULT_BG;
-    let running = false, destroyed = false, raf = 0, lastDraw = 0, elapsed = 0, w = 0, h = 0;
+    let running = false, destroyed = false, raf = 0, lastDraw = 0, elapsed = 0, w = 0, h = 0, scale = 1;
 
-    // Backing size = CSS size x dpr x resScale.
+    // Backing size = CSS size x dpr (capped) x resScale.
     function resize() {
-      const dpr = Math.min(root.devicePixelRatio || 1, MAX_DPR);
-      const cw = Math.max(1, Math.round(canvas.clientWidth * dpr * resScale));
-      const ch = Math.max(1, Math.round(canvas.clientHeight * dpr * resScale));
+      const dpr = Math.min(root.devicePixelRatio || 1, maxDpr);
+      scale = dpr * resScale;
+      const cw = Math.max(1, Math.round(canvas.clientWidth * scale));
+      const ch = Math.max(1, Math.round(canvas.clientHeight * scale));
       if (cw === w && ch === h) return false;
       w = canvas.width = cw;
       h = canvas.height = ch;
-      gl.viewport(0, 0, cw, ch);
+      surface.resize(cw, ch, scale);
       return true;
     }
 
     function draw(still, dt) {
-      quad.use();  // uniforms go to the bound program
-      gl.uniform2f(quad.u("uRes"), w, h);
-      gl.uniform1f(quad.u("uTime"), elapsed % 1000);
-      gl.uniform3f(quad.u("uBg"), bg.r / 255, bg.g / 255, bg.b / 255);
-      scene.draw(gl, quad, {w, h, elapsed, dt, still, atRest: still && reduced});
-      quad.draw();
+      surface.paint(scene, {w, h, scale, elapsed, dt, still, atRest: still && reduced, bg});
     }
 
     function frame(now) {
@@ -283,7 +330,7 @@
       api.destroy();
       if (opts.onLost) opts.onLost();
     };
-    canvas.addEventListener("webglcontextlost", onLost);
+    canvas.addEventListener(surface.lostEvent, onLost);
     if (doc) doc.addEventListener("visibilitychange", onVisibility);
     if (root.addEventListener) root.addEventListener("resize", onResize);
 
@@ -312,17 +359,104 @@
         if (destroyed) return;
         destroyed = true;
         stop();
-        canvas.removeEventListener("webglcontextlost", onLost);
+        canvas.removeEventListener(surface.lostEvent, onLost);
         if (doc) doc.removeEventListener("visibilitychange", onVisibility);
         if (root.removeEventListener) root.removeEventListener("resize", onResize);
-        try { quad.dispose(); } catch (_) { /* the context may already be gone */ }
-        loseContext(gl);
+        if (scene.dispose) scene.dispose();
+        try { surface.dispose(); } catch (_) { /* the context may already be gone */ }
       },
     };
 
     still();
     start();
     return api;
+  }
+
+  function loseContext(gl) {
+    const lose = gl.getExtension && gl.getExtension("WEBGL_lose_context");
+    if (lose) lose.loseContext();
+  }
+
+  // Run a WebGL spec on canvas. opts: {bg, accent, reducedMotion, onLost()}. Returns the engine
+  // contract's {setPalette, setColors, setStrength, destroy}, or null when WebGL isn't there (no
+  // context, a blocklisted GPU, a shader that won't compile). The scene's draw(gl, quad, frame)
+  // gets frame {w, h} in backing px and sets its own uniforms; the loop sets uRes, uTime and uBg.
+  // destroy() calls WEBGL_lose_context, because browsers cap live contexts (~16).
+  function runShader(canvas, opts = {}, spec) {
+    let gl = null;
+    try { gl = canvas.getContext("webgl", CONTEXT_ATTRS); } catch (_) { gl = null; }
+    if (!gl) return null;
+    const quad = createQuad(gl, spec.frag);
+    if (!quad) { loseContext(gl); return null; }
+    return runLoop(canvas, opts, spec, {
+      lostEvent: "webglcontextlost",
+      resize(cw, ch) { gl.viewport(0, 0, cw, ch); },
+      paint(scene, f) {
+        quad.use();  // uniforms go to the bound program
+        gl.uniform2f(quad.u("uRes"), f.w, f.h);
+        gl.uniform1f(quad.u("uTime"), f.elapsed % 1000);
+        gl.uniform3f(quad.u("uBg"), f.bg.r / 255, f.bg.g / 255, f.bg.b / 255);
+        scene.draw(gl, quad, {w: f.w, h: f.h, elapsed: f.elapsed, dt: f.dt, still: f.still, atRest: f.atRest});
+        quad.draw();
+      },
+      dispose() {
+        quad.dispose();
+        loseContext(gl);
+      },
+    });
+  }
+
+  // ---- Canvas 2D (AOTY-102, the first canvas port; Sparks and Wintermute reuse it) ----------
+  //
+  // A light page (AOTY-75) by its --bg. kamp drew its canvas engines in 'screen' and 'lighter',
+  // which do nothing over white; a canvas engine draws 'multiply' (a stain of colour) there
+  // instead. Blend modes can't be mixed by degrees, so this is the midpoint of the shaders'
+  // smoothstep(0.35, 0.65, lum).
+  const isLight = rgb => !!rgb && (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255 > 0.5;
+  const cssRgb = c => `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
+
+  // A square canvas for a baked sprite (kamp's makeCanvas): OffscreenCanvas where it has a 2D
+  // context (Safari 16.4+), else a detached <canvas>.
+  function spriteCanvas(side, doc = root.document) {
+    if (typeof root.OffscreenCanvas === "function") {
+      try {
+        const c = new root.OffscreenCanvas(side, side);
+        const ctx = c.getContext("2d");
+        if (ctx) return {canvas: c, ctx};
+      } catch (_) { /* fall through */ }
+    }
+    if (!doc || !doc.createElement) return {canvas: null, ctx: null};
+    const c = doc.createElement("canvas");
+    c.width = c.height = side;
+    return {canvas: c, ctx: c.getContext("2d")};
+  }
+
+  // Run a Canvas 2D spec on canvas: the same contract as runShader. The canvas is opaque: every
+  // frame starts with --bg, at identity alpha and source-over, in CSS px (a resize resets a 2D
+  // context's whole state, so all of it is set every frame). The scene's draw(ctx, frame) gets
+  // frame {w, h} in CSS px, scale (backing px per CSS px), bg (rgb) and light (isLight). A lost
+  // context (contextlost, under memory pressure) ends it like a lost WebGL one.
+  function runCanvas(canvas, opts = {}, spec) {
+    let ctx = null;
+    try { ctx = canvas.getContext("2d", {alpha: false}); } catch (_) { ctx = null; }
+    if (!ctx) return null;
+    return runLoop(canvas, opts, spec, {
+      lostEvent: "contextlost",
+      resize() {},
+      paint(scene, f) {
+        const w = f.w / f.scale, h = f.h / f.scale;
+        ctx.setTransform(f.scale, 0, 0, f.scale, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = cssRgb(f.bg);
+        ctx.fillRect(0, 0, w, h);
+        scene.draw(ctx, {w, h, scale: f.scale, elapsed: f.elapsed, dt: f.dt, still: f.still, atRest: f.atRest,
+                         bg: f.bg, light: isLight(f.bg)});
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+      },
+      dispose() { canvas.width = canvas.height = 0; },  // frees the backing store at once
+    });
   }
 
   // ---- the registry (AOTY-77, kamp's registry.ts) --------------------------------------------
@@ -403,7 +537,8 @@
   }
 
   const api = {PALETTE_SIZE, extractPalette, accentPalette, paletteChanged, hexToRgb, PaletteCrossfade,
-               packPalette, CONTEXT_ATTRS, VERT, createQuad, runShader, register, registered, parseMap, readMap, ids, pick,
+               packPalette, CONTEXT_ATTRS, VERT, createQuad, runShader, runCanvas, isLight, spriteCanvas,
+               DrunkWalk, Pace, register, registered, parseMap, readMap, ids, pick,
                load, NONE, pickerOrder, savePath};
   root.aotyBg = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

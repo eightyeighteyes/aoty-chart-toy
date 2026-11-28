@@ -13,7 +13,7 @@ const bo = require("../src/borealis.js");
 const SRC = readFileSync(new URL("../src/borealis.js", import.meta.url), "utf8");
 // The uniforms runShader sets for every scene: its draw(), in backgrounds.js.
 const BG_SRC = readFileSync(new URL("../src/backgrounds.js", import.meta.url), "utf8");
-const LOOP_DRAW = BG_SRC.slice(BG_SRC.indexOf("function draw(still, dt)"), BG_SRC.indexOf("function frame(now)"));
+const LOOP_DRAW = BG_SRC.slice(BG_SRC.indexOf("function runShader("), BG_SRC.indexOf("function runCanvas("));
 
 test("the module loads in node and in a page alike", () => {
   assert.equal(typeof bo.mount, "function");

@@ -26,7 +26,7 @@
   // web/src/backgrounds.js: loaded first in a page; required in node (its tests).
   const shared = root.aotyBg || (typeof require === "function" ? require("./backgrounds.js") : null);
   if (!shared) return;
-  const {PaletteCrossfade, accentPalette, runShader} = shared;
+  const {PaletteCrossfade, accentPalette, runShader, DrunkWalk, Pace} = shared;
 
   const TAU = Math.PI * 2;
   const smoothstep = t => {
@@ -147,64 +147,12 @@
   }
 
   // ---- the re-proportion's pace (new here: kamp re-proportions once per track) -----------------
-  // A new palette asks for one; a first visit's wall bursts (every WALL_BURST_MS while covers
-  // stream in) would keep the fields moving all the time. So at most one per RETARGET_S on the
-  // animation clock: the first goes at once, and any asked for inside the window fold into one
-  // more when it ends.
+  // A new palette asks for one; a first visit's wall bursts would keep the fields moving all the
+  // time. So at most one per RETARGET_MS, through backgrounds.js Pace. The hue wander is
+  // backgrounds.js DrunkWalk (kamp's drunkWalk.ts).
   const RETARGET_MS = 7000;
-  class RetargetPace {
-    constructor(windowS = RETARGET_MS / 1000) {
-      this.windowS = windowS;
-      this.lastAt = -Infinity;
-      this.pending = false;
-    }
-    // A request at clock now: true to retarget now, false if it waits for the window to end.
-    request(now) {
-      if (now - this.lastAt >= this.windowS) {
-        this.lastAt = now;
-        this.pending = false;
-        return true;
-      }
-      this.pending = true;
-      return false;
-    }
-    // Every live frame: true once a waiting request's window has ended.
-    due(now) {
-      if (!this.pending || now - this.lastAt < this.windowS) return false;
-      this.lastAt = now;
-      this.pending = false;
-      return true;
-    }
-  }
-
-  // ---- the hue wander (drunkWalk.ts) ----------------------------------------------------------
-  // A bounded, smooth drunkard's walk: it kicks the velocity, damps it, and pulls the value gently
-  // back toward the centre, so the path is smooth, never periodic, and stays near the centre more
-  // than chance would; a hard reflection at the bound catches excursions.
-  const WALK_VEL_TAU_S = 4, WALK_PULL_S = 20, WALK_SIGMA = 0.032, WALK_DT_MAX = 0.1;
-  function gauss(rng) {
-    const u = Math.max(1e-9, rng());
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * rng());
-  }
-  class DrunkWalk {
-    constructor(rng, max) {
-      this.rng = rng;
-      this.max = max;
-      this.u = 0;  // value / max
-      this.v = 0;  // velocity, in bounds per second
-    }
-    get value() { return this.u * this.max; }
-    tick(rawDt) {
-      const dt = clampDt(rawDt, WALK_DT_MAX);
-      if (dt <= 0) return;
-      const pull = this.u / (WALK_PULL_S * WALK_PULL_S);
-      this.v += (-this.v / WALK_VEL_TAU_S - pull) * dt + WALK_SIGMA * Math.sqrt(dt) * gauss(this.rng);
-      this.u += this.v * dt;
-      if (Math.abs(this.u) > 1) {
-        this.u = Math.sign(this.u);
-        this.v = -0.5 * this.v;
-      }
-    }
+  class RetargetPace extends Pace {
+    constructor(windowS = RETARGET_MS / 1000) { super(windowS); }
   }
 
   // ---- the rare seam bloom (chapelLayout.ts SeamBloom) ----------------------------------------
