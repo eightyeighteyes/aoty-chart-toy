@@ -914,9 +914,16 @@ Notes:
 - **On the page:** AOTY-96's backdrop controller replaced AOTY-77's first-visit-only lifecycle
   (see "Page backgrounds"). `?bg=<id>` previews one, and is read once at boot (routing rewrites the
   address).
-- **Not extracted yet:** Borealis's rAF / visibility / resize loop. It has subtle rules (`surge.cancel()`
-  on start, the `FRAME_MS - 1` slack, the dt clamp, resize-only-on-change), so the second WebGL
-  engine (AOTY-99) extracts it, with two users.
+- **The WebGL loop is `backgrounds.runShader(canvas, opts, spec)`** (extracted from Borealis by
+  AOTY-103, the second WebGL engine). It owns the context, the rAF at `spec.fps` with `FRAME_MS - 1`
+  slack, the 0.25 s clock clamp, resize-only-on-change, visibility, `onLost`, `destroy`, and the
+  `uRes`/`uTime`/`uBg` uniforms. An engine file is a **scene**: `draw(gl, quad, frame)` sets the
+  rest, and it owns its own palette fade. Borealis's `surge.cancel()` is its `onStart`.
+  - `frame.still` is any repaint outside the loop. `frame.atRest` is reduced motion's rest frame
+    only, so a theme repaint never snaps an animation to its rest pose.
+  - Canvas 2D engines (Sparks, AOTY-100) don't use it.
+  - `web/test/fakegl.mjs` is a stand-in context, canvas and rAF clock. With it, tests check that a
+    mounted engine sets every uniform it declares.
 - **No WebGL is final for now:** `mount` → null means no background. A canvas fallback waits for a
   Canvas 2D engine (AOTY-100).
 - **The CSS keeps `canvas.aurora` / `html.has-aurora`**, whatever the engine and on every page.

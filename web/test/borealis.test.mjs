@@ -6,10 +6,14 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {createRequire} from "node:module";
 import test from "node:test";
+import {fakeCanvas, fakeGl, fakePage} from "./fakegl.mjs";
 
 const require = createRequire(import.meta.url);
 const bo = require("../src/borealis.js");
 const SRC = readFileSync(new URL("../src/borealis.js", import.meta.url), "utf8");
+// The uniforms runShader sets for every scene: its draw(), in backgrounds.js.
+const BG_SRC = readFileSync(new URL("../src/backgrounds.js", import.meta.url), "utf8");
+const LOOP_DRAW = BG_SRC.slice(BG_SRC.indexOf("function draw(still, dt)"), BG_SRC.indexOf("function frame(now)"));
 
 test("the module loads in node and in a page alike", () => {
   assert.equal(typeof bo.mount, "function");
@@ -57,13 +61,27 @@ test("a second surge early on brightens the band in place; later it rolls a seco
 test("every uniform the shader declares is set by the engine, and kamp's dropped ones are gone", () => {
   const declared = [...bo.FRAG.matchAll(/^uniform \w+ (\w+)/gm)].map(m => m[1]);
   assert.deepEqual([...declared].sort(), [...bo.UNIFORMS].sort());
-  // Both anchors must exist: a missing one would slice to the file's end and pass vacuously.
-  const from = SRC.indexOf("function draw("), to = SRC.indexOf("function frame(");
-  assert.ok(from >= 0 && to > from, "draw() and frame() must both be in borealis.js, in that order");
-  const draw = SRC.slice(from, to);
+  // runShader sets the loop's three; the scene's draw() sets the rest. Both anchors must exist: a
+  // missing one would slice to the file's end and pass vacuously.
+  const from = SRC.indexOf("draw(gl, quad, frame) {"), to = SRC.indexOf("setPalette(colors, running) {");
+  assert.ok(from >= 0 && to > from, "the scene's draw() and setPalette() must be in borealis.js, in that order");
+  const draw = SRC.slice(from, to) + LOOP_DRAW;
   for (const name of bo.UNIFORMS) assert.ok(draw.includes(`quad.u("${name}")`), `${name} is never set`);
   for (const gone of ["uLean", "uFlicker", "titleMask", "uArtShown", "uPointer", "uLevel"]) {
     assert.ok(!bo.FRAG.includes(gone), `${gone} is still in the shader`);
+  }
+});
+
+test("mounted, every uniform is set on the first frame (a stand-in context)", () => {
+  const page = fakePage().install();
+  try {
+    const gl = fakeGl();
+    const api = bo.mount(fakeCanvas(gl), {bg: "#0d0c12", accent: "#ff6b4a"});
+    assert.deepEqual([...gl.set.keys()].sort(), [...bo.UNIFORMS].sort());
+    assert.equal(gl.draws, 1);
+    api.destroy();
+  } finally {
+    page.restore();
   }
 });
 
