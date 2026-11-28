@@ -25,7 +25,8 @@ group chart.json (version 1):
    "albums": [{"artist", "album", "lastfm", "plays", "listeners", "by": {member index: plays},
                "tracks", "single", "art", "fallbacks": [...]}],
    "rankings": {"listener" | "album" | "weighted": [[album index, score]]},
-   "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-76)}
+   "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-76),
+   "background"?: the page's background, a common.backgrounds engine; absent for none (AOTY-96)}
 "lastfm" is the Last.fm album name the page links to, as in chart_core (AOTY-43): the first
 member's, in page order, whose store has one, so a build is deterministic.
 Charts built before AOTY-63 have "track" instead of "listener"; the page falls back to "album".
@@ -96,11 +97,12 @@ def member_keys(stats, items, members, n=chart_core.TOP_N):
 
 
 def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavailable=0, now,
-                      n=chart_core.TOP_N, images=None, theme=None):  # fmt: skip
+                      n=chart_core.TOP_N, images=None, theme=None, background=None):  # fmt: skip
   """(chart dict, pending keys). stores: {member: store} for the ready members only.
 
   images: {key: cover URL} (the members' album.getInfo caches), used when no store has one.
   theme: the group meta's page theme (AOTY-76), published as "theme" unless it's the default.
+  background: the meta's background (AOTY-96), published as "background" when an engine.
   """
   members = sorted(stores, key=str.casefold)  # the page's picklist order (M0, 2026-11-20)
   stats = aggregate(stores, items, year)
@@ -161,4 +163,4 @@ def build_group_chart(stores, items, *, group_id, name, year, waiting=0, unavail
     "albums": albums,
     "rankings": {mode: [[index[k], round(s, 3)] for k, s in rankings[mode]] for mode in MODES},
   }
-  return chart_core.with_theme(chart, theme), pending
+  return chart_core.with_background(chart_core.with_theme(chart, theme), background), pending

@@ -23,7 +23,8 @@ chart.json (CHART_VERSION 1):
   {"version", "username", "display_name", "year", "generated_at", "pending", "pending_top", "top", "featured",
    "albums": [{"artist", "album", "lastfm", "plays", "tracks", "single", "art", "fallbacks": [...]}],
    "rankings": {"album": [[album index, album plays]]},
-   "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-65)}
+   "theme"?: the owner's page theme, a common.themes id; absent for the default (AOTY-65),
+   "background"?: the page's background, a common.backgrounds engine; absent for none (AOTY-96)}
 albums holds each album once, only if the ranking shows it, by plays. "album" is the root title
 shown (base_title); "lastfm" is the Last.fm album name the store kept for the key, which the page
 links to (AOTY-43): the root title can be another album's page ("1989 (Taylor's Version)" vs
@@ -34,7 +35,7 @@ before AOTY-63 also carry a "track" ranking, which the page ignores.
 import time
 from collections import Counter
 
-from common import themes
+from common import backgrounds, themes
 from common.albumkey import base_title
 from common.covers import cover
 from common.mbmatch import is_single
@@ -128,11 +129,24 @@ def with_theme(chart, theme):
   return chart
 
 
-def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=None, theme=None):
+def with_background(chart, background):
+  """chart with its page's background (AOTY-96) set, or removed for none or anything that isn't an
+  engine now (one since removed shows nothing). Returns the chart (changed in place)."""
+  shown = backgrounds.engine(background)
+  if shown:
+    chart["background"] = shown
+  else:
+    chart.pop("background", None)
+  return chart
+
+
+def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=None, theme=None,
+                background=None):  # fmt: skip
   """(chart dict, pending keys) for one user. display_name falls back to the username.
 
   images: {key: cover URL} from album.getInfo, used when the store has no image for a key.
   theme: the users row's theme (AOTY-65), published as "theme" unless it's the default.
+  background: the users row's background (AOTY-96), published as "background" when an engine.
   """
   year = store["year"]
   plays = year_plays(store)
@@ -169,4 +183,4 @@ def build_chart(store, items, *, username, display_name, now, n=TOP_N, images=No
     "albums": albums,
     "rankings": {mode: [[index[k], round(s, 3)] for k, s in rankings[mode]] for mode in MODES},
   }
-  return with_theme(chart, theme), pending
+  return with_background(with_theme(chart, theme), background), pending

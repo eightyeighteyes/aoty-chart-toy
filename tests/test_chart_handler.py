@@ -424,6 +424,46 @@ def test_an_unknown_theme_on_the_row_is_never_published(h, world):
   assert "theme" not in s3.json(CHART)
 
 
+# ---- page backgrounds (AOTY-96) -------------------------------------------------------------
+
+
+def test_a_build_carries_the_pages_background_and_only_an_engine(h, world):
+  s3, ddb = world
+  for i, (stored, shown) in enumerate((("borealis", "borealis"), ("none", None), ("gone", None))):
+    ddb.users["alice"]["background"] = stored
+    h.handler(
+      {"username": "alice", "requested_at": NOW + 10 * i}, None, Deps(s3, ddb, clock=NOW + 10 * i + 5)
+    )
+    assert s3.json(CHART).get("background") == shown, stored
+
+
+def test_a_background_restyle_copies_it_but_never_redraws_the_card(h, world):
+  s3, ddb = world
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  built = s3.json(CHART)
+  ddb.users["alice"]["background"] = "borealis"
+  card = FakeCardLambda(drawn())
+  out = h.handler({"username": "alice", "restyle": True}, None, with_card(Deps(s3, ddb), card))
+  assert out["built"] == 1
+  assert s3.json(CHART) == {**built, "background": "borealis"}  # nothing rebuilt
+  assert card.calls == []  # the card never shows a background
+  ddb.users["alice"]["background"] = "none"
+  h.handler({"username": "alice", "restyle": True}, None, Deps(s3, ddb))
+  assert "background" not in s3.json(CHART)
+
+
+def test_a_group_restyle_copies_the_metas_background(h):
+  s3, ddb = group_world()
+  h.handler({"group": GROUP}, None, Deps(s3, ddb))
+  group_meta(ddb)["background"] = "borealis"
+  h.handler({"group": GROUP, "restyle": True}, None, Deps(s3, ddb, clock=NOW + 60))
+  assert s3.json(GROUP_CHART)["background"] == "borealis"
+  group_meta(ddb)["background"] = "none"
+  h.handler({"group": GROUP}, None, Deps(s3, ddb, clock=NOW + 120))
+  h.handler({"group": GROUP, "restyle": True}, None, Deps(s3, ddb, clock=NOW + 180))
+  assert "background" not in s3.json(GROUP_CHART)
+
+
 def test_restyle_never_builds_the_users_groups(h):
   s3, ddb = group_world()
   h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
