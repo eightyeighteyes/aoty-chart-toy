@@ -54,7 +54,9 @@ def test_pausing_syncs_pauses_new_users_too():
 @pytest.mark.parametrize("name,raw", [("pause_new_users", "yes"), ("pause_syncs", "1"),
                                       ("sync_cooldown_seconds", "0"), ("new_users_per_ip_hour", "-3"),
                                       ("max_queue_for_new", "10.5"),
-                                      ("group_sync_cooldown_seconds", "0")])  # fmt: skip
+                                      ("group_sync_cooldown_seconds", "0"), ("pause_groups", "on"),
+                                      ("max_groups_per_owner", "0"),
+                                      ("max_group_member_adds_per_hour", "x")])  # fmt: skip
 def test_malformed_values_are_rejected(name, raw):
   with pytest.raises(ValueError):
     g.parse(name, raw)
@@ -96,9 +98,23 @@ def test_reads_are_cached():
   assert ssm.calls == 2
 
 
-def test_ssm_down_on_a_cold_start_pauses_new_users_only():
+def test_ssm_down_on_a_cold_start_pauses_new_users_and_groups_only():
   s = reader(FakeSSM(fail=True)).get()
   assert s.new_users_paused and not s.pause_syncs and s.sync_cooldown_seconds == 600
+  assert s.groups_paused and not s.pause_groups  # AOTY-53
+
+
+def test_group_knobs_parse_and_default():
+  s = reader(FakeSSM()).get()
+  assert (s.max_groups_per_owner, s.max_group_member_adds_per_hour, s.groups_paused) == (10, 50, False)
+  s = reader(FakeSSM({"max_groups_per_owner": "3", "max_group_member_adds_per_hour": "7",
+                      "pause_groups": "true"})).get()  # fmt: skip
+  assert (s.max_groups_per_owner, s.max_group_member_adds_per_hour, s.groups_paused) == (3, 7, True)
+  assert not s.new_users_paused  # pausing groups pauses nothing else
+
+
+def test_every_name_fits_one_get_parameters_call():
+  assert len(g.NAMES) <= 10  # SSM GetParameters takes at most 10 names: past that, split the read
 
 
 class SecretSSM(FakeSSM):

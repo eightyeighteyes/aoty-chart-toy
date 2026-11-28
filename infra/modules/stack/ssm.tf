@@ -11,6 +11,7 @@ locals {
   guardrail_names = [
     "pause_new_users", "pause_syncs", "sync_cooldown_seconds", "new_users_per_ip_hour",
     "max_queue_for_new", "group_sync_cooldown_seconds",
+    "max_groups_per_owner", "max_group_member_adds_per_hour", "pause_groups", # AOTY-53
   ]
 
   ssm_params = merge(
