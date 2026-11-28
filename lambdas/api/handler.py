@@ -596,6 +596,11 @@ _AUTH_HANDLERS = {"auth_start": auth_start, "auth_callback": auth_callback, "me"
 # (queued, cooldown, in_progress, paused, not_queued) is in the answer, and the member stays
 # either way: their next visit or sync picks it up. An IP slot spent on an add that then loses a
 # race (full, or a duplicate) isn't given back.
+#
+# Group guardrails (AOTY-53, SSM): pause_groups answers creates and adds 503 groups_paused (renames,
+# deletes, removals, themes and visit syncs carry on); a create is 409 too_many_groups {max} once the
+# owner has max_groups_per_owner; an add is 429 too_many_adds {max} past
+# max_group_member_adds_per_hour distinct names per owner, counted before any Last.fm call.
 
 
 def _json_body(event):
@@ -699,6 +704,7 @@ _REFUSALS = {
   "forbidden": (403, {"error": "not your group"}),
   "taken": (409, {"error": "taken"}),
   "full": (409, {"error": "full", "max": grp.MAX_MEMBERS}),
+  "groups_paused": (503, {"error": "groups_paused"}),  # pause_groups (AOTY-53)
 }
 
 
@@ -791,7 +797,13 @@ def group_create(deps, user, body, info):
   if answer:
     return answer
   name, slug = parsed
-  now = int(deps.clock())
+  now, settings = int(deps.clock()), deps.settings()
+  if settings.groups_paused:  # AOTY-53: before anything is read or written
+    return _refused("groups_paused", info)
+  # Soft cap (user decision 2026-11-27): by_owner is read first, so two creates racing can make one more.
+  if len(groups_store.owned_by(deps, user)) >= settings.max_groups_per_owner:
+    info["group"] = "too_many_groups"
+    return _response(409, {"error": "too_many_groups", "max": settings.max_groups_per_owner})
   if groups_store.create(deps, slug, name, user, now) == "taken":
     return _refused("taken", info)
   log.info("group %s created by %s", slug, _tag(user))
@@ -846,6 +858,13 @@ def member_add(deps, user, slug, body, headers, ip, trusted, info):
   if len(members) >= grp.MAX_MEMBERS:
     return _refused("full", info)
   now, settings = int(deps.clock()), deps.settings()
+  # AOTY-53: paused, then the owner's hourly allowance, both before any Last.fm call or IP slot.
+  if settings.groups_paused:
+    return _refused("groups_paused", info)
+  if not _allow_member_add(deps, user, name, now, settings.max_group_member_adds_per_hour):
+    log.info("member-add limit reached for %s", _tag(user))
+    info["group"] = "too_many_adds"
+    return _response(429, {"error": "too_many_adds", "max": settings.max_group_member_adds_per_hour})
   row = _get_user(deps, name)
   # Opted out of being added (AOTY-49 sets it). Neutral: an owner never learns why.
   if name != user and row.get("block_group_adds"):
@@ -1139,11 +1158,22 @@ def _allow_new_name(deps, name, ip, now, limit):
   lastfm_unavailable) never uses up the allowance. Items expire an hour after their window.
   """
   hour = now // IP_WINDOW_S
+  return _allow_in_window(deps, core.ip_limit_key(ip, hour), name, hour, limit)
+
+
+def _allow_member_add(deps, owner, name, now, limit):
+  """Count name against owner's distinct member adds this hour (AOTY-53), across their groups, as
+  the per-IP limit counts new names: item adds#<owner hash>#<hour>; the same name again is free."""
+  hour = now // IP_WINDOW_S
+  return _allow_in_window(deps, core.owner_adds_key(owner, hour), name, hour, limit)
+
+
+def _allow_in_window(deps, key, name, hour, limit):
   tag = core.name_tag(name)
   try:
     deps.ddb.update_item(
       TableName=deps.env["GUARD_TABLE"],
-      Key={"id": {"S": core.ip_limit_key(ip, hour)}},
+      Key={"id": {"S": key}},
       UpdateExpression="ADD #n :h SET #e = if_not_exists(#e, :exp)",
       ConditionExpression="attribute_not_exists(#n) OR size(#n) < :lim OR contains(#n, :t)",
       ExpressionAttributeNames={"#n": "names", "#e": "expires_at"},

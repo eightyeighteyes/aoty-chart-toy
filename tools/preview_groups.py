@@ -11,6 +11,9 @@ Member names with special answers on add:
   too-many     429 too_many_new          paused*     503 paused (new users paused)
   busy-busy    503 busy                  lastfm-down 503 lastfm_unavailable
   later*       added, but its sync wasn't queued ("their chart will start loading later")
+  adds-max*    429 too_many_adds         paused-adds* 503 groups_paused (pause_groups, AOTY-53)
+Group names with special answers on create (AOTY-53): "too many*" 409 too_many_groups, "paused
+group*" 503 groups_paused.
 Seeded groups: full-house (alice's, 25 members, so any add is "full"), bobs-crew (bob's, with
 alice in it: no edit controls for alice) and paused-crew (its visits answer as pause_syncs would).
 A member is "loading" for MEMBER_READY_S after being added, and each change shows up in the chart
@@ -36,6 +39,8 @@ GROUP_COOLDOWN_S = 3600
 YEAR = 2026
 ADD_REFUSALS = [
   ("nobody", (404, {"error": "unknown user"})),
+  ("adds-max", (429, {"error": "too_many_adds", "max": 50})),  # AOTY-53
+  ("paused-adds", (503, {"error": "groups_paused"})),  # before "paused", which it starts with
   ("blocked", (409, {"error": "cannot_add"})),
   ("too-many", (429, {"error": "too_many_new"})),
   ("paused", (503, {"error": "paused"})),
@@ -193,6 +198,10 @@ class FakeGroups:
     name = grp.clean_name(body.get("name"))
     if name is None:
       return 400, {"error": "bad_name", "max": grp.NAME_MAX}
+    if name.lower().startswith("too many"):  # AOTY-53's caps
+      return 409, {"error": "too_many_groups", "max": 10}
+    if name.lower().startswith("paused group"):
+      return 503, {"error": "groups_paused"}
     slug = grp.slug_for(name, body.get("slug"))
     if slug is None:
       return 400, {"error": "needs_slug"}

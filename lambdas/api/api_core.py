@@ -230,6 +230,12 @@ def ip_limit_key(ip, hour):
   return f"ip#{hashlib.sha256(bucket.encode()).hexdigest()[:16]}#{hour}"
 
 
+def owner_adds_key(owner, hour):
+  """The guard table key counting one group owner's member adds in one hour (AOTY-53). Hashed, as
+  the per-IP key: the guard table never stores a username."""
+  return f"adds#{name_tag(owner)}#{hour}"
+
+
 def name_tag(name):
   """The short hash of a username that the per-IP set holds."""
   return hashlib.sha256(name.encode()).hexdigest()[:12]

@@ -373,7 +373,8 @@ def test_adding_an_existing_user_skips_lastfm_and_respects_the_cooldown(h):
   d.ddb.rows["bob"]["sync_requested_at"] = NOW - 10
   status, body = call(h, d, "POST", "groups/g/members", {"username": "bob"})
   assert status == 201 and body["sync"] == "cooldown"
-  assert d.lastfm.calls == 0 and d.sqs.sent == [] and d.ddb.guard == {}
+  assert d.lastfm.calls == 0 and d.sqs.sent == []
+  assert not [k for k in d.ddb.guard if k.startswith("ip#")]  # a known user spends no IP slot
 
 
 def test_adding_a_member_twice_is_200_and_changes_nothing(h):
@@ -450,6 +451,73 @@ def test_new_member_guardrails_refuse_before_writing(h, settings, depth, status,
   }
   assert call(h, d, "POST", "groups/g/members", {"username": "carol"}) == (status, {"error": error})
   assert d.ddb.members("g") == ["alice"] and d.sqs.sent == []
+
+
+# ---- group guardrails (AOTY-53) ------------------------------------------------------------
+
+
+def test_pause_groups_stops_creates_and_adds_but_not_the_rest(h):
+  d = deps(h, pause_groups=True)
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  known(d.ddb, "carol")
+  assert call(h, d, "POST", "groups", {"name": "new"}) == (503, {"error": "groups_paused"})
+  assert call(h, d, "POST", "groups/g/members", {"username": "carol"}) == (503, {"error": "groups_paused"})
+  assert d.lastfm.calls == 0 and d.ddb.guard == {} and "new" not in d.ddb.members("new")
+  assert call(h, d, "PATCH", "groups/g", {"name": "renamed"})[0] == 200
+  assert call(h, d, "DELETE", "groups/renamed/members/bob")[0] == 204
+  assert call(h, d, "GET", "groups/renamed", user=None)[0] == 200
+
+
+def test_groups_count_as_paused_before_ssm_was_ever_read(h):
+  d = deps(h, loaded=False)
+  assert call(h, d, "POST", "groups", {"name": "new"}) == (503, {"error": "groups_paused"})
+
+
+def test_an_owner_at_the_group_cap_cant_start_another(h):
+  d = deps(h, max_groups_per_owner=2)
+  d.ddb.seed("one", "alice", ["alice"])
+  d.ddb.seed("bobs", "bob", ["alice", "bob"])  # in it, not owner: doesn't count
+  assert call(h, d, "POST", "groups", {"name": "two"})[0] == 201
+  assert call(h, d, "POST", "groups", {"name": "three"}) == (409, {"error": "too_many_groups", "max": 2})
+  assert d.ddb.meta("three") is None
+  assert call(h, d, "POST", "groups", {"name": "bobs two"}, user="bob")[0] == 201
+
+
+def test_member_adds_per_owner_hour_are_capped_across_groups(h):
+  d = deps(h, max_group_member_adds_per_hour=2)
+  d.ddb.seed("a", "alice", ["alice"])
+  d.ddb.seed("b", "alice", ["alice"])
+  known(d.ddb, "bob", "carol", "dave")
+  assert call(h, d, "POST", "groups/a/members", {"username": "bob"})[0] == 201
+  assert call(h, d, "POST", "groups/b/members", {"username": "carol"})[0] == 201
+  assert call(h, d, "POST", "groups/b/members", {"username": "dave"}) == (
+    429, {"error": "too_many_adds", "max": 2},
+  )  # fmt: skip
+  assert "dave" not in d.ddb.members("b") and d.lastfm.calls == 0
+  # The same name again is free (a retry, or adding bob to the other group); others have their own.
+  assert call(h, d, "POST", "groups/b/members", {"username": "bob"})[0] == 201
+  d.ddb.seed("c", "carol", ["carol"])
+  assert call(h, d, "POST", "groups/c/members", {"username": "dave"}, user="carol")[0] == 201
+  key = api_core.owner_adds_key("alice", NOW // 3600)
+  assert key.startswith("adds#") and "alice" not in key and len(d.ddb.guard[key]["names"]) == 2
+
+
+def test_the_add_cap_is_counted_before_any_lastfm_call(h):
+  d = deps(h, max_group_member_adds_per_hour=1)
+  d.ddb.seed("g", "alice", ["alice"])
+  assert call(h, d, "POST", "groups/g/members", {"username": "carol"})[0] == 201  # new: one getInfo
+  assert call(h, d, "POST", "groups/g/members", {"username": "erin"})[0] == 429
+  assert d.lastfm.calls == 1
+
+
+def test_cheap_refusals_spend_no_add_allowance(h):
+  d = deps(h, max_group_member_adds_per_hour=1)
+  d.ddb.seed("g", "alice", ["alice", "bob"])
+  d.ddb.seed("full", "alice", [f"m{i:02}" for i in range(25)])
+  call(h, d, "POST", "groups/g/members", {"username": "bob"})  # already a member
+  call(h, d, "POST", "groups/full/members", {"username": "late"})  # full
+  call(h, d, "POST", "groups/g/members", {"username": "x"}, user="mallory")  # not theirs
+  assert d.ddb.guard == {}
 
 
 def test_pause_syncs_still_adds_an_existing_user(h):

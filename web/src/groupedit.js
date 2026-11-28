@@ -38,6 +38,10 @@
     signinOff: "sign-in isn't answering right now. try again in a minute.",
     already: "they're already in the group.",
     addedLater: "added. their chart will start loading a little later.",
+    // Group guardrails (AOTY-53); the two caps take the API's max (limitMessage)
+    groupsPaused: "starting groups and adding people is paused for now. try again later.",
+    tooManyGroups: "you can have up to {max} groups. delete one to start another.",
+    tooManyAdds: "that's a lot of adds for one hour. try again in a bit.",
   };
 
   // A group's display name as the API keeps it (groups.clean_name): whitespace collapsed, 1-60
@@ -70,6 +74,9 @@
     signed_out: "signedOut",
     groups_unavailable: "groupsOff",
     signin_unavailable: "signinOff",
+    groups_paused: "groupsPaused",
+    too_many_groups: "tooManyGroups",
+    too_many_adds: "tooManyAdds",
   };
   // A member was added but their sync wasn't queued: they're in, their chart comes later.
   const LATER = new Set(["paused", "busy", "not_queued", "unavailable"]);
@@ -88,11 +95,17 @@
       return {ok: true};
     }
     const key = BY_ERROR[body.error];
-    if (key) return {message: MESSAGES[key], signedOut: key === "signedOut", gone: key === "gone"};
+    if (key) return {message: limitMessage(MESSAGES[key], body.max), signedOut: key === "signedOut", gone: key === "gone"};
     if (status === 401) return {message: MESSAGES.signedOut, signedOut: true};
     if (status === 403) return {message: MESSAGES.forbidden};
     if (status === 429) return {message: MESSAGES.throttled};  // API Gateway's own throttle
     return {message: MESSAGES.generic};
+  }
+
+  // A message with the API's limit in it; without a usable number, the sentence still reads.
+  function limitMessage(text, max) {
+    if (!text.includes("{max}")) return text;
+    return Number.isInteger(max) && max > 0 ? text.replace("{max}", String(max)) : text.replace("up to {max} ", "only so many ");
   }
 
   // Only the owner edits: ownership is the group's owner field, not membership (an owner who
