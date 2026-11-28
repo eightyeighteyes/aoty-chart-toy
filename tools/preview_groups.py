@@ -86,7 +86,8 @@ class FakeGroups:
     t = clock() - 3600
     self.groups["full-house"] = {"name": "Full House", "owner": "alice", "changed_at": t, "background": "borealis",
                                  "members": {"alice": t, **{f"member{i:02d}": t for i in range(24)}}}  # fmt: skip
-    self.groups["bobs-crew"] = {"name": "Bob's Crew", "owner": "bob", "changed_at": t,
+    # AOTY-103: a second engine to preview beside full-house's borealis.
+    self.groups["bobs-crew"] = {"name": "Bob's Crew", "owner": "bob", "changed_at": t, "background": "chapel",
                                 "members": {"bob": t, "alice": t, "carol": t}}  # fmt: skip
     self.groups["carols-club"] = {"name": "carol's club", "owner": "carol", "changed_at": t,
                                   "members": {"carol": t, "alice": t}}  # fmt: skip

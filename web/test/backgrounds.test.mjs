@@ -157,17 +157,19 @@ test("register keeps only engines with a mount", () => {
 test("every engine file registers itself with the contract's mount", async () => {
   // build_shell.BACKGROUNDS is the list; tests/test_build_shell.py checks each file names its id.
   const {createRequire: cr} = await import("node:module");
-  cr(import.meta.url)("../src/borealis.js");
-  const engine = bg.registered("borealis");
-  assert.ok(engine, "borealis.js didn't register");
-  assert.equal(typeof engine.mount, "function");
-  assert.equal(engine.mount({getContext: () => null, addEventListener() {}}), null);  // no WebGL: null
-  // With a context, the contract's whole surface, setStrength (AOTY-96) included.
-  withPage(() => {
-    const api = engine.mount(fakeCanvas(fakeGl()), {bg: "#0d0c12", accent: "#ff6b4a"});
-    for (const f of ["setPalette", "setColors", "setStrength", "destroy"]) assert.equal(typeof api[f], "function", f);
-    api.destroy();
-  });
+  for (const id of ["borealis", "chapel"]) {
+    cr(import.meta.url)(`../src/${id}.js`);
+    const engine = bg.registered(id);
+    assert.ok(engine, `${id}.js didn't register`);
+    assert.equal(typeof engine.mount, "function");
+    assert.equal(engine.mount({getContext: () => null, addEventListener() {}}), null);  // no WebGL: null
+    // With a context, the contract's whole surface, setStrength (AOTY-96) included.
+    withPage(() => {
+      const api = engine.mount(fakeCanvas(fakeGl()), {bg: "#0d0c12", accent: "#ff6b4a"});
+      for (const f of ["setPalette", "setColors", "setStrength", "destroy"]) assert.equal(typeof api[f], "function", f);
+      api.destroy();
+    });
+  }
 });
 
 // ---- runShader (AOTY-103): the loop every WebGL background shares ------------------------------
