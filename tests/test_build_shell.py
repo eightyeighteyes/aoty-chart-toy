@@ -125,6 +125,8 @@ def test_analytics_is_off_unless_a_measurement_id_is_given(tmp_path):
   assert '<meta name="aoty-ga" content="">' in html
   # kampstats.js loads before app.js, which reads globalThis.aotyStats.
   assert html.index(published["kampstats.js"]) < html.index(published["app.js"])
+  # consent.js loads before kampstats.js, which reads globalThis.kampConsent (AOTY-28).
+  assert html.index(published["consent.js"]) < html.index(published["kampstats.js"])
   bs.build(BASE, out=tmp_path / "b", ga_id="G-QNJVBYWDYN")
   html = (tmp_path / "b" / "index.html").read_text()
   assert '<meta name="aoty-ga" content="G-QNJVBYWDYN">' in html
