@@ -1820,7 +1820,7 @@
   // "share image" opens a dialog showing the image, with its two switches; its button saves the
   // image, or shares it where files go to the share sheet. The button is live only while the image
   // it would send is on screen, so share() is always the tap's first await (iOS). shown is that
-  // image ({key, format, file, url}), and the button sends shown.file: looking one up at the tap
+  // image ({key, format, file}), and the button sends shown.file: looking one up at the tap
   // could find nothing, since a restyle may have moved the key since.
   let shown = null, previewGen = 0;
   function previewOpen() { return $("preview").open; }
@@ -1860,16 +1860,23 @@
     showPreview(input, file);
   }
 
+  // The preview's src is a data: URL, never a blob: one: kamp.fm's CSP img-src allows data: and not
+  // blob: (AOTY-106; the download's <a href> isn't covered by img-src, so it keeps its blob URL).
   function showPreview(input, file) {
     const img = $("preview-img");
     if (!shown || shown.file !== file) {
-      if (shown) URL.revokeObjectURL(shown.url);
-      shown = {key: input.key, format: input.format, file, url: URL.createObjectURL(file)};
-      img.src = shown.url;
+      shown = {key: input.key, format: input.format, file};
+      const reader = new FileReader();
+      // Shown once it has a src: an <img> without one draws its alt text in the frame.
+      reader.addEventListener("load", () => {
+        if (!shown || shown.file !== file || typeof reader.result !== "string") return;
+        img.src = reader.result;
+        img.hidden = false;
+      });
+      reader.readAsDataURL(file);
     }
     shown.key = input.key;
     img.alt = share.previewAlt(input.texts);
-    img.hidden = false;
     $("preview-frame").classList.remove("making");
     $("preview-making").hidden = true;
     setGo(file);
@@ -1894,7 +1901,6 @@
   // Every way out (close, Escape, the backdrop, the page dropping its #1) lands here.
   $("preview").addEventListener("close", () => {
     previewGen++;
-    if (shown) URL.revokeObjectURL(shown.url);
     shown = null;
     const img = $("preview-img");
     img.removeAttribute("src");
