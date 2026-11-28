@@ -434,6 +434,7 @@ and the next day's run starts over.
 | site bucket `data/users/*/chart.json` | chart builder (builds, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-65) |
 | site bucket `data/groups/*/chart.json` | chart builder (writes, deletes, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-76) |
 | site bucket `data/users/*/og.html`, `data/groups/*/og.html` (AOTY-85) | chart builder (every build; a group's delete) | link-preview bots, through CloudFront: kamp-site's shell function sends them there |
+| site bucket `data/users/*/og.png`, `data/groups/*/og.png` (AOTY-91) | card Lambda (when the chart builder asks); chart builder (a group's delete) | link-preview bots, through og.html's `og:image` |
 | site bucket `index.html`, `assets/*` | CD (`scripts/build_shell.py`) | browsers, through CloudFront |
 | mb-hot / mb-cold | sync; index build (re-checks, mb-cold only) | mb lane |
 | SSM `session_key`, `session_key_previous`, `lastfm_api_secret` (AOTY-47) | the admin, by hand | api only |
@@ -460,6 +461,7 @@ sequenceDiagram
   participant SW as sync Lambda
   participant MB as mb Lambda
   participant CB as chart Lambda
+  participant CARD as card Lambda
   participant U as users table
   participant ST as store bucket
   participant AT as albums table
@@ -479,6 +481,9 @@ sequenceDiagram
   CB->>ST: weeks.json.gz
   CB->>AT: BatchGet every played album
   CB->>S3: data/users/u/chart.json (Cache-Control no-cache)
+  CB->>CARD: invoke (RequestResponse) {chart, key}: card Lambda draws the #1 share card (AOTY-91)
+  CARD->>S3: data/users/u/og.png
+  CARD-->>CB: {ok, key} (or a reason: then og.html keeps the bare cover)
   CB->>S3: data/users/u/og.html (link preview, max-age=300; a failure never fails the build)
   CB->>ST: chart_pending.json
   CB->>U: chart_built_at, chart_pending
