@@ -39,13 +39,12 @@
     return kind === "group" ? `${name} · ${product} ${year}` : `${name}'s ${product} ${year}`;
   }
 
-  // The buttons' labels. A member's view of a group (?user=) offers the group and the member's
-  // own page (user decision 2026-11-27); member is that member's name, or null.
-  function shareLabels(native, member) {
-    if (!member) return {main: native ? "share" : "copy link", member: null};
-    return native
-      ? {main: "share group", member: `share ${member}`}
-      : {main: "copy group link", member: `copy ${member}'s link`};
+  // The link buttons' labels: "share" whether a tap opens the share sheet or copies (AOTY-98). A
+  // member's view of a group (?user=) offers the group and the member's own page (user decision
+  // 2026-11-27); member is that member's name, or null.
+  function shareLabels(member) {
+    if (!member) return {main: "share link", member: null};
+    return {main: "share group link", member: `share ${member}'s link`};
   }
 
   // A user chart's #1 (By Play, its one ranking), or null before it ranks anything.
@@ -116,6 +115,15 @@
     return {albums, name: subject.name, year, url, kind: subject.kind, played: subject.played};
   }
 
+  // The preview's alt text (AOTY-98), from cardTexts': whose it is, then every album drawn, in
+  // order. "alice's top 3: A by X, B by Y, C by Z"; a group names itself as its caption does.
+  function previewAlt(texts) {
+    const albums = (texts && texts.albums) || [];
+    const what = albums.length > 1 ? `top ${albums.length}` : "#1";
+    const whose = texts && texts.kind === "group" ? `${texts.name} · ${what}` : `${texts ? texts.name : ""}'s ${what}`;
+    return `${whose}: ${albums.map(a => `${a.title} by ${a.artist}`).join(", ")}`;
+  }
+
   // A link preview card's subject (AOTY-91): the page as a visitor first sees it, Everyone's view.
   // A user page by its display name; a group by its name, with top its By Listener #1 (group.top,
   // which the caller passes: this file doesn't load group.js). Null when nothing ranks yet.
@@ -128,7 +136,7 @@
   }
 
   const api = {shareUrl, useNative, shareTitle, shareLabels, userTop, userTops, CONTENTS, SHAPES, cardContent, formatId,
-               imageSubject, imageLabel, cardTexts, previewSubject};
+               imageSubject, imageLabel, cardTexts, previewAlt, previewSubject};
   root.aotyShare = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

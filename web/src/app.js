@@ -1558,27 +1558,30 @@
   const native = data => share.useNative(navigator, coarse(), data);
   const memberTarget = () => ({kind: "user", id: groupWho, name: groupWho});
 
-  // The labels say what a tap does: "share" opens the share sheet (touch only), else "copy link".
+  // A tap opens the share sheet (touch only) or copies; the labels say "share" either way (AOTY-98).
   function renderShare() {
     const member = shareTarget && shareTarget.kind === "group" && groupWho ? groupWho : null;
-    const labels = share.shareLabels(native({url: linkFor(shareTarget || {kind: "user", id: ""})}), member);
+    const labels = share.shareLabels(member);
     $("share").textContent = labels.main;
     $("share-member").hidden = !member;
     if (member) $("share-member").textContent = labels.member;
-    // The share image (AOTY-70, AOTY-71): any page whose ranking on screen has a #1.
+    // The share image (AOTY-70, AOTY-71): any page whose ranking on screen has a #1. Its preview
+    // (AOTY-98) closes if that goes; the image button is hidden then, so focus goes to the link's.
     const image = $("share-image"), s = cardSubject();
     image.hidden = !s;
-    $("shape-switch").hidden = !s;
-    if (!image.hidden && !isBusy(image)) image.textContent = share.imageLabel(nativeFiles());
-    // #1 | top 3 | top 10 (AOTY-73, AOTY-74): each only with that many on screen, and the switch
-    // only once there's a choice (three). Hiding keeps the saved choice: a view with fewer draws the
-    // biggest that fits, and the next view with enough is the saved one again. The pressed button
-    // is the one the image will be; focus on a button that hides goes to the image button.
+    if (!s && previewOpen()) {
+      $("preview").close();
+      $("share").focus();
+    }
+    // #1 | top 3 | top 10 (AOTY-73, AOTY-74), in the preview: each only with that many on screen,
+    // and the switch only once there's a choice (three). Hiding keeps the saved choice: a view with
+    // fewer draws the biggest that fits, and the next view with enough is the saved one again. The
+    // pressed button is the one the image will be; focus on a button that hides goes to "close".
     const contents = $("content-switch"), count = s ? s.albums.length : 0;
     const focused = document.activeElement;
     contents.hidden = count < share.CONTENTS.top3;
     for (const b of contents.querySelectorAll("button[data-content]")) b.hidden = count < share.CONTENTS[b.dataset.content];
-    if (contents.contains(focused) && (contents.hidden || focused.hidden) && !image.hidden) image.focus();
+    if (contents.contains(focused) && (contents.hidden || focused.hidden) && previewOpen()) $("preview-close").focus();
     const shown = cardContentFor(s);
     contents.querySelectorAll("button[data-content]")
         .forEach(b => b.setAttribute("aria-pressed", String(b.dataset.content === shown)));
@@ -1630,10 +1633,10 @@
   // files get the share sheet with the PNG alone (the only way into Instagram from the web, and iOS
   // drops the image if text rides along); everything else downloads it.
   //
-  // iOS refuses share() after slow work since the tap, so the image is made ahead: once the button
-  // scrolls into view, or is hovered, focused or touched, never on every page load (it costs a CORS
-  // fetch of each cover). A tap before it's ready makes it, then tries; if that share is refused,
-  // the image is ready and the next tap shares it at once.
+  // The image is made ahead, so the preview (AOTY-98) usually opens on it: once the button scrolls
+  // into view, or is hovered, focused or touched, never on every page load (it costs a CORS fetch
+  // of each cover). iOS refuses share() after slow work since the tap, so the preview's button is
+  // live only once the image is made.
   const sc = globalThis.aotyShareCard;  // web/src/sharecard.js, loaded first
   // A cover still loading after this is drawn as its tile: a top 10 waits less, so ten covers on
   // a cold cache still come to an image within a few seconds (AOTY-74).
@@ -1684,7 +1687,13 @@
     const had = cards[input.format];
     if (had && had.key === input.key) return had.promise;
     const mine = {key: input.key, file: null};
-    mine.promise = renderCard(input).catch(() => null).then(file => (mine.file = file));
+    // A failure isn't kept, so the next try makes it again; only this entry is dropped, never a
+    // newer one for the same format.
+    mine.promise = renderCard(input).catch(() => null).then(file => {
+      mine.file = file;
+      if (!file && cards[input.format] === mine) delete cards[input.format];
+      return file;
+    });
     cards[input.format] = mine;
     return mine.promise;
   }
@@ -1693,8 +1702,11 @@
     return had && had.file && had.key === input.key ? had.file : null;
   };
 
-  // Ahead of a tap: soon after the button is on screen, again after a theme or chart change.
+  // Ahead of a tap: soon after the button is on screen, again after a theme or chart change. An
+  // open preview follows the same changes at once: a restyle ("album of the year" settling, an
+  // owner's pick) reaches here through applyTheme, not renderShare.
   function cardSoon() {
+    if (previewOpen()) refreshPreview();
     clearTimeout(cardTimer);
     if (!cardInView || $("share-image").hidden) return;
     cardTimer = setTimeout(() => {
@@ -1772,24 +1784,99 @@
     catch (_) { return false; }
   };
 
-  async function shareImage() {
-    const button = $("share-image"), msg = $("share-msg");
-    if (sharing || isBusy(button)) return;
-    msg.textContent = "";
-    $("share-url").hidden = true;
-    const format = cardFormat(cardSubject());  // the tap's, even if a switch moves while it's made
-    const ready = readyCard();
-    if (ready) return deliver(ready, true, format);
-    busy(button, true, "making…");
-    const file = await makeCard();
-    busy(button, false);
-    if (!file) { msg.textContent = "couldn't make the image. try again in a minute."; return; }
-    deliver(file, false, format);
+  // ---- the preview (AOTY-98) --------------------------------------------------------------------
+  //
+  // "share image" opens a dialog showing the image, with its two switches; its button saves the
+  // image, or shares it where files go to the share sheet. The button is live only while the image
+  // it would send is on screen, so share() is always the tap's first await (iOS). shown is that
+  // image ({key, format, file, url}), and the button sends shown.file: looking one up at the tap
+  // could find nothing, since a restyle may have moved the key since.
+  let shown = null, previewGen = 0;
+  function previewOpen() { return $("preview").open; }
+
+  function openPreview() {
+    if (!cardSubject()) return;
+    $("preview-msg").textContent = "";
+    track("event", "share_preview");
+    // "close" first: the button may not be live yet, and an aria-disabled one would read oddly.
+    openDialog($("preview"), $("share-image"), $("preview-close"));
+    refreshPreview();
   }
 
-  // activated: share() is this tap's first await, so the share sheet may open.
-  async function deliver(file, activated, format) {
-    const msg = $("share-msg");
+  // Show the image for the page as it is now: at once if it's made, else the last one dimmed under
+  // "making…" with the button off. Only the newest call paints (previewGen), and only while open.
+  async function refreshPreview() {
+    const input = cardInput();
+    if (!input) return;
+    const gen = ++previewGen;
+    $("preview").dataset.shape = input.format.endsWith("_story") ? "story" : "square";
+    if (shown && shown.key === input.key) return showPreview(input, shown.file);
+    const ready = readyCard();
+    if (ready) return showPreview(input, ready);
+    $("preview-frame").classList.add("making");
+    $("preview-making").hidden = false;
+    setGo(null);
+    const file = await makeCard();
+    if (gen !== previewGen || !previewOpen()) return;
+    const now = cardInput();
+    if (!now) return;
+    if (now.key !== input.key) return refreshPreview();  // it moved while this one was made
+    if (!file) {
+      $("preview-making").hidden = true;
+      $("preview-msg").textContent = "couldn't make the image. try again in a minute.";
+      return;
+    }
+    showPreview(input, file);
+  }
+
+  function showPreview(input, file) {
+    const img = $("preview-img");
+    if (!shown || shown.file !== file) {
+      if (shown) URL.revokeObjectURL(shown.url);
+      shown = {key: input.key, format: input.format, file, url: URL.createObjectURL(file)};
+      img.src = shown.url;
+    }
+    shown.key = input.key;
+    img.alt = share.previewAlt(input.texts);
+    img.hidden = false;
+    $("preview-frame").classList.remove("making");
+    $("preview-making").hidden = true;
+    setGo(file);
+  }
+
+  // The button says what a tap does (share.imageLabel), and is live only with an image to send.
+  function setGo(file) {
+    const go = $("preview-go");
+    go.setAttribute("aria-disabled", String(!file));
+    go.textContent = share.imageLabel(nativeFiles(file ? [file] : undefined));
+  }
+
+  $("share-image").addEventListener("click", openPreview);
+  $("preview-go").addEventListener("click", () => {
+    if (!shown || $("preview-go").getAttribute("aria-disabled") === "true") return;
+    deliver(shown.file, shown.format);
+  });
+  $("preview-close").addEventListener("click", () => $("preview").close());
+  // The dialog has no padding of its own (its body fills it), so a click on the dialog itself is
+  // on the backdrop. A keyboard click always targets the focused button, never the dialog.
+  $("preview").addEventListener("click", e => { if (e.target === $("preview")) $("preview").close(); });
+  // Every way out (close, Escape, the backdrop, the page dropping its #1) lands here.
+  $("preview").addEventListener("close", () => {
+    previewGen++;
+    if (shown) URL.revokeObjectURL(shown.url);
+    shown = null;
+    const img = $("preview-img");
+    img.removeAttribute("src");
+    img.hidden = true;
+    $("preview-frame").classList.remove("making");
+    $("preview-making").hidden = true;
+  });
+
+  // The share sheet with the PNG alone where files can go there, else a download. share() is the
+  // tap's first await (the preview's button is live only with the image ready).
+  async function deliver(file, format) {
+    const msg = $("preview-msg");
+    msg.textContent = "";
     if (nativeFiles([file])) {
       sharing = true;
       try {
@@ -1799,8 +1886,6 @@
       } catch (e) {
         const why = e && e.name;
         if (why === "AbortError" || why === "InvalidStateError") return;  // cancelled, or a sheet open
-        // The tap's activation ran out while the image was made: it's ready now.
-        if (why === "NotAllowedError" && !activated) { msg.textContent = "the image is ready. tap again to share it."; return; }
       } finally {
         sharing = false;
       }
@@ -1810,15 +1895,13 @@
     a.href = url;
     a.download = file.name;
     a.hidden = true;
-    document.body.appendChild(a);
+    $("preview").appendChild(a);  // inside the modal: everything outside it is inert
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);  // Firefox cancels a download revoked at once
     track("event", "share_image", {format, via: "download"});
     msg.textContent = "image saved.";
   }
-
-  $("share-image").addEventListener("click", shareImage);
 
   // ---- the group page's share and edit controls -------------------------------------------------
 

@@ -402,8 +402,13 @@ html.has-aurora .account {
   outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px;
 }
 
-/* User and group pages (AOTY-84, AOTY-52): share for everyone, the group owner's edit panel. */
-.page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+/* The tool bar (AOTY-98): the page's look on the left (theme, the group owner's edit), sharing on
+   the right (AOTY-84), the theme row under both. A visitor who owns nothing gets no left side. */
+.tool-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 16px; }
+.display-tools { order: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.display-tools:not(:has(> :not([hidden]))) { display: none; }
+.page-tools { order: 2; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.tool-bar .theme-row { order: 3; flex-basis: 100%; margin-top: 0; }
 .pill, .quiet {
   font: 600 13px "DM Sans", system-ui, sans-serif; color: var(--ink); cursor: pointer;
   background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
@@ -416,7 +421,7 @@ html.has-aurora .account {
 .tool-msg { color: var(--muted); font-size: 13px; }
 /* The owner's theme picker (AOTY-65): a row of pills, each with a dot of the theme's own colours
    (--sw-bg, --sw-a, --sw-b set per swatch; "album of the year" shows the #1 cover in its dot). */
-.theme-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+.theme-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .theme-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .swatch { display: inline-flex; align-items: center; gap: 8px; }
 .swatch[aria-pressed="true"] { border-color: var(--accent-2); }
@@ -451,11 +456,34 @@ html.has-aurora .account {
 .edit-danger { margin: 6px 0 0; }
 .quiet.danger { color: var(--accent); }
 
-/* Dialogs: your groups, and the confirmations. */
+/* Dialogs: your groups, the confirmations and the share image's preview. A short window (a phone
+   held sideways) scrolls the dialog rather than cutting it off. */
 .sheet {
   width: min(480px, calc(100vw - 32px)); box-sizing: border-box;
+  max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: auto;
   background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 20px; padding: 24px;
 }
+/* The preview (AOTY-98): no padding on the dialog itself, so a click whose target is the dialog is
+   on the backdrop. The frame takes the image's shape and fits the window's height, leaving room
+   for the title, the switches and the buttons. */
+.sheet.preview { width: min(520px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
+/* The body scrolls, not the dialog: a click on the dialog's own scrollbar would read as the backdrop. */
+.sheet-body { padding: 24px; box-sizing: border-box; max-height: calc(100vh - 34px); max-height: calc(100dvh - 34px); overflow: auto; }
+.preview-frame {
+  --fit: max(160px, calc(100vh - 300px)); position: relative; margin: 0 auto 16px;
+  aspect-ratio: 1; width: min(100%, var(--fit)); border-radius: 12px; overflow: hidden; background: var(--bg);
+}
+@supports (height: 100dvh) { .preview-frame { --fit: max(160px, calc(100dvh - 300px)); } }
+.preview[data-shape="story"] .preview-frame { aspect-ratio: 9 / 16; width: min(100%, var(--fit) * 9 / 16); }
+.preview-frame img { display: block; width: 100%; height: 100%; object-fit: contain; transition: opacity .2s; }
+.preview-frame.making img { opacity: .35; }
+.preview-making {
+  position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px;
+}
+.preview-options { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.preview .tool-msg { min-height: 1.4em; margin: 12px 0 0; text-align: center; }
+.solid[aria-disabled="true"] { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .preview-frame img { transition: none; } }
 .sheet::backdrop { background: color-mix(in srgb, var(--bg) 72%, transparent); }
 .sheet-text { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 18px; }
 .sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 8px; }
@@ -578,4 +606,11 @@ li:hover > .row { background: color-mix(in srgb, var(--panel) 92%, var(--ink)); 
   .state { padding: 28px 20px; }
   .wall { --tile: 64px; --sway: 20px; gap: 6px; }
   .wall-row { gap: 6px; }
+}
+
+/* Phones (AOTY-98): the look, then its theme row right under the toggle, then sharing, all left. */
+@media (max-width: 560px) {
+  .tool-bar { flex-direction: column; align-items: flex-start; }
+  .tool-bar .theme-row { order: 2; flex-basis: auto; align-self: stretch; }
+  .page-tools { order: 3; margin-left: 0; }
 }

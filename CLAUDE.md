@@ -1124,8 +1124,8 @@ Notes:
   - The kamp mark is `arc()`s, not an SVG image.
   - **iOS refuses `share()` after slow work since the tap.** The image is made ahead: once the button
     is in view (IntersectionObserver), or on hover, focus or touch. Never on page load: it costs a
-    CORS fetch of the cover. A tap before it's ready makes it; if that share is refused, the message
-    says "tap again".
+    CORS fetch of the cover. Since AOTY-98 the preview's button is live only once the image is made,
+    so `share()` is always the tap's first await (there's no "tap again" any more).
   - `share({files})` with the file **alone**: iOS splits text into a separate item and Instagram drops
     the image.
   - Files use the sheet only where `canShare({files})` says yes (`share.useNative` returns false for
@@ -1134,7 +1134,8 @@ Notes:
 - The cache key is the chart's `generated_at`, the texts, the cover URL and the resolved tokens, so
   "album of the year" settling after its cover loads makes a new image.
 - Analytics: `share_image` with `format` (`top1_square`) and `via` (`native`, `download`).
-- Preview: `tools/serve_shell.py --sample alice`, then "save image" on a desktop.
+- Preview: `tools/serve_shell.py --sample alice`, then "share image" and the preview's "save image" on a
+  desktop.
 
 ## Group share images (AOTY-71, 2026-11-27)
 
@@ -1167,7 +1168,7 @@ Notes:
   - `sharecard.test.mjs` checks every op against the band, for each theme, long text, group and
     no-cover case. Text extents in that test are estimates (one em above the baseline, 0.3 below),
     so the layout keeps 40+ px of slack for real fonts.
-- **The "square | story" switch** sits beside the image button and hides with it. It's a
+- **The "square | story" switch** sits in the image's preview (AOTY-98). It's a
   `setupSwitch` (`data-shape` on `<main>`, default square), remembered per viewer as
   `aoty-card-shape` since AOTY-73. AOTY-72's `aoty-card-format` = `top1_story` is carried over
   once.
@@ -1222,13 +1223,43 @@ Notes:
 - **The content rule falls back to the biggest that fits**, never past the saved choice: a saved top
   10 with 5 on screen draws a top 3 (`share.cardContent`).
   - Each content button shows only with that many on screen. The switch shows from three.
-  - Focus on a button that hides goes to the image button.
+  - Focus on a button that hides goes to the preview's "close" (AOTY-98).
 - **Covers:** a top 10 waits at most **5 s per cover** (`coverWaitMs`), so a cold cache still gives an
   image within a few seconds. #1 and top 3 keep 8 s.
 - Test fixtures: the overlap and safe-band tests use 10-album texts and 10-long cover mixes
   (`TOP10`, `LONG10`, `COVER_MIXES`). The box test checks every slot, not only #1's.
 - Files end in `-top10.png` or `-top10-story.png`. Analytics adds the `top10_*` formats and content
   `top10`.
+
+## Share layout and preview (AOTY-98, 2026-11-28)
+
+- User decisions:
+  - **One tool bar.** The page's look is on the left: theme, AOTY-96's background next, and the group
+    owner's "edit group". Sharing is on the right.
+  - **On phones (≤560 px) they stack**, display first, each left-aligned. The theme row opens right
+    under its toggle (`order`).
+  - The link buttons read **"share link"**, or "share group link" and "share <member>'s link" on a
+    member view, whether a tap shares or copies (`share.shareLabels(member)`).
+  - **"share image" opens a preview** (`#preview`, a `<dialog>`), and the #1 / top 3 / top 10 and
+    square / story switches live there.
+  - The preview's button reads "share image" where files go to the share sheet, else "save image"
+    (`share.imageLabel(nativeFiles(...))`), never by screen size. Firefox Android saves.
+  - While an image is made, the last one stays dimmed under "making…" and the button is off.
+  - `share_preview` (no params) counts openings.
+- **The button sends `shown.file`, the image on screen**, never one looked up at the tap: a restyle
+  (`applyTheme` → `cardSoon`, not `renderShare`) can move the key, and `readyCard()` would be null.
+  `cardSoon` refreshes an open preview; `previewGen` keeps only the newest refresh painting.
+- The button uses `aria-disabled`, not `disabled`, so focus stays put. Opening the dialog focuses
+  "close".
+- **Backdrop clicks:** the dialog has no padding and its `.sheet-body` fills it, so
+  `e.target === dialog` means the backdrop. A keyboard click targets the focused button.
+  - The body scrolls, not the dialog, so its scrollbar isn't the backdrop either.
+- **Everything outside a modal is inert**, so the download link is appended inside `#preview`.
+- `data-shape` stays on `<main>` (setupSwitch). The dialog is outside it, so `refreshPreview` copies
+  the shape onto `#preview` for the frame's CSS.
+- A failed image is no longer cached (`makeCard` drops its own entry), so the next try remakes it.
+- If the ranking on screen loses its #1 while the preview is open, `renderShare` closes it and
+  focuses "share link".
 
 ## Monitoring (AOTY-27, 2026-11-23)
 
