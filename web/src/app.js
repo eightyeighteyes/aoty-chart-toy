@@ -26,6 +26,16 @@
   // does may ever break the page, so every call goes through here.
   const kampStats = globalThis.aotyStats;
   const track = (method, ...args) => { try { if (kampStats) kampStats[method](...args); } catch (_) {} };
+  // The shared analytics choice (web/src/consent.js, AOTY-28): the footer lets an asked visitor
+  // change it. Missing (blocked) means no analytics and no link.
+  (() => {
+    const consent = globalThis.kampConsent;
+    try {
+      if (!consent || !consent.enabled || !consent.asked()) return;
+      document.getElementById("consent-choice").hidden = false;
+      document.getElementById("consent-reopen").addEventListener("click", () => consent.reopen());
+    } catch (_) { /* never break the page over the choice */ }
+  })();
   const GROUP_REFRESH_MS = 60000;  // a group page re-reads its chart while members load
   const GROUP_WATCH_MS = 5000;  // and every 5 s after an edit, or while its first chart is pressed
   const API_TIMEOUT_MS = 10000;
@@ -809,6 +819,15 @@
     box.classList.toggle("show", !!msg);
   }
 
+  // wait_abandoned (AOTY-28): the stage a first visit was still waiting in when the page went away,
+  // sent once, on pagehide (gtag flushes by beacon). Null once it ends or a chart shows.
+  let waitingStage = null, abandonSent = false;
+  window.addEventListener("pagehide", () => {
+    if (current || !waitingStage || abandonSent) return;
+    abandonSent = true;
+    track("event", "wait_abandoned", {stage: waitingStage});
+  });
+
   function watchSync(lower, onNewChart) {
     // A first visit keeps watching through the release-year checks, even once its chart shows,
     // because that's when most of it fills in.
@@ -819,6 +838,7 @@
     let delay = POLL_FIRST_MS, timer = null, stopped = false, datingSince = null, watchFrom = null, retries = 0;
     const stop = msg => {
       stopped = true;
+      waitingStage = null;
       clearTimeout(timer);
       timer = null;
       say(msg || "");
@@ -853,6 +873,7 @@
         return true;
       }
       if (s.stage === "idle") { gaveUp(); stop(""); return true; }
+      waitingStage = s.stage;
       const {live, detail, percent} = progress(s);
       // In line, the banner carries the place (announced at most once a minute); after, progress.
       if (position) say(place.live, ""); else say(live, detail);

@@ -29,6 +29,7 @@ OUT = REPO / "dist" / "web"
 ASSETS = {
   "app.css": "CSS",
   "app.js": "JS",
+  "consent.js": "CONSENT",  # before kampstats.js, which reads globalThis.kampConsent (AOTY-28)
   "kampstats.js": "STATS",
   "intro.js": "INTRO",
   "lastfm.js": "LASTFM",
