@@ -1,4 +1,5 @@
 # Pinned so local runs and CI agree (ruff's formatting changes between versions).
 actionlint-py==1.7.12.25  # GitHub Actions workflow linter (ships the actionlint binary)
+fonttools==4.68.0  # the card Lambda's fonts: static instances (tools/make_card_fonts.py) and glyph coverage (AOTY-91)
 pytest==9.0.1
 ruff==0.14.6

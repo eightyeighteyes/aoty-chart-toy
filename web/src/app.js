@@ -1515,8 +1515,7 @@
     const s = cardSubject();
     if (!s) return null;
     const format = cardFormat(s), shown = s.albums.slice(0, sc.FORMATS[format].count);
-    const texts = {albums: shown.map(a => ({title: a.album, artist: a.artist})), name: s.name, year: current.year,
-                   url: linkFor(s.link), kind: s.kind, played: s.played};
+    const texts = share.cardTexts(s, current.year, linkFor(s.link), shown.length);  // as the card Lambda's (AOTY-91)
     // A group's file is named by its slug: its name may be all emoji or CJK, which fileName drops.
     const file = sc.fileName(s.kind === "group" ? s.link.id : s.name, current.year, format);
     const urls = shown.map(a => (a.art ? [a.art, ...(a.fallbacks || [])] : []));
@@ -1606,48 +1605,13 @@
     if (!ctx) return Promise.resolve(null);
     const measure = (t, f) => { ctx.font = f; return ctx.measureText(t).width; };
     const covers = imgs.map(Boolean);
-    for (const o of sc.compose({format, texts, tokens, covers, measure})) drawOp(ctx, o, imgs[o.slot]);
+    globalThis.aotyCardDraw.drawCard(ctx, sc.compose({format, texts, tokens, covers, measure}), imgs);
     return new Promise(resolve => {
       try { canvas.toBlob(b => resolve(b && b.size ? b : null), "image/png"); } catch (_) { resolve(null); }
     });
   }
 
-  // img: the cover for a cover op (o.slot's).
-  function drawOp(ctx, o, img) {
-    ctx.save();
-    if (o.op === "fill") {
-      ctx.fillStyle = o.color;
-      ctx.fillRect(o.x, o.y, o.w, o.h);
-    } else if (o.op === "text") {
-      ctx.font = o.font;
-      ctx.fillStyle = o.color;
-      ctx.textAlign = o.align;
-      ctx.textBaseline = "alphabetic";
-      ctx.fillText(o.text, o.x, o.y);
-    } else if (o.op === "mark") {
-      const k = o.size / 200, cx = o.x + o.size / 2, cy = o.y + o.size / 2;
-      for (const c of o.circles) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, c.r * k, 0, 2 * Math.PI);
-        if (c.fill) { ctx.fillStyle = c.fill; ctx.fill(); }
-        if (c.stroke) { ctx.strokeStyle = c.stroke; ctx.lineWidth = c.lineWidth * k; ctx.stroke(); }
-      }
-    } else if (o.op === "cover") {
-      // Cropped to a square from the middle, as object-fit: cover; with a soft shadow under it.
-      const s = Math.min(img.naturalWidth, img.naturalHeight);
-      ctx.shadowColor = `rgba(0, 0, 0, ${o.shadow})`;
-      ctx.shadowBlur = o.blur ?? 48;  // smaller on small covers (AOTY-74)
-      ctx.shadowOffsetY = o.drop ?? 18;
-      ctx.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, o.x, o.y, o.w, o.h);
-    } else if (o.op === "tile") {
-      const g = ctx.createLinearGradient(o.x, o.y, o.x + o.w, o.y + o.h);  // 135 degrees, as .noart
-      g.addColorStop(0, o.from);
-      g.addColorStop(1, o.to);
-      ctx.fillStyle = g;
-      ctx.fillRect(o.x, o.y, o.w, o.h);
-    }
-    ctx.restore();
-  }
+  // The ops are played by web/src/carddraw.js (drawOp), shared with the card Lambda (AOTY-91).
 
   // A file for the share sheet, or a download: one dummy PNG asks canShare whether files go.
   const nativeFiles = files => {

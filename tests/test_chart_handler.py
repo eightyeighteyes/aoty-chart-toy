@@ -273,6 +273,99 @@ def test_a_failed_preview_write_never_fails_the_build(h, world, capsys):
   assert line["og_failed"] == 1
 
 
+# ---- preview cards (AOTY-91) ----------------------------------------------------------------
+
+PNG = ("site", "toys/aoty-test/data/users/alice/og.png")
+
+
+class FakeCardLambda:
+  """The card Lambda, answering each synchronous invoke with `answer` (or raising `error`)."""
+
+  def __init__(self, answer=None, error=None, function_error=None):
+    self.answer, self.error, self.function_error, self.calls = answer, error, function_error, []
+
+  def invoke(self, FunctionName, InvocationType, Payload):
+    self.calls.append({"fn": FunctionName, "type": InvocationType, "payload": json.loads(Payload)})
+    if self.error:
+      raise self.error
+    body = json.dumps(self.answer).encode()
+    out = {"Payload": type("Body", (), {"read": lambda self: body})()}
+    if self.function_error:
+      out["FunctionError"] = self.function_error
+    return out
+
+
+def with_card(deps, card):
+  deps.env = {**ENV, "CARD_FUNCTION": "kamp-aoty-test-card"}
+  deps.lambda_ = card
+  return deps
+
+
+def drawn(key=PNG[1]):
+  return {"ok": True, "key": key, "generated_at": NOW, "cover": True}
+
+
+def test_a_build_asks_the_card_lambda_and_its_preview_shows_the_card(h, world):
+  s3, ddb = world
+  card = FakeCardLambda(drawn())
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, with_card(Deps(s3, ddb), card))
+  (call,) = card.calls
+  assert call["fn"] == "kamp-aoty-test-card" and call["type"] == "RequestResponse"
+  assert call["payload"]["key"] == PNG[1] and call["payload"]["chart"] == s3.json(CHART)
+  page = s3.objects[OG].decode()
+  version = s3.json(CHART)["generated_at"].replace(":", "%3A")  # the build, URL-encoded
+  url = f"https://kamp.fm/{PNG[1]}?v={version}"
+  assert f'<meta property="og:image" content="{url}">' in page
+  assert '<meta name="twitter:card" content="summary_large_image">' in page
+
+
+@pytest.mark.parametrize("card, failed", [
+  (FakeCardLambda({"ok": False, "reason": "glyphs"}), 0),  # by design: no fonts for that text
+  (FakeCardLambda({"ok": False, "reason": "empty"}), 0),  # by design: nothing ranks yet
+  (FakeCardLambda({"ok": False, "reason": "error"}), 1),
+  (FakeCardLambda({"errorMessage": "boom"}, function_error="Unhandled"), 1),  # a crash, or the placeholder
+  (FakeCardLambda(error=TimeoutError("read timeout")), 1),
+  (FakeCardLambda({"ok": True, "placeholder": "kamp-aoty-test-card"}), 1),  # never deployed: no key
+  (FakeCardLambda(drawn(key="toys/aoty-test/data/users/bob/og.png")), 1),  # someone else's card
+])  # fmt: skip
+def test_without_a_card_the_preview_keeps_the_bare_cover_and_the_build_succeeds(h, world, card, failed):
+  s3, ddb = world
+  out = h.handler({"username": "alice", "requested_at": NOW - 5}, None, with_card(Deps(s3, ddb), card))
+  assert out["built"] == 1 and out["failed"] == 0 and out.get("card_failed", 0) == failed
+  page = s3.objects[OG].decode()
+  assert "og.png" not in page and '<meta name="twitter:card" content="summary">' in page
+
+
+def test_no_card_lambda_configured_means_no_call(h, world):
+  s3, ddb = world
+  deps = Deps(s3, ddb)
+  deps.lambda_ = FakeCardLambda(drawn())  # a client, but no CARD_FUNCTION: tests, older envs
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, deps)
+  assert deps.lambda_.calls == [] and "og.png" not in s3.objects[OG].decode()
+
+
+def test_a_chart_too_big_for_the_payload_gets_no_card(h, world, monkeypatch):
+  s3, ddb = world
+  monkeypatch.setattr(h, "CARD_PAYLOAD_MAX", 10)
+  card = FakeCardLambda(drawn())
+  out = h.handler({"username": "alice", "requested_at": NOW - 5}, None, with_card(Deps(s3, ddb), card))
+  assert card.calls == [] and out["card_failed"] == 1 and out["built"] == 1
+
+
+def test_a_restyle_redraws_the_card_in_the_new_theme(h, world):
+  s3, ddb = world
+  h.handler({"username": "alice", "requested_at": NOW - 5}, None, Deps(s3, ddb))
+  ddb.users["alice"]["theme"] = "beach-house"
+  card = FakeCardLambda(drawn())
+  h.handler({"username": "alice", "restyle": True}, None, with_card(Deps(s3, ddb), card))
+  (call,) = card.calls
+  assert call["payload"]["chart"]["theme"] == "beach-house"
+  assert "og.png" in s3.objects[OG].decode()
+  card.calls.clear()
+  h.handler({"username": "alice", "restyle": True}, None, with_card(Deps(s3, ddb), card))  # nothing changed
+  assert card.calls == []
+
+
 # ---- page themes (AOTY-65) ------------------------------------------------------------------
 
 
@@ -711,8 +804,11 @@ def test_a_deleted_groups_chart_is_removed_unless_the_slug_is_back(h):
   h.handler({"group": GROUP}, None, Deps(s3, ddb))
   ddb.groups.clear()
   assert GROUP_OG in s3.objects
+  group_png = ("site", GROUP_OG[1].replace("og.html", "og.png"))
+  s3.objects[group_png] = b"png"  # its card (AOTY-91)
   assert h.handler({"group": GROUP, "deleted": True}, None, Deps(s3, ddb))["built"] == 1
   assert GROUP_CHART not in s3.objects and GROUP_OG not in s3.objects  # the preview goes too (AOTY-85)
+  assert group_png not in s3.objects  # and its card
   ddb.add_group(GROUP, ["bob"], name="again")  # re-created before the delete event ran
   h.handler({"group": GROUP, "deleted": True}, None, Deps(s3, ddb))
   assert s3.json(GROUP_CHART)["name"] == "again"

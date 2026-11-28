@@ -107,8 +107,27 @@
     return native ? "share image" : "save image";
   }
 
+  // The texts sharecard.compose draws for a subject (imageSubject's): its albums' titles and
+  // artists, its name, the year, the link and a group's member count. The page's share image and
+  // the card Lambda's link preview card (AOTY-91) both come from here, so they say the same.
+  function cardTexts(subject, year, url, count = 1) {
+    const albums = subject.albums.slice(0, count).map(a => ({title: a.album, artist: a.artist}));
+    return {albums, name: subject.name, year, url, kind: subject.kind, played: subject.played};
+  }
+
+  // A link preview card's subject (AOTY-91): the page as a visitor first sees it, Everyone's view.
+  // A user page by its display name; a group by its name, with top its By Listener #1 (group.top,
+  // which the caller passes: this file doesn't load group.js). Null when nothing ranks yet.
+  function previewSubject(chart, top) {
+    if (!chart) return null;
+    const target = chart.kind === "group"
+      ? {kind: "group", id: chart.id, name: chart.name || chart.id}
+      : {kind: "user", id: chart.display_name || chart.username, name: chart.display_name || chart.username};
+    return imageSubject({target, chart, top, member: ""});
+  }
+
   const api = {shareUrl, useNative, shareTitle, shareLabels, userTop, userTops, CONTENTS, SHAPES, cardContent, formatId,
-               imageSubject, imageLabel};
+               imageSubject, imageLabel, cardTexts, previewSubject};
   root.aotyShare = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

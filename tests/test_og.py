@@ -130,6 +130,27 @@ def test_a_long_description_is_cut_on_a_word(og):
   assert d[:-1].split()[-1] == "word"
 
 
+CARD = "https://kamp.fm/toys/aoty/data/users/alice/og.png?v=1795000000"
+
+
+def test_a_rendered_card_is_the_image_drawn_large(og):
+  # AOTY-91: the share card, 1080 square, as summary_large_image.
+  t = tags(og.user_page(user_chart(), ORIGIN, BASE, card=CARD))
+  assert t.meta["og:image"] == CARD and t.meta["og:image:type"] == "image/png"
+  assert (t.meta["og:image:width"], t.meta["og:image:height"]) == ("1080", "1080")
+  assert t.meta["twitter:card"] == "summary_large_image"
+  g = tags(og.group_page(group_chart(), ORIGIN, BASE, card=CARD))
+  assert g.meta["og:image"] == CARD and g.meta["twitter:card"] == "summary_large_image"
+
+
+def test_without_a_card_the_page_is_aoty_85s(og):
+  assert og.user_page(user_chart(), ORIGIN, BASE, card=None) == og.user_page(user_chart(), ORIGIN, BASE)
+  t = tags(og.user_page(user_chart(), ORIGIN, BASE, card="http://not-https/og.png"))
+  assert (
+    t.meta["og:image"] == COVER and t.meta["twitter:card"] == "summary" and "og:image:width" not in t.meta
+  )
+
+
 def test_a_missing_display_name_falls_back_to_the_username(og):
   t = tags(og.user_page(user_chart(display=None), ORIGIN, BASE))
   assert t.meta["og:url"] == "https://kamp.fm/toys/aoty/user/alice"

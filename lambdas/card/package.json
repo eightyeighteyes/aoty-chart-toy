@@ -1,0 +1,10 @@
+{
+  "name": "kamp-aoty-card",
+  "private": true,
+  "description": "AOTY-91: renders a chart's link preview card (web/src/sharecard.js) on the server.",
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "dependencies": {
+    "@napi-rs/canvas": "1.1.1"
+  }
+}

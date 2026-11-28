@@ -34,6 +34,7 @@ ASSETS = {
   "lastfm.js": "LASTFM",
   "share.js": "SHARE",
   "sharecard.js": "SHARECARD",
+  "carddraw.js": "CARDDRAW",
   "firstvisit.js": "FIRSTVISIT",
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",

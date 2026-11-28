@@ -17,6 +17,7 @@ __pycache__/
 
 # Lambda zips from scripts/package_lambdas.py
 dist/
+node_modules/
 
 # Terraform (lock files ARE committed; state lives in S3)
 .terraform/

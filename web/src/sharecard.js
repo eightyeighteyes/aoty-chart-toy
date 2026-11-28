@@ -27,7 +27,9 @@
   const DEFAULT_FORMAT = "top1_square";
 
   const DISPLAY = '"Bricolage Grotesque", sans-serif';
-  const ARIAL = "Arial, Helvetica, sans-serif";  // gabbie's headings (AOTY-75)
+  // gabbie's headings (AOTY-75). Liberation Sans is Arial's metric twin, for the card Lambda, which
+  // has no Arial (AOTY-91); a browser with Arial never reaches it.
+  const ARIAL = 'Arial, Helvetica, "Liberation Sans", sans-serif';
   const BODY = "Inter, system-ui, sans-serif";
   const BRAND = '"DM Sans", Inter, system-ui, sans-serif';  // the "a kamp toy" chrome (AOTY-23)
   const ELLIPSIS = "…";

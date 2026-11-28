@@ -941,6 +941,51 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
 - Rollout: the toy first (harmless alone), then `tools/rebuild_charts.py` per env (ask before
   prod), then kamp-site. Sandbox has no kamp.fm path: check on staging with real Discord and
   iMessage clients.
+- **Discord caches an embed, or the lack of one, per exact URL (case-sensitive).** A link pasted
+  before its og.html existed (a 403) stays preview-less until that cache expires. Test a fix with a
+  throwaway query (`?x=1`): kamp.fm ignores it, Discord treats it as new (found on staging,
+  2026-11-27).
+
+## Preview cards (AOTY-91, 2026-11-27)
+
+- User decisions:
+  - **A Node Lambda + @napi-rs/canvas** (`lambdas/card`), running the page's own `share.js`,
+    `group.js`, `theme.js`, `sharecard.js` and `carddraw.js` unchanged, so a preview card is the
+    share image a visitor would save and the two can't drift.
+  - **The #1 square** (`top1_square`, 1080) as `summary_large_image`. X, Facebook and LinkedIn crop
+    it to about 1.91:1, which is accepted; Discord and iMessage show it whole.
+  - **Latin fonts only**: a card whose text needs other glyphs isn't drawn, and og.html keeps
+    AOTY-85's bare cover.
+- **The chart builder calls card synchronously** after each build and restyle, passing the chart,
+  then writes og.html once: with `og.png?v=<generated_at>` when the answer is `{ok, key}` for the
+  key it asked for, else the bare cover.
+  - One build at a time, so og.html and og.png never race.
+  - "empty" (nothing ranks) and "glyphs" are by design. Anything else (an error, a timeout, a
+    chart over the 5 MB payload, the placeholder's `{"ok": true}` with no key) counts in
+    `card_failed` and never fails the build.
+  - A restyle redraws the card in the new theme. A group's delete removes its og.png.
+- **The page and the card share their inputs:** `share.previewSubject` (Everyone's view: a user's
+  #1, a group's By Listener #1) and `share.cardTexts`, which the page's `cardInput` uses too.
+  `drawOp` moved to `web/src/carddraw.js`. The printed link uses `SHORT_HOST`, set on prod's base
+  alone, as `build_shell`'s rule.
+- **Fonts** (`lambdas/card/fonts`, built by `tools/make_card_fonts.py` from Google Fonts and
+  Liberation 2.1.5; OFL):
+  - Static instances, because canvas may draw a variable font's default whatever the weight:
+    Bricolage Grotesque 800 (opsz 56), Inter 500/600/700 (opsz 28), DM Sans 500 (opsz 28).
+  - Liberation Sans Bold stands in for gabbie's Arial. **@napi-rs/canvas ignores a register alias**
+    and files a font under its own name, so sharecard's Arial stack names "Liberation Sans" after
+    Arial and Helvetica. Lambda has no system fonts at all.
+  - `coverage.json` is the code points every text font has (514: Latin, Latin-1, Latin
+    Extended-A, the usual punctuation). `tests/test_card_fonts.py` checks the names, weights,
+    coverage and licences.
+- **Packaging:** `card_zip` packs an `npm ci --os=linux --cpu=arm64 --libc=glibc` install
+  (13.9 MB) and fails unless the canvas binary is exactly `canvas-linux-arm64-gnu`.
+  - A source tree's `node_modules` (the card's test install) is never packed and never makes a
+    build dirty.
+  - CI and the deploy run Node 22. CI's node tests draw a real card (`web/test/card.test.mjs`)
+    after `npm ci --prefix lambdas/card`.
+- `@napi-rs/canvas` is pinned to 1.1.1 (released 2026-11-12). Bump it deliberately, with a
+  sandbox render.
 
 ## Sharing (AOTY-84, 2026-11-27)
 

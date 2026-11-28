@@ -420,6 +420,23 @@ SPA. A failed write never fails the build (`og_failed`), and a group's delete re
   <env>` (it writes; ask before prod).
 - Check one by hand: `curl -A 'Discordbot/2.0' https://kamp.fm<base>user/<Name>`.
 
+**Preview cards (AOTY-91).** The chart builder calls the `kamp-aoty-<env>-card` Lambda (Node 22,
+arm64) synchronously after each build and restyle. It draws the page's #1 share card and writes
+`og.png` beside og.html, which then shows it (1080 square, `summary_large_image`). When there's no
+card (nothing ranks, text its Latin fonts can't draw, or a failure), og.html keeps the bare cover;
+failures count in the chart builder's `card_failed` field and the prod `card-errors` alarm.
+
+- Draw one by hand (the chart's own JSON in, og.png out):
+
+  ```sh
+  aws s3 cp s3://kamp-aoty-staging-site/toys/aoty-staging/data/users/alice/chart.json /tmp/chart.json
+  jq -n --slurpfile c /tmp/chart.json '{chart: $c[0], key: "toys/aoty-staging/data/users/alice/og.png"}' > /tmp/event.json
+  aws lambda invoke --function-name kamp-aoty-staging-card --cli-binary-format raw-in-base64-out \
+    --payload file:///tmp/event.json /dev/stdout
+  ```
+
+- Its log line is `{"card": "drawn" | <reason>, "cover": true | false}`.
+
 **Page themes (AOTY-65):** the owner's pick (`POST api/users/<name>/theme`) is saved on the users
 row (`theme`), and the api sends the chart Lambda `{"username", "restyle": true}`. That copies the
 row's theme into the published `chart.json` without a build, which is why the chart role can read
@@ -656,7 +673,7 @@ Every alarm emails the `kamp-aoty-alerts` topic (`global/alerts.tf`) on ALARM an
 The alarm names say which env it is (`kamp-aoty-<env>-<alarm>`). `modules/stack/alarms.tf` has
 the set, and its description links here. `alarms` per env: prod `full`, staging `basic` (the DLQs
 and the uptime check), sandbox `none` (its deploy role can't write alarms: any branch can use it).
-About 21 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
+About 22 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
 $0.10 each a month.
 
 ```sh
@@ -702,10 +719,12 @@ kamp-aoty-prod-uptime`) and the function's log.
 
 ### `lambda-errors`
 
-`sync-errors`, `mb-errors`, `chart-errors` (2+ in an hour), `api-errors` (over 5% and 5+ in 15
-min). Read the function's log for the stack trace. A failed sync usually shows as `retrying` in
-its users row and comes back by itself; a bad deploy shows on every invocation: roll back
-("Deploys and releases").
+`sync-errors`, `mb-errors`, `chart-errors`, `card-errors` (2+ in an hour), `api-errors` (over 5%
+and 5+ in 15 min). Read the function's log for the stack trace. A failed sync usually shows as
+`retrying` in its users row and comes back by itself; a bad deploy shows on every invocation: roll
+back ("Deploys and releases"). `card-errors` (AOTY-91) never breaks a chart: previews just fall back
+to the bare cover until it's fixed. A crash on start usually means the canvas binary or a font is
+missing from the zip.
 
 ### `sync-queue-age`
 

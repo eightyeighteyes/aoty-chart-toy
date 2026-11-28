@@ -30,17 +30,21 @@ DESCRIPTION_MAX = 200
 GROUP_MODES = ("listener", "album")  # a group's #1: By Listener, else By Play (charts before AOTY-63)
 
 
-def user_page(chart, origin, base):
+CARD_SIZE = 1080  # the card Lambda's top1_square (AOTY-91)
+
+
+# card: the rendered preview card's URL (AOTY-91, lambdas/card), or None for the #1's bare cover.
+def user_page(chart, origin, base, card=None):
   name = chart.get("display_name") or chart.get("username") or ""
   year = chart.get("year")
   title = f"{name}'s {NAME} {year}"
   url = f"{origin}{base}user/{quote(name, safe='')}"
   top = _top(chart, ("album",))
   empty = f"the {year} albums {name} actually lived with, pressed into a chart. {SITE_NAME}."
-  return _page(title, _description(top, empty), url, top)
+  return _page(title, _description(top, empty), url, top, card)
 
 
-def group_page(chart, origin, base):
+def group_page(chart, origin, base, card=None):
   slug = chart.get("id") or ""
   name = chart.get("name") or slug
   year = chart.get("year")
@@ -48,7 +52,7 @@ def group_page(chart, origin, base):
   url = f"{origin}{base}group/{quote(slug, safe='')}"
   top = _top(chart, GROUP_MODES)
   empty = f"the {year} albums {name} played together, pressed into a chart. {SITE_NAME}."
-  return _page(title, _description(top, empty), url, top)
+  return _page(title, _description(top, empty), url, top, card)
 
 
 def _top(chart, modes):
@@ -76,7 +80,7 @@ def _cut(text, limit=DESCRIPTION_MAX):
   return (head[:space] if space > limit // 2 else head).rstrip() + "…"
 
 
-def _page(title, description, url, top):
+def _page(title, description, url, top, card=None):
   art = (top or {}).get("art") or ""
   e = lambda s: escape(str(s), quote=True)  # noqa: E731
   tags = [
@@ -86,8 +90,14 @@ def _page(title, description, url, top):
     ("og:description", description),
     ("og:url", url),
   ]
-  if art.startswith("https://"):
+  if card and card.startswith("https://"):
+    # The share card, drawn large (user decision 2026-11-27: X, Facebook and LinkedIn crop a square
+    # to about 1.91:1, accepted; Discord and iMessage show it whole).
+    tags += [("og:image", card), ("og:image:type", "image/png"), ("og:image:width", CARD_SIZE),
+             ("og:image:height", CARD_SIZE)]  # fmt: skip
+  elif art.startswith("https://"):
     tags.append(("og:image", art))
+  twitter = "summary_large_image" if card and card.startswith("https://") else "summary"
   meta = "\n".join(f'<meta property="{p}" content="{e(v)}">' for p, v in tags)
   return (
     "<!doctype html>\n"
@@ -95,7 +105,7 @@ def _page(title, description, url, top):
     f"<title>{e(title)} · {e(SITE_NAME)}</title>\n"
     f'<meta name="description" content="{e(description)}">\n'
     f"{meta}\n"
-    '<meta name="twitter:card" content="summary">\n'
+    f'<meta name="twitter:card" content="{twitter}">\n'
     f'<link rel="canonical" href="{e(url)}">\n'
     "</head>\n<body>\n"
     f'<p><a href="{e(url)}">{e(title)}</a></p>\n'
