@@ -581,7 +581,9 @@ _AUTH_HANDLERS = {"auth_start": auth_start, "auth_callback": auth_callback, "me"
 # DELETE groups/<id>                    204
 # POST   groups/<id>/members {username} 201 {member, added: true, sync, status} | 200 {added: false}
 #                                       | 404 unknown user | 409 full, cannot_add | 429 | 503
-# DELETE groups/<id>/members/<name>     204, also when they weren't a member
+# DELETE groups/<id>/members/<name>     204, also when they weren't a member. The owner removes anyone;
+#                                       anyone may remove themselves (leaving, AOTY-49). Not members/me:
+#                                       "me" is a real Last.fm name
 # POST   groups/<id>/sync               200 {queued: n, members: {word: count}} | 200 {queued: 0,
 #                                       reason: cooldown | paused} | 404 | 415. Public, on even where
 #                                       writes are off: a visit to the group page (AOTY-55, group_sync)
@@ -656,6 +658,14 @@ def _group_dispatch(deps, event, headers, action, arg, ip, trusted, info):
     return _response(401, {"error": "signed_out"})
   if action == "my_groups":
     return _response(200, {"groups": groups_store.owned_by(deps, user)})
+  if action == "my_memberships":
+    return my_memberships(deps, user, info)
+  if action == "my_settings":
+    body = _json_body(event)
+    if body is None:
+      info["group"] = "bad_json"
+      return _response(400, {"error": "send a JSON object"})
+    return put_settings(deps, user, body, info)
   slug = arg[0] if action == "member_remove" else arg
   if action != "group_create" and not grp.SLUG_RE.match(slug or ""):
     info["group"] = "missing"
@@ -900,17 +910,60 @@ def member_add(deps, user, slug, body, headers, ip, trusted, info):
 
 
 def member_remove(deps, user, slug, name, info):
+  """The owner removes anyone; anyone else only themselves (leaving, AOTY-49)."""
   if not core.USERNAME_RE.match(name or ""):
     info["group"] = "bad_name"
     return _response(400, {"error": "invalid username"})
   word = groups_store.remove_member(deps, slug, user, name, int(deps.clock()))
   if word in _REFUSALS:
     return _refused(word, info)
-  info["group"] = word  # removed or absent: either way they aren't a member now
+  # removed or absent: either way they aren't a member now. A member's own removal is "left".
+  info["group"] = "left" if word == "removed" and name == user else word
   if word == "removed":
     log.info("group %s: removed %s", slug, _tag(name))
     _request_chart(deps, slug, int(deps.clock()))
   return _response(204, None)
+
+
+# ---- opting out (AOTY-49) -------------------------------------------------------------------
+#
+# GET me/memberships  {groups: [{id, name, owner}], block_group_adds}: the groups the caller is in
+#                     that someone else owns (their own are in me/groups), and their setting
+# PUT me/settings     {block_group_adds: bool} -> 200 the same | 400 bad_settings. While it's on,
+#                     another owner's add is refused with member_add's neutral 409 cannot_add; adds
+#                     to the caller's own groups aren't affected. Existing memberships stay: leaving
+#                     is DELETE groups/<id>/members/<own name>, one group at a time.
+
+
+def my_memberships(deps, user, info):
+  groups = groups_store.member_of(deps, user)
+  blocked = bool(_get_user(deps, user).get("block_group_adds"))
+  info["group"] = "memberships"
+  return _response(200, {"groups": groups, "block_group_adds": blocked})
+
+
+def put_settings(deps, user, body, info):
+  block = body.get("block_group_adds")
+  if set(body) != {"block_group_adds"} or not isinstance(block, bool):
+    info["group"] = "bad_settings"
+    return _response(400, {"error": "bad_settings"})
+  # The row may not exist yet (signed in, never synced). Making it is safe: a signed-in name is a
+  # real Last.fm user, and with no last_synced_at their first sync still counts as new.
+  if block:
+    deps.ddb.update_item(TableName=deps.env["USERS_TABLE"], Key={"username": {"S": user}},
+                         UpdateExpression="SET block_group_adds = :t",
+                         ExpressionAttributeValues={":t": {"BOOL": True}})  # fmt: skip
+  else:
+    try:  # only an existing row: an UpdateItem that removes would otherwise make a bare one
+      deps.ddb.update_item(TableName=deps.env["USERS_TABLE"], Key={"username": {"S": user}},
+                           UpdateExpression="REMOVE block_group_adds",
+                           ConditionExpression="attribute_exists(username)")  # fmt: skip
+    except Exception as e:
+      if _error_code(e) != "ConditionalCheckFailedException":
+        raise
+  log.info("%s %s group adds", _tag(user), "blocked" if block else "allowed")
+  info["group"] = "blocked" if block else "unblocked"
+  return _response(200, {"block_group_adds": block})
 
 
 # ---- page themes (AOTY-65) ----------------------------------------------------------------

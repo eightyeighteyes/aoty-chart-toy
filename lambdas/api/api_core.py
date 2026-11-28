@@ -19,6 +19,8 @@ The users row (written by api, sync and the chart builder) carries:
                      sync worker removes it when the sync starts (queue_place)
   theme, theme_set_at  the owner's page theme, a common.themes id, and when they set it (api,
                      AOTY-65); the chart builder copies theme into chart.json
+  block_group_adds   true while the user refuses being added to other people's groups (api,
+                     AOTY-49; absent otherwise). Set by PUT me/settings, which may create the row.
 """
 
 import hashlib
@@ -49,9 +51,12 @@ _GROUP_SYNC_ROUTE = re.compile(r"api/groups/([^/]+)/sync/?")
 _GROUP_THEME_ROUTE = re.compile(r"api/groups/([^/]+)/theme/?")  # the owner's page theme, AOTY-76
 _GROUP_METHODS = {"GET": "group_get", "PATCH": "group_rename", "DELETE": "group_delete"}
 GROUP_WRITES = frozenset({"group_create", "group_rename", "group_delete", "member_add", "member_remove",
-                          "group_theme"})  # fmt: skip
+                          "group_theme", "my_settings"})  # fmt: skip
 # group_sync (AOTY-55) is public like group_get: a visit to a group page syncs its members.
-GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups", "group_sync"}
+# my_memberships and my_settings (AOTY-49): the groups a person is in, and their block on adds.
+GROUP_ACTIONS = GROUP_WRITES | {"group_get", "my_groups", "my_memberships", "group_sync"}
+_ME_ROUTES = {"api/me/groups": ("my_groups", "GET"), "api/me/memberships": ("my_memberships", "GET"),
+              "api/me/settings": ("my_settings", "PUT")}  # fmt: skip
 # Sign-in (AOTY-47): path -> (action, method). Only the callback changes anything on a GET, and
 # only after its state check; signout is a JSON-only POST like sync.
 _AUTH_ROUTES = {
@@ -81,7 +86,7 @@ def route(method, path, base):
   m = _CALLBACK_ROUTE.fullmatch(rest)
   if m:
     return ("auth_callback", m.group(1)) if method == "GET" else ("method", None)
-  if rest.startswith("api/groups") or rest.rstrip("/") == "api/me/groups":
+  if rest.startswith("api/groups") or rest.rstrip("/") in _ME_ROUTES:
     return _group_route(method, rest)
   m = _USER_ROUTE.fullmatch(rest)
   if not m:
@@ -98,8 +103,9 @@ def _part(raw):
 
 def _group_route(method, rest):
   bare = rest.rstrip("/")
-  if bare == "api/me/groups":
-    return ("my_groups", None) if method == "GET" else ("method", None)
+  if bare in _ME_ROUTES:
+    action, wanted = _ME_ROUTES[bare]
+    return (action, None) if method == wanted else ("method", None)
   if bare == "api/groups":
     return ("group_create", None) if method == "POST" else ("method", None)
   m = _MEMBER_ROUTE.fullmatch(rest)

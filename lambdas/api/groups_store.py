@@ -114,6 +114,47 @@ def owned_by(deps, owner):
   return sorted(out_rows, key=lambda r: (-(r["updated_at"] or 0), r["id"]))
 
 
+BATCH_GET_MAX = 100
+BATCH_RETRIES = 4
+
+
+def member_of(deps, username):
+  """[{id, name, owner}] for the groups username is in, by name; groups they own are left out
+  (owned_by lists those). AOTY-49's "groups you're in".
+
+  by_member is keys only and eventually consistent, so the metas are read after it: a group deleted
+  or moved since the index read has no meta and is dropped."""
+  slugs, kwargs = [], {
+    "TableName": _table(deps), "IndexName": g.BY_MEMBER, "KeyConditionExpression": "username = :u",
+    "ExpressionAttributeValues": {":u": {"S": username}},
+  }  # fmt: skip
+  while True:
+    out = deps.ddb.query(**kwargs)
+    for it in out.get("Items", []):
+      slug = g.slug_of(dynamo.from_item(it).get("pk"))
+      if slug and slug not in slugs:
+        slugs.append(slug)
+    if not out.get("LastEvaluatedKey"):
+      break
+    kwargs["ExclusiveStartKey"] = out["LastEvaluatedKey"]
+  rows, table = [], _table(deps)
+  wanted = {"ProjectionExpression": "pk, #n, #o", "ExpressionAttributeNames": {"#n": "name", "#o": "owner"}}
+  for i in range(0, len(slugs), BATCH_GET_MAX):
+    keys = [_key(s, g.META) for s in slugs[i : i + BATCH_GET_MAX]]
+    for _ in range(BATCH_RETRIES + 1):
+      out = deps.ddb.batch_get_item(RequestItems={table: {"Keys": keys, **wanted}})
+      rows += [dynamo.from_item(it) for it in (out.get("Responses") or {}).get(table, [])]
+      keys = ((out.get("UnprocessedKeys") or {}).get(table) or {}).get("Keys") or []
+      if not keys:
+        break
+      deps.sleep(0.05)
+    else:
+      raise RuntimeError("batch_get_item left keys unprocessed")
+  groups = [{"id": g.slug_of(r.get("pk")), "name": r.get("name", ""), "owner": r.get("owner")} for r in rows]
+  groups = [x for x in groups if x["id"] and x["owner"] != username]
+  return sorted(groups, key=lambda x: (x["name"].casefold(), x["id"]))
+
+
 def is_member(deps, slug, username):
   out = deps.ddb.get_item(TableName=_table(deps), Key=_key(slug, g.member_sk(username)), ConsistentRead=True)
   return bool(out.get("Item"))
@@ -177,17 +218,26 @@ def add_member(deps, slug, owner, username, now):
   return "member" if member_failed else verdict
 
 
-def remove_member(deps, slug, owner, username, now):
-  """removed, absent, missing or forbidden."""
+def remove_member(deps, slug, caller, username, now):
+  """removed, absent, missing or forbidden.
+
+  The owner may remove anyone. Anyone else may remove only themselves: leaving (AOTY-49). Either
+  way it's the same transaction, so the count, the cap and the rebuild stamp live in one place."""
+  meta_update = {
+    "TableName": None, "Key": _key(slug, g.META),
+    "UpdateExpression": "ADD member_count :minus SET updated_at = :now, chart_requested_at = :now",
+    "ReturnValuesOnConditionCheckFailure": "ALL_OLD",
+  }  # fmt: skip
+  if caller == username:
+    meta_update |= {"ConditionExpression": "attribute_exists(pk)",
+                    "ExpressionAttributeValues": dynamo.to_item({":minus": -1, ":now": now})}  # fmt: skip
+  else:
+    meta_update |= {
+      "ConditionExpression": "attribute_exists(pk) AND #o = :me", "ExpressionAttributeNames": {"#o": "owner"},
+      "ExpressionAttributeValues": dynamo.to_item({":minus": -1, ":now": now, ":me": caller}),
+    }  # fmt: skip
   items = _with_table(deps, [
-    {"Update": {
-      "TableName": None, "Key": _key(slug, g.META),
-      "UpdateExpression": "ADD member_count :minus SET updated_at = :now, chart_requested_at = :now",
-      "ConditionExpression": "attribute_exists(pk) AND #o = :me",
-      "ExpressionAttributeNames": {"#o": "owner"},
-      "ExpressionAttributeValues": dynamo.to_item({":minus": -1, ":now": now, ":me": owner}),
-      "ReturnValuesOnConditionCheckFailure": "ALL_OLD",
-    }},
+    {"Update": meta_update},
     {"Delete": {"TableName": None, "Key": _key(slug, g.member_sk(username)),
                 "ConditionExpression": "attribute_exists(pk)"}},
   ])  # fmt: skip
