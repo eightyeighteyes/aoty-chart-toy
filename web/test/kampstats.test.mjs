@@ -59,6 +59,9 @@ test("events keep only listed params and values", () => {
   // AOTY-84: a native share says nothing about which page either.
   assert.deepEqual(EVENTS.share_native, {});
   assert.deepEqual(clean("share_native", {url: "https://aoty.kamp.fm/alice", title: "alice's albums"}), {});
+  // AOTY-98: opening the preview says nothing at all.
+  assert.deepEqual(EVENTS.share_preview, {});
+  assert.deepEqual(clean("share_preview", {format: "top1_square", name: "alice"}), {});
   // AOTY-70: a share image says its format and how it went, nothing about whose page or which album.
   assert.deepEqual(clean("share_image", {format: "top1_square", via: "native", album: "1989", name: "alice"}),
                    {format: "top1_square", via: "native"});

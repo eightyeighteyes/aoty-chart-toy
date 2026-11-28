@@ -53,6 +53,9 @@
     share_copy: {},
     // The system share sheet shared a page's link (AOTY-84): which page is never sent.
     share_native: {},
+    // The share image's preview was opened (AOTY-98): nothing else, so previews that never share
+    // can be counted against share_image.
+    share_preview: {},
     // A share image went out (AOTY-70): its format and how, never whose page or which album.
     share_image: {format: ["top1_square", "top1_story", "top3_square", "top3_story", "top10_square", "top10_story"],
                   via: ["native", "download"]},

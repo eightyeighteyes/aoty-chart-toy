@@ -5,7 +5,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const {shareUrl, useNative, shareTitle, shareLabels, userTop, userTops, CONTENTS, SHAPES, cardContent, formatId,
-       imageSubject, imageLabel, cardTexts, previewSubject} = require("../src/share.js");
+       imageSubject, imageLabel, cardTexts, previewAlt, previewSubject} = require("../src/share.js");
 
 const PROD = {origin: "https://kamp.fm", base: "/toys/aoty/", short: "aoty.kamp.fm"};
 const STAGING = {origin: "https://kamp.fm", base: "/toys/aoty-staging/", short: ""};
@@ -192,4 +192,13 @@ test("a saved top 10 falls back to the biggest that fits, never past what was sa
 test("the share image's label says what a tap does", () => {
   assert.equal(imageLabel(true), "share image");
   assert.equal(imageLabel(false), "save image");
+});
+
+test("the preview's alt text names whose it is and every album drawn (AOTY-98)", () => {
+  const a = (title, artist) => ({title, artist});
+  assert.equal(previewAlt({kind: "user", name: "alice", albums: [a("1989", "Taylor Swift")]}),
+               "alice's #1: 1989 by Taylor Swift");
+  assert.equal(previewAlt({kind: "user", name: "alice", albums: [a("A", "X"), a("B", "Y"), a("C", "Z")]}),
+               "alice's top 3: A by X, B by Y, C by Z");
+  assert.equal(previewAlt({kind: "group", name: "Full House", albums: [a("A", "X")]}), "Full House · #1: A by X");
 });

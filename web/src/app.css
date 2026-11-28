@@ -456,11 +456,34 @@ html.has-aurora .account {
 .edit-danger { margin: 6px 0 0; }
 .quiet.danger { color: var(--accent); }
 
-/* Dialogs: your groups, and the confirmations. */
+/* Dialogs: your groups, the confirmations and the share image's preview. A short window (a phone
+   held sideways) scrolls the dialog rather than cutting it off. */
 .sheet {
   width: min(480px, calc(100vw - 32px)); box-sizing: border-box;
+  max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: auto;
   background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 20px; padding: 24px;
 }
+/* The preview (AOTY-98): no padding on the dialog itself, so a click whose target is the dialog is
+   on the backdrop. The frame takes the image's shape and fits the window's height, leaving room
+   for the title, the switches and the buttons. */
+.sheet.preview { width: min(520px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
+/* The body scrolls, not the dialog: a click on the dialog's own scrollbar would read as the backdrop. */
+.sheet-body { padding: 24px; box-sizing: border-box; max-height: calc(100vh - 34px); max-height: calc(100dvh - 34px); overflow: auto; }
+.preview-frame {
+  --fit: max(160px, calc(100vh - 300px)); position: relative; margin: 0 auto 16px;
+  aspect-ratio: 1; width: min(100%, var(--fit)); border-radius: 12px; overflow: hidden; background: var(--bg);
+}
+@supports (height: 100dvh) { .preview-frame { --fit: max(160px, calc(100dvh - 300px)); } }
+.preview[data-shape="story"] .preview-frame { aspect-ratio: 9 / 16; width: min(100%, var(--fit) * 9 / 16); }
+.preview-frame img { display: block; width: 100%; height: 100%; object-fit: contain; transition: opacity .2s; }
+.preview-frame.making img { opacity: .35; }
+.preview-making {
+  position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px;
+}
+.preview-options { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.preview .tool-msg { min-height: 1.4em; margin: 12px 0 0; text-align: center; }
+.solid[aria-disabled="true"] { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .preview-frame img { transition: none; } }
 .sheet::backdrop { background: color-mix(in srgb, var(--bg) 72%, transparent); }
 .sheet-text { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 18px; }
 .sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 8px; }

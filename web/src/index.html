@@ -125,21 +125,12 @@
       <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
       <!-- User and group pages (AOTY-84): share the link, for everyone; a member's view of a group
            also offers the member's own page. A tap opens the system share sheet on touch devices
-           and copies elsewhere. "share image" shares the ranking shown as an image, once it has a
-           #1 (AOTY-70, AOTY-71). -->
+           and copies elsewhere. "share image" opens the image's preview (#preview), once the
+           ranking shown has a #1 (AOTY-70, AOTY-71, AOTY-98). -->
       <div class="page-tools" id="page-tools" hidden>
         <button type="button" class="pill" id="share">share link</button>
         <button type="button" class="pill" id="share-member" hidden></button>
-        <button type="button" class="pill" id="share-image" hidden>share image</button>
-        <div class="switch small" role="group" aria-label="Image" id="content-switch" hidden>
-          <button type="button" data-content="top1" aria-pressed="true">#1</button>
-          <button type="button" data-content="top3" aria-pressed="false">top 3</button>
-          <button type="button" data-content="top10" aria-pressed="false">top 10</button>
-        </div>
-        <div class="switch small" role="group" aria-label="Image format" id="shape-switch" hidden>
-          <button type="button" data-shape="square" aria-pressed="true">square</button>
-          <button type="button" data-shape="story" aria-pressed="false">story</button>
-        </div>
+        <button type="button" class="pill" id="share-image" aria-haspopup="dialog" aria-controls="preview" hidden>share image</button>
         <span class="share-url" id="share-url" hidden></span>
         <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>
       </div>
@@ -218,6 +209,35 @@
   <div class="sheet-actions">
     <button type="button" class="quiet" id="confirm-no">cancel</button>
     <button type="button" class="solid" id="confirm-yes"></button>
+  </div>
+</dialog>
+<!-- The share image's preview (AOTY-98): what it shows (#1, top 3 AOTY-73, top 10 AOTY-74, each
+     only with that many on screen) and its shape (square, or 9:16 for stories, AOTY-72), then save
+     it or, where files go to the share sheet, share it. The dialog has no padding of its own: a
+     click whose target is the dialog itself is on the backdrop. -->
+<dialog class="sheet preview" id="preview" aria-labelledby="preview-title" data-shape="square">
+  <div class="sheet-body">
+    <h2 class="sheet-title" id="preview-title">share image</h2>
+    <div class="preview-frame" id="preview-frame">
+      <img id="preview-img" alt="" hidden>
+      <span class="preview-making" id="preview-making" aria-hidden="true" hidden>making…</span>
+    </div>
+    <div class="preview-options">
+      <div class="switch small" role="group" aria-label="Image" id="content-switch" hidden>
+        <button type="button" data-content="top1" aria-pressed="true">#1</button>
+        <button type="button" data-content="top3" aria-pressed="false">top 3</button>
+        <button type="button" data-content="top10" aria-pressed="false">top 10</button>
+      </div>
+      <div class="switch small" role="group" aria-label="Image format" id="shape-switch">
+        <button type="button" data-shape="square" aria-pressed="true">square</button>
+        <button type="button" data-shape="story" aria-pressed="false">story</button>
+      </div>
+    </div>
+    <p class="tool-msg" id="preview-msg" role="status" aria-live="polite"></p>
+    <div class="sheet-actions">
+      <button type="button" class="quiet" id="preview-close">close</button>
+      <button type="button" class="solid" id="preview-go" aria-disabled="true">save image</button>
+    </div>
   </div>
 </dialog>
 </body>
