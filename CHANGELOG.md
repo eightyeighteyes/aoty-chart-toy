@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.1](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.10.0...v1.10.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **card:** load the packed page modules as CommonJS (AOTY-104) ([f3102c4](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f3102c45ab1c9aaad8b85760b078e3cf00c8a59f))
+* **card:** load the packed page modules as CommonJS (AOTY-104) ([121f9d6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/121f9d614f983b2e6733864281213c7a941c7596))
+
 ## [1.10.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.9.0...v1.10.0) (2026-11-28)
 
 
