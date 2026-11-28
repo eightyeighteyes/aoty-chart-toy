@@ -89,15 +89,33 @@ def test_the_preview_theme_route_answers_like_the_api(ss, tmp_path):
   f = tmp_path / "users" / "alice" / "chart.json"
   f.parent.mkdir(parents=True)
   f.write_text(json.dumps(ss.sample_chart("alice")))
-  ok = ss.fake_theme("POST", "alice", {"theme": "beach-house"}, "alice", tmp_path)
+
+  def theme(method, name, body, signed_in):
+    return ss.fake_style(method, name, body, signed_in, tmp_path, "theme")
+
+  ok = theme("POST", "alice", {"theme": "beach-house"}, "alice")
   assert ok[0] == 200 and json.loads(f.read_text())["theme"] == "beach-house"
-  ss.fake_theme("POST", "alice", {"theme": "poster"}, "alice", tmp_path)
+  theme("POST", "alice", {"theme": "poster"}, "alice")
   assert "theme" not in json.loads(f.read_text())
-  assert ss.fake_theme("POST", "alice", {"theme": "kamp"}, None, tmp_path)[0] == 401
-  assert ss.fake_theme("POST", "alice", {"theme": "kamp"}, "bob", tmp_path)[0] == 403
-  assert ss.fake_theme("POST", "alice", {"theme": "nope"}, "alice", tmp_path)[0] == 400
-  assert ss.fake_theme("POST", "carol", {"theme": "kamp"}, "carol", tmp_path)[0] == 404
-  assert ss.fake_theme("GET", "alice", {}, "alice", tmp_path)[0] == 405
+  assert theme("POST", "alice", {"theme": "kamp"}, None)[0] == 401
+  assert theme("POST", "alice", {"theme": "kamp"}, "bob")[0] == 403
+  assert theme("POST", "alice", {"theme": "nope"}, "alice")[0] == 400
+  assert theme("POST", "carol", {"theme": "kamp"}, "carol")[0] == 404
+  assert theme("GET", "alice", {}, "alice")[0] == 405
+
+
+def test_the_preview_background_route_answers_like_the_api(ss, tmp_path):
+  # AOTY-96: the sample starts with borealis, as a new page does; none takes it away.
+  import json
+
+  f = tmp_path / "users" / "alice" / "chart.json"
+  f.parent.mkdir(parents=True)
+  f.write_text(json.dumps(ss.sample_chart("alice")))
+  assert json.loads(f.read_text())["background"] == "borealis"
+  ok = ss.fake_style("POST", "alice", {"background": "none"}, "alice", tmp_path, "background")
+  assert ok[0] == 200 and "background" not in json.loads(f.read_text())
+  assert ss.fake_style("POST", "alice", {"background": "nope"}, "alice", tmp_path, "background")[0] == 400
+  assert ss.fake_style("POST", "alice", {"background": "none"}, "bob", tmp_path, "background")[0] == 403
 
 
 def test_the_preview_wall_mixes_ready_slow_broken_and_missing_covers(ss):

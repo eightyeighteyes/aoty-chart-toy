@@ -286,7 +286,8 @@
   // A message panel, optionally with the username box. The footer's profile line goes: the
   // panel may be saying this Last.fm user doesn't exist.
   function state(title, text, withLookup) {
-    stopAurora();
+    // The page's background stays (AOTY-96): a group's "pressing" panel is redrawn on every poll,
+    // and a stalled first visit is still the page. Pages that don't exist clear it themselves.
     clearTheme();
     $("controls").hidden = true;
     $("sub").textContent = "";
@@ -402,7 +403,7 @@
       try { history.replaceState(null, "", BASE); } catch (_) {}
     }
     document.title = TITLE;
-    stopAurora();
+    clearBackground();
     clearTheme();
     poster.hidden = true;
     $("intro").hidden = false;
@@ -462,7 +463,8 @@
     }
     const repaint = current !== null;
     if (!repaint && firstView) track("event", "first_visit_end", {result: "painted"});
-    stopAurora();  // the chart's here: the first visit's aurora fades out (AOTY-67)
+    // The page's background stays (AOTY-96): themeForChart, below, makes it calmer and gives it
+    // the #1's colours.
     current = chart;
     heading(display, chart.year, lower);
     $("controls").hidden = false;
@@ -504,6 +506,7 @@
     }
     profileLine(raw, "");  // the URL's casing until a chart brings Last.fm's
     paintRememberedTheme({kind: "user", id: lower});  // no dark flash before a light page's chart arrives (AOTY-75)
+    startRememberedBackground({kind: "user", id: lower});  // its engine starts loading now (AOTY-96)
     let chart;
     try {
       chart = await loadChart(lower);
@@ -555,7 +558,7 @@
     wall.hidden = true;  // until its first cover has loaded (fillWall)
     $("ranking").replaceChildren(box);
     firstView = {box, queue, sofar, note, wall, walled: false};
-    startAurora();  // AOTY-67
+    wallPixels = [];  // the background takes the wall's colours (AOTY-67), from this wall on
   }
 
   // The request line (AOTY-26): the place in line, this page's address with a copy button, and
@@ -645,15 +648,15 @@
   // artist-name tiles. The wall stays hidden until its first cover lands. A burst of arrivals (a
   // warm cache) staggers by its place in the burst, as the chart's cards do.
   const WALL_BURST_MS = 400;
-  // The first AURORA_COVERS load with CORS, once, and also colour the aurora (AOTY-67). A cover
-  // whose CORS request fails still goes on the wall through a plain load; it just doesn't colour.
-  const AURORA_COVERS = 6;
-  async function wallCover(urls, forAurora) {
-    if (!forAurora) return loadCover(urls);
+  // The first WALL_COLOUR_COVERS load with CORS, once, and also colour the background (AOTY-67). A
+  // cover whose CORS request fails still goes on the wall through a plain load; it just doesn't colour.
+  const WALL_COLOUR_COVERS = 6;
+  async function wallCover(urls, colours) {
+    if (!colours) return loadCover(urls);
     const img = await loadCover(urls, {cors: true});
     if (!img) return loadCover(urls);
     const px = coverPixels(img);
-    if (px) auroraCover(px);
+    if (px) wallCoverPixels(px);
     return img;
   }
   function fillWall(wall, entries) {
@@ -670,7 +673,7 @@
       return row;
     });
     sources.forEach((urls, n) => {
-      wallCover(urls, n < AURORA_COVERS).then(img => {
+      wallCover(urls, n < WALL_COLOUR_COVERS).then(img => {
         if (!img || !wall.isConnected) return;  // a newer first-visit view, or the chart, replaced it
         const now = performance.now();
         if (now - last > WALL_BURST_MS) burst = 0;
@@ -702,52 +705,49 @@
     }
   }
 
-  // ---- the aurora (AOTY-67) -----------------------------------------------------------------
+  // ---- the page's background (AOTY-67, AOTY-77, AOTY-96) ------------------------------------
   //
-  // kamp's Borealis (web/src/borealis.js) fills the viewport behind a first visit, coloured by the
-  // first wall covers. User decisions (2026-11-25): first visits only, the whole page, the surge
-  // as covers land. It mounts AURORA_DELAY_MS in, so a chart that's there at once never flashes
-  // it, and it fades out when the chart paints or the page leaves the first visit.
+  // One of kamp's ported backgrounds (backgrounds.js, build_shell.BACKGROUNDS) fills the viewport
+  // behind a user's or a group's page: the page's own, stored server-side (a new page starts with
+  // a random one; pages from before AOTY-96 have none). It shows from a first visit on and stays
+  // behind the built chart, calmer there (CHART_STRENGTH) and coloured by the #1 cover; on a first
+  // visit, by the wall's covers. A preview's ?bg=<id> wins over the page's own.
+  //
+  // setBackdrop(id) is the one way in: the same id keeps what's on screen (a poll never remounts
+  // WebGL), another fades the old one out and mounts the new, null fades it out. backdropGen is
+  // bumped by every change, so an engine file that arrives after the page wanted something else
+  // never mounts. Each page decides: the intro and pages that don't exist set null; state() leaves
+  // it alone (a group's "pressing" panel is redrawn on every poll).
   //
   // The canvas sits at z-index -1, under body's in-flow content but over the root's background,
   // and html.has-aurora makes body's own background transparent so it shows. That class stays until
   // the fade-out ends: removed earlier, body's background would hide the canvas at once.
-  //
-  // Which background is one of several since AOTY-77: backgrounds.js picks (a preview's ?bg=, else
-  // at random until AOTY-96 stores the page's own) and loads only that engine's file. Loading
-  // starts with the first visit; the mount waits for the delay and for the file, whichever is
-  // later. auroraGen is bumped by every stop, so a file that arrives after the visit has moved on
-  // (the chart, the intro, a group) never mounts over it.
   const bgs = globalThis.aotyBg;  // web/src/backgrounds.js, loaded first
-  const AURORA_DELAY_MS = 1500, AURORA_FADE_MS = 600;
+  const BACKDROP_FADE_MS = 600;
+  const CHART_STRENGTH = 0.6;  // behind a built chart: the art comes first (user decision 2026-11-28)
   // Read once at boot: routing rewrites the address, and not always keeping its query.
   const BG_OVERRIDE = (() => { try { return new URLSearchParams(location.search).get("bg") || ""; } catch (_) { return ""; } })();
-  let aurora = null, auroraCanvas = null, auroraTimer = 0, auroraFeed = 0;
-  let auroraPixels = [], auroraSent = null, auroraPending = false, auroraGen = 0;
+  let backdrop = null;  // on screen: {id, canvas, instance}
+  let backdropWant = null, backdropGen = 0, backdropStrength = 1, backdropPalette = null;
+  let wallPixels = [], wallFeed = 0;
 
-  function startAurora() {
-    if (!bgs || auroraCanvas || auroraPending) return;
-    const id = bgs.pick({ids: bgs.ids(), override: BG_OVERRIDE});
-    if (!id) return;
-    auroraPending = true;
-    const gen = ++auroraGen;
-    let engine = null, due = false;
-    const go = () => {
-      if (gen !== auroraGen) return;
-      auroraPending = false;
-      mountAurora(engine);
-    };
-    bgs.load(id).then(e => {
-      if (gen !== auroraGen) return;
-      if (!e) { auroraPending = false; return; }  // the file failed: no background, as without WebGL
-      engine = e;
-      if (due) go();
+  // The page's own background (an id, or "none"), unless a preview names another.
+  function pageBackdrop(id) {
+    if (bgs) setBackdrop(bgs.pick({ids: bgs.ids(), override: BG_OVERRIDE, saved: id}));
+  }
+
+  function setBackdrop(id) {
+    if (!bgs) return;
+    const want = id && bgs.ids().includes(id) ? id : null;
+    if (want === backdropWant) return;
+    backdropWant = want;
+    const gen = ++backdropGen;
+    if (backdrop && backdrop.id !== want) dropBackdrop();
+    if (!want || backdrop) return;
+    bgs.load(want).then(engine => {
+      if (gen !== backdropGen || !engine || backdrop) return;  // the page moved on, or the file failed
+      mountBackdrop(want, engine);
     });
-    auroraTimer = setTimeout(() => {
-      auroraTimer = 0;
-      due = true;
-      if (engine) go();
-    }, AURORA_DELAY_MS);
   }
 
   function pageColors() {
@@ -755,74 +755,155 @@
     return {bg: css.getPropertyValue("--bg").trim(), accent: css.getPropertyValue("--accent").trim()};
   }
 
-  function mountAurora(engine) {
-    if (auroraCanvas || !firstView || !firstView.box.isConnected) return;
+  function mountBackdrop(id, engine) {
     const canvas = document.createElement("canvas");
     canvas.className = "aurora";
     canvas.setAttribute("aria-hidden", "true");
     document.body.prepend(canvas);
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const a = engine.mount(canvas, {...pageColors(), reducedMotion, onLost: () => stopAurora(true)});
-    if (!a) { canvas.remove(); return; }  // no WebGL: the page stays as it always was
-    aurora = a;
-    auroraCanvas = canvas;
+    const shown = {id, canvas, instance: null};
+    const onLost = () => {
+      if (backdrop !== shown) return;
+      backdropWant = null;  // a later setBackdrop of the same id mounts afresh
+      dropBackdrop(true);
+    };
+    const instance = engine.mount(canvas, {...pageColors(), reducedMotion, onLost});
+    if (!instance) { canvas.remove(); return; }  // no WebGL: the page stays as it always was
+    shown.instance = instance;
+    backdrop = shown;
+    if (instance.setStrength) instance.setStrength(backdropStrength);
+    if (backdropPalette) instance.setPalette(backdropPalette);
     document.documentElement.classList.add("has-aurora");
     requestAnimationFrame(() => canvas.classList.add("on"));  // fades in
-    feedAurora();  // covers that arrived before it mounted
-  }
-
-  // A wall cover's pixels: the palette is recomputed once per burst of arrivals, and changes only
-  // when it really does (backgrounds.paletteChanged), so a warm cache's six covers make one surge.
-  function auroraCover(px) {
-    if (!firstView || !firstView.box.isConnected) return;
-    auroraPixels.push(px);
-    clearTimeout(auroraFeed);
-    auroraFeed = setTimeout(feedAurora, WALL_BURST_MS);
-  }
-
-  function feedAurora() {
-    auroraFeed = 0;
-    if (!aurora || !auroraPixels.length) return;
-    const all = new Uint8ClampedArray(auroraPixels.reduce((n, p) => n + p.length, 0));
-    let at = 0;
-    for (const p of auroraPixels) { all.set(p, at); at += p.length; }
-    const {colors, source} = bgs.extractPalette(all, pageColors().accent);
-    if (source !== "art" || !bgs.paletteChanged(auroraSent, colors)) return;
-    auroraSent = colors;
-    aurora.setPalette(colors);
-  }
-
-  // The page's colours changed (an owner's theme): the aurora paints its background itself.
-  function auroraColors() {
-    if (aurora) aurora.setColors(pageColors());
   }
 
   // Fade out, then take it down (and its WebGL context). lost: the context is gone already.
-  function stopAurora(lost = false) {
-    // First, before any early return: while a file is still loading nothing is mounted yet, and
-    // its late arrival must not mount (AOTY-77).
-    auroraGen++;
-    auroraPending = false;
-    clearTimeout(auroraTimer);
-    clearTimeout(auroraFeed);
-    auroraTimer = auroraFeed = 0;
-    auroraPixels = [];
-    auroraSent = null;
-    if (!auroraCanvas) return;
-    const canvas = auroraCanvas, a = aurora;
-    auroraCanvas = aurora = null;
+  function dropBackdrop(lost = false) {
+    const old = backdrop;
+    backdrop = null;
+    if (!old) return;
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      a.destroy();
-      canvas.remove();
-      if (!auroraCanvas) document.documentElement.classList.remove("has-aurora");
+      old.instance.destroy();
+      old.canvas.remove();
+      if (!backdrop) document.documentElement.classList.remove("has-aurora");
     };
     if (lost) return finish();
-    canvas.addEventListener("transitionend", finish, {once: true});
-    setTimeout(finish, AURORA_FADE_MS + 300);  // reduced motion has no transition to end
-    canvas.classList.remove("on");
+    old.canvas.addEventListener("transitionend", finish, {once: true});
+    setTimeout(finish, BACKDROP_FADE_MS + 300);  // reduced motion has no transition to end
+    old.canvas.classList.remove("on");
+  }
+
+  // Full strength on a first visit, calmer behind a built chart.
+  function setBackdropStrength(built) {
+    const s = built ? CHART_STRENGTH : 1;
+    if (s === backdropStrength) return;
+    backdropStrength = s;
+    if (backdrop && backdrop.instance.setStrength) backdrop.instance.setStrength(s);
+  }
+
+  // A palette lands only on a real change (backgrounds.paletteChanged), so a warm cache's six
+  // covers make one surge, not six. Kept for an engine that mounts later.
+  function setBackdropPalette(colors) {
+    if (!colors || !bgs || !bgs.paletteChanged(backdropPalette, colors)) return;
+    backdropPalette = colors;
+    if (backdrop) backdrop.instance.setPalette(colors);
+  }
+
+  // A first visit: the wall covers' pixels, recomputed once per burst of arrivals.
+  function wallCoverPixels(px) {
+    if (!firstView || !firstView.box.isConnected) return;
+    wallPixels.push(px);
+    clearTimeout(wallFeed);
+    wallFeed = setTimeout(feedWall, WALL_BURST_MS);
+  }
+  function feedWall() {
+    wallFeed = 0;
+    if (!bgs || current || !wallPixels.length) return;  // the chart's #1 colours it now
+    const all = new Uint8ClampedArray(wallPixels.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of wallPixels) { all.set(p, at); at += p.length; }
+    const {colors, source} = bgs.extractPalette(all, pageColors().accent);
+    if (source === "art") setBackdropPalette(colors);
+  }
+
+  // A built chart: the #1 cover's colours (a group's By Listener #1, as "album of the year"),
+  // through the same one CORS load the theme uses. No cover, or one that won't read, keeps the
+  // colours it has.
+  let backdropCoverKey = "";
+  async function chartBackdropPalette(chart) {
+    const urls = topCovers(chart);
+    const key = urls[0] || "";
+    if (!bgs || !key || key === backdropCoverKey) return;
+    backdropCoverKey = key;
+    const px = await topCoverPixels(urls);
+    if (!px || key !== backdropCoverKey) return;
+    const {colors, source} = bgs.extractPalette(px, pageColors().accent);
+    if (source === "art") setBackdropPalette(colors);
+  }
+
+  // The page's colours changed (a theme): the background paints its own --bg.
+  function backdropColors() {
+    if (backdrop) backdrop.instance.setColors(pageColors());
+  }
+
+  // ---- whose background (AOTY-96) -----------------------------------------------------------
+  //
+  // As the theme's (below): the page's saved background comes from chart.json, the status API (a
+  // first visit) or GET api/groups/<id>, and the owner's pick wins until its save lands, so a poll
+  // never undoes it. The last one a page had is remembered per viewer (aoty-bg:<kind>:<id>), so its
+  // engine starts loading before chart.json arrives.
+  let bgTarget = null;  // {kind, id}, as themeTarget
+  // savedBackground: the stored one ("none" included), or null until chart.json or a status says.
+  let savedBackground = null, pickedBackground = null;
+  const validBg = id => (bgs && bgs.ids().includes(id) ? id : "none");
+  const bgKey = target => `aoty-bg:${target.kind}:${target.id}`;
+
+  function rememberBackground(target, id) {
+    try {
+      if (id === "none") localStorage.removeItem(bgKey(target));
+      else localStorage.setItem(bgKey(target), id);
+    } catch (_) { /* blocked storage: fine */ }
+  }
+  function startRememberedBackground(target) {
+    let id = null;
+    try { id = localStorage.getItem(bgKey(target)); } catch (_) { id = null; }
+    pageBackdrop(validBg(id));
+  }
+
+  // A user's or a group's page, whatever its chart's state (called with themeForPage).
+  // With no chart yet (a first visit, a group's first build), nothing is known from it: the
+  // remembered head start stays until the status (or GET groups/<id>) says.
+  function backgroundForPage(target, chart) {
+    if (!sameTarget(bgTarget, target)) pickedBackground = savedBackground = null;
+    bgTarget = target;
+    const built = !!chart && !(target.kind === "user" && fv.isFirstVisit(chart));
+    setBackdropStrength(built);
+    if (chart) {
+      savedBackground = validBg(chart.background);
+      rememberBackground(target, savedBackground);
+    }
+    if (pickedBackground || savedBackground) pageBackdrop(pickedBackground || savedBackground);
+    if (built) chartBackdropPalette(chart);
+  }
+
+  // The status API (a user) or GET api/groups/<id> (a group) carries the stored background too:
+  // newer than a chart.json the restyle hasn't reached, and the only source before any chart.
+  function backgroundFromStatus(s) {
+    if (!bgTarget || pickedBackground || !s) return;
+    const id = validBg(s.background);
+    if (id === savedBackground) return;
+    savedBackground = id;
+    rememberBackground(bgTarget, id);
+    pageBackdrop(id);
+  }
+
+  // Off a page (the intro, a user or group that doesn't exist): no background.
+  function clearBackground() {
+    bgTarget = pickedBackground = savedBackground = null;
+    setBackdrop(null);
   }
 
   // ---- sync on visit (AOTY-22) ------------------------------------------------------------
@@ -947,6 +1028,7 @@
       if (current) return;
       if (firstView) track("event", "first_visit_end", {result: reason === "private" ? "private" : "error"});
       if (reason === "private") {
+        clearBackground();  // nothing of theirs to show (AOTY-96)
         state("this profile is private", "its last.fm listening isn't public, so there's nothing for us to read.", false);
       } else {
         state("couldn't build a chart this time", "something went wrong reading the scrobbles. try again in a few minutes.", false);
@@ -955,6 +1037,7 @@
 
     async function handle(s) {
       themeFromStatus(s);
+      backgroundFromStatus(s);  // AOTY-96
       if (watchFrom === null && s.stage !== "queued") watchFrom = Date.now();
       await maybeRefresh(s);
       if (s.stage === "error") { gaveUp(s.reason); return current ? quiet() : stop(""); }
@@ -1012,14 +1095,14 @@
       } catch (_) { return quiet(); }
       try { body = await res.json(); } catch (_) { body = null; }
       if (res.status === 404) {
-        if (!current) state("we couldn't find that last.fm user", "check the spelling and try again.", true);
+        if (!current) { clearBackground(); state("we couldn't find that last.fm user", "check the spelling and try again.", true); }
         return stop("");
       }
       // At capacity (AOTY-26): a new user hears why and when to come back. A chart on screen
       // just stays as it is.
       const refused = fv.refusal(res.status, body);
       if (refused) {
-        if (!current) state(refused[0], refused[1], false);
+        if (!current) { clearBackground(); state(refused[0], refused[1], false); }
         return stop("");
       }
       if (!res.ok || !body || !body.status) return quiet();
@@ -1096,7 +1179,6 @@
   }
 
   async function showGroup(id) {
-    stopAurora();
     clearTheme();
     heading(NAME, "");
     if (!grp.ID_RE.test(id)) {
@@ -1105,6 +1187,7 @@
     }
     groupId = id;
     paintRememberedTheme({kind: "group", id});  // no dark flash before a light group's chart (AOTY-76)
+    startRememberedBackground({kind: "group", id});  // its engine starts loading now (AOTY-96)
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && groupWake) { groupWake = false; refreshGroup(); }
     });
@@ -1156,6 +1239,7 @@
     if (gen !== groupGen) return;
     if (info !== undefined) groupInfo = info;
     if (groupInfo === null && !current) {
+      clearBackground();  // AOTY-96
       state("there's no group here", "check the link you were given.", false);
       return hideGroupTools();
     }
@@ -1175,7 +1259,7 @@
       }
     }
     // The group's record carries the owner (who gets the picker) and its stored theme.
-    if (info && themeTarget) { themeFromStatus(info); renderThemeTools(); }
+    if (info && themeTarget) { themeFromStatus(info); backgroundFromStatus(info); renderThemeTools(); }
     showGroupTools(first);
     let next = null;
     if (watch) {
@@ -2021,7 +2105,7 @@
     const info = await loadGroupInfo(groupId);
     if (gen !== groupGen) return;
     if (info) groupInfo = info;
-    if (info && themeTarget) { themeFromStatus(info); renderThemeTools(); }  // an owner change moves the picker
+    if (info && themeTarget) { themeFromStatus(info); backgroundFromStatus(info); renderThemeTools(); }  // an owner change moves the picker
     renderMembers();
     startWatch();
   }
@@ -2186,14 +2270,25 @@
   // The #1 cover's colours as a theme, or null. Its own CORS request: the chart's <img>s aren't
   // readable.
   async function coverTheme(urls) {
-    const px = coverPixels(await loadCover(urls, {cors: true}));
+    const px = await topCoverPixels(urls);
     return px ? th.derive(px) : null;
   }
 
-  // Paint a theme's tokens (null: the default), and tell the aurora (AOTY-67) its new colours.
+  // The #1 cover's pixels (coverPixels), loaded once per cover for both "album of the year" and
+  // the page's background (AOTY-96): one CORS fetch, not two.
+  let topPixels = {key: "", promise: Promise.resolve(null)};
+  function topCoverPixels(urls) {
+    const key = urls[0] || "";
+    if (key !== topPixels.key) {
+      topPixels = {key, promise: key ? loadCover(urls, {cors: true}).then(coverPixels, () => null) : Promise.resolve(null)};
+    }
+    return topPixels.promise;
+  }
+
+  // Paint a theme's tokens (null: the default), and tell the background (AOTY-67) its new colours.
   function applyTheme(tokens) {
     th.apply(tokens);
-    auroraColors();
+    backdropColors();
     // The share image (AOTY-70) draws from the same tokens, so its tests cover what's on screen.
     shownTokens = th.complete(tokens || th.THEMES[th.DEFAULT]);
     cardSoon();
@@ -2248,6 +2343,7 @@
     rememberTheme(target, savedTheme);
     showTheme(pickedTheme || savedTheme, withFade);
     renderThemeTools();
+    backgroundForPage(target, chart);  // the page's other style (AOTY-96)
   }
 
   // The status API (a user) or GET api/groups/<id> (a group) carries the stored theme too, which

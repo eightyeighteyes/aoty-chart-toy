@@ -224,6 +224,7 @@ void main() {
     const surge = new SurgeEnvelope();
     const packed = new Float32Array(PALETTE_SIZE * 3);
     let running = false, destroyed = false, raf = 0, lastDraw = 0, elapsed = 0, w = 0, h = 0;
+    let strength = 1;  // setStrength (AOTY-96): calmer behind a built chart
 
     // Backing size = CSS size x dpr x RES_SCALE. Setting width or height clears the buffer, so a
     // same-size resize (a phone's URL bar, constantly) is skipped, and a real one is redrawn.
@@ -249,7 +250,7 @@ void main() {
       gl.uniform4f(quad.u("uFlow"), Math.cos(p0), Math.sin(p0), Math.cos(p1), Math.sin(p1));
       gl.uniform3f(quad.u("uSurgeA"), still ? 0 : a.position, still ? 0 : a.value, a.dir);
       gl.uniform3f(quad.u("uSurgeB"), still ? 0 : b.position, still ? 0 : b.value, b.dir);
-      gl.uniform1f(quad.u("uDim"), DIM);
+      gl.uniform1f(quad.u("uDim"), DIM * strength);
       quad.draw();
     }
 
@@ -306,6 +307,13 @@ void main() {
         else still();
       },
       // The page's colours changed (an owner's theme, AOTY-65).
+      // The page's strength for it, 0..1 of its own (AOTY-96): 1 on a first visit, less behind a
+      // built chart. A stopped loop redraws its still at once.
+      setStrength(s) {
+        if (destroyed || !Number.isFinite(s)) return;
+        strength = Math.max(0, Math.min(1, s));
+        if (!running) still();
+      },
       setColors({bg: nextBg, accent: nextAccent} = {}) {
         if (destroyed) return;
         bg = hexToRgb(nextBg) || bg;

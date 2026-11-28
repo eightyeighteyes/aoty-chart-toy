@@ -31,7 +31,7 @@ import zlib
 import group_core
 from api_core import USERNAME_RE
 from common import groups as grp
-from common import themes
+from common import backgrounds, themes
 from common.albumkey import album_key, join_key
 
 COOKIE = "aoty_preview_session"
@@ -84,7 +84,7 @@ class FakeGroups:
     self.clock = clock
     self.groups = {}  # slug -> {name, owner, members: {name: added_at}, changed_at}
     t = clock() - 3600
-    self.groups["full-house"] = {"name": "Full House", "owner": "alice", "changed_at": t,
+    self.groups["full-house"] = {"name": "Full House", "owner": "alice", "changed_at": t, "background": "borealis",
                                  "members": {"alice": t, **{f"member{i:02d}": t for i in range(24)}}}  # fmt: skip
     self.groups["bobs-crew"] = {"name": "Bob's Crew", "owner": "bob", "changed_at": t,
                                 "members": {"bob": t, "alice": t, "carol": t}}  # fmt: skip
@@ -181,6 +181,11 @@ class FakeGroups:
         return 400, {"error": "unknown_theme", "themes": sorted(themes.IDS)}, []
       g["theme"] = body["theme"]
       return 200, {"theme": body["theme"]}, []
+    if method == "POST" and parts[1:] == ["background"]:  # AOTY-96, the same way
+      if not backgrounds.valid(body.get("background")):
+        return 400, {"error": "unknown_background", "backgrounds": sorted(backgrounds.IDS)}, []
+      g["background"] = body["background"]
+      return 200, {"background": body["background"]}, []
     if method == "DELETE" and len(parts) == 3 and parts[1] == "members":
       if g["members"].pop(parts[2].lower(), None) is not None:
         g["changed_at"] = now
@@ -199,7 +204,8 @@ class FakeGroups:
     syncing = len(members) if now < g.get("resync_until", 0) else 0
     return 200, {"id": slug, "name": g["name"], "owner": g["owner"], "members": members,
                  "ready": len(self._ready(g, now)), "total": len(members), "syncing": syncing,
-                 **({"theme": g["theme"]} if g.get("theme", themes.DEFAULT) != themes.DEFAULT else {})}  # fmt: skip
+                 **({"theme": g["theme"]} if g.get("theme", themes.DEFAULT) != themes.DEFAULT else {}),
+                 **({"background": g["background"]} if backgrounds.engine(g.get("background")) else {})}  # fmt: skip
 
   def visit(self, slug):
     """POST groups/<slug>/sync: every member re-syncs for RESYNC_S (ready members stay ready),
@@ -230,7 +236,9 @@ class FakeGroups:
       return 400, {"error": "needs_slug"}
     if slug in self.groups:
       return 409, {"error": "taken"}
-    self.groups[slug] = {"name": name, "owner": user, "members": {user: now}, "changed_at": now}
+    # A new group starts with a random background (AOTY-96); the preview has one engine to pick.
+    self.groups[slug] = {"name": name, "owner": user, "members": {user: now}, "changed_at": now,
+                         "background": backgrounds.random_engine()}  # fmt: skip
     return 201, {"id": slug, "sync": "queued"}
 
   def rename(self, slug, body, now):
@@ -284,5 +292,5 @@ class FakeGroups:
     stores = {m: _store(m) for m in ready}
     chart, _ = group_core.build_group_chart(stores, self.items, group_id=slug, name=g["name"], year=YEAR,
                                             waiting=len(g["members"]) - len(ready), now=int(built),
-                                            theme=g.get("theme"))  # fmt: skip
+                                            theme=g.get("theme"), background=g.get("background"))  # fmt: skip
     return chart
