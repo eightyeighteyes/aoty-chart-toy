@@ -1018,8 +1018,19 @@ Notes:
   - **A Node Lambda + @napi-rs/canvas** (`lambdas/card`), running the page's own `share.js`,
     `group.js`, `theme.js`, `sharecard.js` and `carddraw.js` unchanged, so a preview card is the
     share image a visitor would save and the two can't drift.
-  - **The #1 square** (`top1_square`, 1080) as `summary_large_image`. X, Facebook and LinkedIn crop
-    it to about 1.91:1, which is accepted; Discord and iMessage show it whole.
+  - **The #1, landscape** (`top1_landscape`, 1200x630, AOTY-95) as `summary_large_image`. It was
+    AOTY-91's 1080 square until X, Facebook and LinkedIn's crop to 1.91:1 cut its caption and link.
+    - Discord and iMessage show 1.91:1 whole too, so it replaced the square rather than being drawn
+      beside it: og:image carries one image.
+    - The page never offers it as a share format (a "wide" shape is its own ticket).
+    - The cover is on the left. The text sits in a column on the right (`col`), left-aligned.
+    - The caption prefers one line and wraps to two (`prefer: 1`).
+    - The names are anchored above the link (a slot's `bottom`), so a one-line title doesn't leave
+      a hole.
+    - The column options default to the old single column, so every other format's ops are
+      unchanged (`top1_ops.json`).
+    - Existing charts keep the square until they rebuild: run `tools/rebuild_charts.py` after the
+      deploy.
   - **Latin fonts only**: a card whose text needs other glyphs isn't drawn, and og.html keeps
     AOTY-85's bare cover.
 - **The chart builder calls card synchronously** after each build and restyle, passing the chart,
