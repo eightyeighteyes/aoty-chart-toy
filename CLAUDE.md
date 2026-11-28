@@ -59,7 +59,8 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `consent.js` (the shared analytics choice, AOTY-28: see "Consent"), `backgrounds.js` (the first visit's background registry and what the backgrounds share, AOTY-77:
 see "Background registry"), `borealis.js` (the first aurora, ported from kamp, AOTY-67: see
-"Borealis"; loaded only when picked) and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+"Borealis"; loaded only when picked), `chapel.js` (kamp's colour fields, AOTY-103: see "Chapel")
+and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`; AOTY-53's `pause_groups`, `max_groups_per_owner`, `max_group_member_adds_per_hour`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -914,9 +915,16 @@ Notes:
 - **On the page:** AOTY-96's backdrop controller replaced AOTY-77's first-visit-only lifecycle
   (see "Page backgrounds"). `?bg=<id>` previews one, and is read once at boot (routing rewrites the
   address).
-- **Not extracted yet:** Borealis's rAF / visibility / resize loop. It has subtle rules (`surge.cancel()`
-  on start, the `FRAME_MS - 1` slack, the dt clamp, resize-only-on-change), so the second WebGL
-  engine (AOTY-99) extracts it, with two users.
+- **The WebGL loop is `backgrounds.runShader(canvas, opts, spec)`** (extracted from Borealis by
+  AOTY-103, the second WebGL engine). It owns the context, the rAF at `spec.fps` with `FRAME_MS - 1`
+  slack, the 0.25 s clock clamp, resize-only-on-change, visibility, `onLost`, `destroy`, and the
+  `uRes`/`uTime`/`uBg` uniforms. An engine file is a **scene**: `draw(gl, quad, frame)` sets the
+  rest, and it owns its own palette fade. Borealis's `surge.cancel()` is its `onStart`.
+  - `frame.still` is any repaint outside the loop. `frame.atRest` is reduced motion's rest frame
+    only, so a theme repaint never snaps an animation to its rest pose.
+  - Canvas 2D engines (Sparks, AOTY-100) don't use it.
+  - `web/test/fakegl.mjs` is a stand-in context, canvas and rAF clock. With it, tests check that a
+    mounted engine sets every uniform it declares.
 - **No WebGL is final for now:** `mount` → null means no background. A canvas fallback waits for a
   Canvas 2D engine (AOTY-100).
 - **The CSS keeps `canvas.aurora` / `html.has-aurora`**, whatever the engine and on every page.
@@ -974,6 +982,45 @@ Notes:
   - the labels outside it get the halo.
 - Preview: `tools/serve_shell.py --sample alice --port 8001`. The sample chart, newbies and
   `group/full-house` start with borealis. Sign in as alice for the picker.
+
+## Chapel (AOTY-103, 2026-11-28)
+
+- **`web/src/chapel.js`** is kamp's Chapel, ported from kamp commit 10fd636: three stacked,
+  feathered fields of cover colour that breathe, with dry-brush texture.
+  - It's a scene on `runShader`, at kamp's tuning: 0.33 scale, 15 fps.
+  - Dropped: the pointer's seam and field warmth, the art skip, the title band and `uTexture`.
+- User decisions:
+  - **The seams breathe their own faint glow.** In kamp only the pointer lit them. Each seam has its
+    own 20–40 s cycle, at a quarter to all of `SEAM_AMBIENT` (0.45) of kamp's `GLOW_ALPHA`, and holds
+    the middle at rest.
+  - The rare bloom (every 90–300 s) stays. `aotyChapel.pop()` in the console forces one for a
+    check by hand.
+  - **Phones keep three bands.** If they read badly on a phone, the fix is a follow-up ticket.
+- **Palettes:**
+  - Field colours are sorted by luminance once per palette, then crossfaded over 4 s. They're never
+    sorted per frame.
+  - A palette set before the first live frame lands without a fade. That's the one `mountBackdrop`
+    passes on a chart page.
+  - The first palette from the covers never re-proportions the fields.
+- **Re-proportioning** (7 s) comes from a new palette, paced by `RetargetPace` on the animation
+  clock. The first one goes at once; any asked for within 7 s fold into one more when the window
+  ends. Otherwise a first visit's wall bursts would keep the fields moving.
+- **Light pages:**
+  - Fields go on thicker (`LIGHT_ALPHA` 1.25) and a tone deeper (`LIGHT_TONE` 0.8).
+  - Glows multiply toward their colour instead of screening, because `screen()` over white does
+    nothing.
+  - Measured with headless Chrome and SwiftShader: field pixels around `212,163,156` on white, and
+    `103,86,77` on the dark `--bg`.
+- `setStrength` scales the fields, the ground tint, the seams and the bloom together (`uDim`).
+- **How it was checked by hand** (no GLSL compiler in CI):
+  - A scratch page loads the three engine files and draws each shader, then reads pixels. Run it in
+    headless Chrome with `--use-angle=swiftshader --enable-unsafe-swiftshader
+    --allow-file-access-from-files --dump-dom`.
+  - SwiftShader fails `failIfMajorPerformanceCaveat`, so the page calls `createQuad` and the
+    scene directly, not `mount`.
+  - Redo it after shader edits.
+- Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=chapel`. Signed in as bob,
+  `group/bobs-crew` starts with chapel.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 

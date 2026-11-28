@@ -13,7 +13,7 @@ another; a page with nothing stored (every page from before this) has none.
 import random
 
 NONE = "none"
-ENGINES = ("borealis",)
+ENGINES = ("borealis", "chapel")
 IDS = frozenset((NONE, *ENGINES))
 
 

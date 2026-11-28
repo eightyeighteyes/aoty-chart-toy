@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {createRequire} from "node:module";
 import test from "node:test";
+import {fakeCanvas, fakeGl, fakePage} from "./fakegl.mjs";
 
 const require = createRequire(import.meta.url);
 const bg = require("../src/backgrounds.js");
@@ -156,15 +157,159 @@ test("register keeps only engines with a mount", () => {
 test("every engine file registers itself with the contract's mount", async () => {
   // build_shell.BACKGROUNDS is the list; tests/test_build_shell.py checks each file names its id.
   const {createRequire: cr} = await import("node:module");
-  cr(import.meta.url)("../src/borealis.js");
-  const engine = bg.registered("borealis");
-  assert.ok(engine, "borealis.js didn't register");
-  assert.equal(typeof engine.mount, "function");
-  assert.equal(engine.mount({getContext: () => null, addEventListener() {}}), null);  // no WebGL: null
-  // setStrength (AOTY-96) is part of what a mounted Borealis offers: its source has it.
-  const src = (await import("node:fs")).readFileSync(new URL("../src/borealis.js", import.meta.url), "utf8");
-  assert.ok(/setStrength\(s\) \{/.test(src));
+  for (const id of ["borealis", "chapel"]) {
+    cr(import.meta.url)(`../src/${id}.js`);
+    const engine = bg.registered(id);
+    assert.ok(engine, `${id}.js didn't register`);
+    assert.equal(typeof engine.mount, "function");
+    assert.equal(engine.mount({getContext: () => null, addEventListener() {}}), null);  // no WebGL: null
+    // With a context, the contract's whole surface, setStrength (AOTY-96) included.
+    withPage(() => {
+      const api = engine.mount(fakeCanvas(fakeGl()), {bg: "#0d0c12", accent: "#ff6b4a"});
+      for (const f of ["setPalette", "setColors", "setStrength", "destroy"]) assert.equal(typeof api[f], "function", f);
+      api.destroy();
+    });
+  }
 });
+
+// ---- runShader (AOTY-103): the loop every WebGL background shares ------------------------------
+
+// A scene that records what the loop hands it.
+function recordingSpec(fps = 30) {
+  const log = {frames: [], starts: 0, palettes: [], strengths: [], colors: []};
+  return {
+    log,
+    spec: {
+      frag: "void main() {}", fps, resScale: 0.5,
+      scene: () => ({
+        onStart() { log.starts++; },
+        draw(_gl, _quad, frame) { log.frames.push({...frame}); },
+        setPalette(colors, running) { log.palettes.push({colors, running}); },
+        setColors(c, running) { log.colors.push({...c, running}); },
+        setStrength(s) { log.strengths.push(s); },
+      }),
+    },
+  };
+}
+
+function withPage(fn) {
+  const page = fakePage().install();
+  try { return fn(page); } finally { page.restore(); }
+}
+
+test("runShader: a still first, then frames at the spec's rate, with a clamped clock", () => withPage(page => {
+  const gl = fakeGl(), {log, spec} = recordingSpec(15);
+  const api = bg.runShader(fakeCanvas(gl), {bg: "#ffffff"}, spec);
+  assert.ok(api);
+  assert.equal(log.frames.length, 1);
+  assert.equal(log.frames[0].still, true);
+  assert.equal(log.frames[0].atRest, false);  // still, but not reduced motion's rest frame
+  assert.equal(log.starts, 1);
+  assert.deepEqual(gl.set.get("uBg"), [1, 1, 1]);
+  assert.deepEqual(gl.set.get("uRes"), [200, 400]);  // CSS size x dpr 1 x resScale 0.5
+  page.step(16);  // the first live frame: dt 0
+  page.step(30);  // under 1000/15 - 1 ms since: skipped
+  page.step(40);
+  const live = log.frames.slice(1);
+  assert.equal(live.length, 2);
+  assert.ok(live.every(f => !f.still));
+  assert.ok(Math.abs(live[1].dt - 0.07) < 1e-9);
+  page.step(10_000);  // a stalled tab: raw dt for the scene, but the clock moves 0.25 s at most
+  const last = log.frames.at(-1);
+  assert.ok(last.dt > 9);
+  assert.ok(Math.abs(last.elapsed - (0.07 + 0.25)) < 1e-9);
+  api.destroy();
+}));
+
+test("runShader: a hidden tab stops the loop; showing it again starts afresh", () => withPage(page => {
+  const gl = fakeGl(), {log, spec} = recordingSpec();
+  const api = bg.runShader(fakeCanvas(gl), {}, spec);
+  page.step(40);
+  page.setHidden(true);
+  assert.equal(page.pending(), 0);
+  const n = log.frames.length;
+  page.step(1000);
+  assert.equal(log.frames.length, n);
+  page.setHidden(false);
+  assert.equal(log.starts, 2);  // the scene drops anything stale
+  page.step(40);
+  assert.equal(log.frames.at(-1).dt, 0);  // the first frame after a start never counts the gap
+  api.destroy();
+}));
+
+test("runShader: a tab that starts hidden doesn't run", () => withPage(page => {
+  page.doc.hidden = true;
+  const {log, spec} = recordingSpec();
+  const api = bg.runShader(fakeCanvas(fakeGl()), {}, spec);
+  assert.equal(log.starts, 0);
+  assert.equal(page.pending(), 0);
+  api.destroy();
+}));
+
+test("runShader: reduced motion draws rest frames only, and lands changes on a still", () => withPage(page => {
+  const gl = fakeGl(), {log, spec} = recordingSpec();
+  const api = bg.runShader(fakeCanvas(gl), {reducedMotion: true}, spec);
+  assert.equal(page.pending(), 0);
+  assert.equal(log.frames[0].atRest, true);
+  api.setPalette([{r: 1, g: 2, b: 3}]);
+  assert.equal(log.palettes[0].running, false);
+  api.setStrength(2);
+  assert.deepEqual(log.strengths, [1]);  // clamped
+  api.setColors({bg: "#000000", accent: "#ff0000"});
+  assert.equal(log.frames.length, 4);  // each one repainted the still
+  assert.ok(log.frames.every(f => f.still && f.atRest));
+  api.setPalette([]);  // nothing to show: ignored
+  assert.equal(log.palettes.length, 1);
+  api.destroy();
+}));
+
+test("runShader: a same-size resize is skipped; a real one resizes the backing store", () => withPage(() => {
+  const gl = fakeGl(), {spec} = recordingSpec(), canvas = fakeCanvas(gl);
+  const handlers = new Map();
+  globalThis.addEventListener = (t, fn) => handlers.set(t, fn);
+  globalThis.removeEventListener = t => handlers.delete(t);
+  try {
+    const api = bg.runShader(canvas, {}, spec);
+    const v = gl.viewports;
+    handlers.get("resize")();
+    assert.equal(gl.viewports, v);
+    canvas.clientHeight = 600;
+    handlers.get("resize")();
+    assert.equal(gl.viewports, v + 1);
+    assert.equal(canvas.height, 300);
+    api.destroy();
+    assert.equal(handlers.has("resize"), false);
+  } finally {
+    delete globalThis.addEventListener;
+    delete globalThis.removeEventListener;
+  }
+}));
+
+test("runShader: destroy frees the context and stops everything; a lost context destroys it", () => withPage(page => {
+  const gl = fakeGl(), {log, spec} = recordingSpec(), canvas = fakeCanvas(gl);
+  const api = bg.runShader(canvas, {}, spec);
+  api.destroy();
+  assert.equal(gl.lost, true);
+  assert.equal(page.pending(), 0);
+  api.setPalette([{r: 1, g: 2, b: 3}]);
+  assert.equal(log.palettes.length, 0);
+  const gl2 = fakeGl(), canvas2 = fakeCanvas(gl2);
+  let lost = 0;
+  bg.runShader(canvas2, {onLost: () => lost++}, recordingSpec().spec);
+  canvas2.listeners.get("webglcontextlost")({preventDefault() {}});
+  assert.equal(lost, 1);
+  assert.equal(gl2.lost, true);
+}));
+
+test("runShader: no WebGL, or a shader that won't compile, gives null", () => withPage(() => {
+  const {spec} = recordingSpec();
+  assert.equal(bg.runShader({getContext: () => null}, {}, spec), null);
+  assert.equal(bg.runShader({getContext: () => { throw new Error("blocked"); }}, {}, spec), null);
+  const gl = fakeGl();
+  gl.getShaderParameter = () => false;
+  assert.equal(bg.runShader(fakeCanvas(gl), {}, spec), null);
+  assert.equal(gl.lost, true);  // its context is freed at once
+}));
 
 test("the palette uniform is always five full colours", () => {
   for (const colors of [[], [{r: 255, g: 0, b: 0}], bg.accentPalette("#ff6b4a").colors]) {

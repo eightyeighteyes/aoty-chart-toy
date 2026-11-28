@@ -8,7 +8,7 @@
 //   kamp_ui/src/renderer/src/components/nowplaying/webgl/shaderEngine.ts      the engine (trimmed)
 //   kamp_ui/src/shared/{borealisTiming,rareSchedule}.ts
 // The palette code and the program setup it shares with the other backgrounds are in
-// web/src/backgrounds.js (AOTY-77).
+// web/src/backgrounds.js (AOTY-77), and so is its loop (runShader, AOTY-103): this file is the scene.
 // What came across (user decision 2026-11-25): the flow, the palette crossfade, and the surge band,
 // which here rolls across when a new wall cover shifts the palette. Not kamp's cursor lean, rare
 // edge flicker, title mask or art-shown layout: there's no art pane, so the curtains always sit
@@ -22,7 +22,7 @@
   // web/src/backgrounds.js: loaded first in a page; required in node (its tests).
   const shared = root.aotyBg || (typeof require === "function" ? require("./backgrounds.js") : null);
   if (!shared) return;
-  const {PALETTE_SIZE, PaletteCrossfade, accentPalette, hexToRgb, packPalette, createQuad, CONTEXT_ATTRS} = shared;
+  const {PALETTE_SIZE, PaletteCrossfade, accentPalette, packPalette, runShader} = shared;
 
   const TAU = Math.PI * 2;
   const clampDt = (dt, max) => Math.min(Math.max(0, dt), max);
@@ -192,156 +192,62 @@ void main() {
   gl_FragColor = vec4(dither(clamp(col, 0.0, 1.0), uTime), 1.0);
 }
 `;
-  // Every uniform FRAG declares, all set by draw() (web/test/borealis.test.mjs checks both).
+  // Every uniform FRAG declares: uRes, uTime and uBg by runShader, the rest by the scene's draw()
+  // (web/test/borealis.test.mjs checks both).
   const UNIFORMS = ["uRes", "uTime", "uPalette", "uBg", "uFlow", "uSurgeA", "uSurgeB", "uDim"];
 
-  // ---- the engine (glQuad.ts, shaderEngine.ts, trimmed) --------------------------------------
+  // ---- the scene, on backgrounds.js runShader (AOTY-103) -------------------------------------
   const RES_SCALE = 0.25;  // soft curtains survive the quarter-resolution upscale (kamp's budget)
-  const MAX_DPR = 1.5;
-  const FRAME_MS = 1000 / 30;
+  const FPS = 30;
   const STILL_PHASE = [1.9, 4.4];  // the reduced-motion still's curtains
   const CROSSFADE_MS = 1000;
   const DIM = 0.85;  // a little under kamp's strength: text sits over these curtains (AOTY-67)
 
-  // Run Borealis on canvas. opts: {reducedMotion, bg, accent (hex), onLost()}. Returns
-  // {setPalette(colors), setColors({bg, accent}), destroy()}, or null when WebGL isn't there (no
-  // context, a blocklisted GPU, a shader that won't compile): the page then stays as it was.
-  function mount(canvas, opts = {}) {
-    const doc = root.document;
-    let gl = null;
-    try { gl = canvas.getContext("webgl", CONTEXT_ATTRS); } catch (_) { gl = null; }
-    if (!gl) return null;
-    const quad = createQuad(gl, FRAG);
-    if (!quad) {
-      const lose = gl.getExtension("WEBGL_lose_context");
-      if (lose) lose.loseContext();
-      return null;
-    }
-    const reduced = !!opts.reducedMotion;
-    let bg = hexToRgb(opts.bg) || {r: 13, g: 12, b: 18}, accent = opts.accent;
+  // The curtains' own state: their palette fade, the surge, their strength.
+  function scene({accent: initialAccent}) {
+    let accent = initialAccent;
     let art = null;  // the covers' palette, once there is one
     const fade = new PaletteCrossfade(accentPalette(accent).colors, CROSSFADE_MS);
     const surge = new SurgeEnvelope();
     const packed = new Float32Array(PALETTE_SIZE * 3);
-    let running = false, destroyed = false, raf = 0, lastDraw = 0, elapsed = 0, w = 0, h = 0;
     let strength = 1;  // setStrength (AOTY-96): calmer behind a built chart
 
-    // Backing size = CSS size x dpr x RES_SCALE. Setting width or height clears the buffer, so a
-    // same-size resize (a phone's URL bar, constantly) is skipped, and a real one is redrawn.
-    function resize() {
-      const dpr = Math.min(root.devicePixelRatio || 1, MAX_DPR);
-      const cw = Math.max(1, Math.round(canvas.clientWidth * dpr * RES_SCALE));
-      const ch = Math.max(1, Math.round(canvas.clientHeight * dpr * RES_SCALE));
-      if (cw === w && ch === h) return false;
-      w = canvas.width = cw;
-      h = canvas.height = ch;
-      gl.viewport(0, 0, cw, ch);
-      return true;
-    }
-
-    function draw(still) {
-      const [p0, p1] = still ? STILL_PHASE : flowPhase(elapsed);
-      const [a, b] = surge.bands;
-      quad.use();
-      gl.uniform2f(quad.u("uRes"), w, h);
-      gl.uniform1f(quad.u("uTime"), elapsed % 1000);
-      gl.uniform3fv(quad.u("uPalette"), packPalette(fade.current(), packed));
-      gl.uniform3f(quad.u("uBg"), bg.r / 255, bg.g / 255, bg.b / 255);
-      gl.uniform4f(quad.u("uFlow"), Math.cos(p0), Math.sin(p0), Math.cos(p1), Math.sin(p1));
-      gl.uniform3f(quad.u("uSurgeA"), still ? 0 : a.position, still ? 0 : a.value, a.dir);
-      gl.uniform3f(quad.u("uSurgeB"), still ? 0 : b.position, still ? 0 : b.value, b.dir);
-      gl.uniform1f(quad.u("uDim"), DIM * strength);
-      quad.draw();
-    }
-
-    function frame(now) {
-      raf = 0;
-      if (!running) return;
-      raf = root.requestAnimationFrame(frame);
-      if (lastDraw && now - lastDraw < FRAME_MS - 1) return;  // 30 fps
-      const dt = lastDraw ? (now - lastDraw) / 1000 : 0;
-      lastDraw = now;
-      elapsed += Math.min(dt, 0.25);  // a stalled tab mustn't jump the flow
-      fade.tick(dt * 1000);
-      surge.tick(dt);
-      resize();
-      draw(false);
-    }
-    function start() {
-      if (running || reduced || destroyed || (doc && doc.hidden)) return;
-      running = true;
-      lastDraw = 0;
-      surge.cancel();  // nothing ticked while stopped: a half-finished surge mustn't replay
-      raf = root.requestAnimationFrame(frame);
-    }
-    function stop() {
-      running = false;
-      if (raf) root.cancelAnimationFrame(raf);
-      raf = 0;
-    }
-    function still() {
-      if (destroyed) return;
-      resize();
-      draw(true);
-    }
-
-    const onVisibility = () => { if (doc.hidden) stop(); else if (reduced) still(); else start(); };
-    const onResize = () => { if (resize() && !running) still(); };
-    const onLost = e => {
-      if (e && e.preventDefault) e.preventDefault();
-      api.destroy();
-      if (opts.onLost) opts.onLost();
-    };
-    canvas.addEventListener("webglcontextlost", onLost);
-    if (doc) doc.addEventListener("visibilitychange", onVisibility);
-    root.addEventListener("resize", onResize);
-
-    const api = {
-      // A new palette from the covers: crossfades in with a surge while running, lands directly
-      // when stopped (reduced motion, a hidden tab).
-      setPalette(colors) {
-        if (destroyed || !colors || !colors.length) return;
+    return {
+      surge,
+      onStart() { surge.cancel(); },  // nothing ticked while stopped: a half-finished surge mustn't replay
+      draw(gl, quad, frame) {
+        const still = frame.still;
+        if (!still) {
+          fade.tick(frame.dt * 1000);
+          surge.tick(frame.dt);
+        }
+        const [p0, p1] = still ? STILL_PHASE : flowPhase(frame.elapsed);
+        const [a, b] = surge.bands;
+        gl.uniform3fv(quad.u("uPalette"), packPalette(fade.current(), packed));
+        gl.uniform4f(quad.u("uFlow"), Math.cos(p0), Math.sin(p0), Math.cos(p1), Math.sin(p1));
+        gl.uniform3f(quad.u("uSurgeA"), still ? 0 : a.position, still ? 0 : a.value, a.dir);
+        gl.uniform3f(quad.u("uSurgeB"), still ? 0 : b.position, still ? 0 : b.value, b.dir);
+        gl.uniform1f(quad.u("uDim"), DIM * strength);
+      },
+      // A new palette crossfades in with a surge while running, and lands directly when stopped.
+      setPalette(colors, running) {
         art = colors;
         fade.set(colors, running);
         if (running) surge.trigger(Math.random() < 0.5 ? 0 : 1);
-        else still();
       },
-      // The page's colours changed (an owner's theme, AOTY-65).
-      // The page's strength for it, 0..1 of its own (AOTY-96): 1 on a first visit, less behind a
-      // built chart. A stopped loop redraws its still at once.
-      setStrength(s) {
-        if (destroyed || !Number.isFinite(s)) return;
-        strength = Math.max(0, Math.min(1, s));
-        if (!running) still();
-      },
-      setColors({bg: nextBg, accent: nextAccent} = {}) {
-        if (destroyed) return;
-        bg = hexToRgb(nextBg) || bg;
+      setColors({accent: nextAccent}, running) {
         if (nextAccent) accent = nextAccent;
         if (!art) fade.set(accentPalette(accent).colors, running);
-        if (!running) still();
       },
-      destroy() {
-        if (destroyed) return;
-        destroyed = true;
-        stop();
-        canvas.removeEventListener("webglcontextlost", onLost);
-        if (doc) doc.removeEventListener("visibilitychange", onVisibility);
-        root.removeEventListener("resize", onResize);
-        try { quad.dispose(); } catch (_) { /* the context may already be gone */ }
-        // Free the context now: browsers cap live contexts (~16), and repeated first visits in one
-        // tab would otherwise pile them up.
-        const lose = gl.getExtension("WEBGL_lose_context");
-        if (lose) lose.loseContext();
-      },
+      setStrength(s) { strength = s; },
     };
-
-    still();  // a first frame at once, so the canvas is never blank
-    start();
-    return api;
   }
 
-  const api = {FLOW_PERIODS_S, flowPhase, SurgeEnvelope, FRAG, UNIFORMS, mount, STILL_PHASE};
+  const SPEC = {frag: FRAG, fps: FPS, resScale: RES_SCALE, scene};
+  // Run Borealis on canvas: backgrounds.js's engine contract (runShader).
+  const mount = (canvas, opts = {}) => runShader(canvas, opts, SPEC);
+
+  const api = {FLOW_PERIODS_S, flowPhase, SurgeEnvelope, FRAG, UNIFORMS, SPEC, mount, STILL_PHASE};
   root.aotyBorealis = api;
   shared.register("borealis", api);  // loaded on demand: the page's load("borealis") waits for this
   if (typeof module !== "undefined" && module.exports) module.exports = api;

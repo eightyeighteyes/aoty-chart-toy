@@ -182,6 +182,149 @@
     };
   }
 
+  // ---- the shader loop (shaderEngine.ts, trimmed; extracted from Borealis in AOTY-103) --------
+  //
+  // What every WebGL background does the same way, so each engine file is only its scene. A spec is
+  //   {frag, fps, resScale, scene({accent, reducedMotion}) -> scene}
+  // and a scene is
+  //   draw(gl, quad, frame)        set its own uniforms (the loop sets uRes, uTime and uBg), ticking
+  //                                its own state first when !frame.still
+  //   setPalette(colors, running)  a new palette from the covers
+  //   setColors({accent}, running)?, setStrength(s)?, onStart()?  (the loop just started)
+  // frame is {w, h, elapsed, dt, still, atRest}: dt is the raw seconds since the last frame (0 on a
+  // still), elapsed the animation clock (a stalled tab adds at most MAX_STEP_S), still any frame
+  // drawn outside the loop (mount, a hidden tab, a stopped repaint), atRest only reduced motion's
+  // designed rest frame (kamp's rule: a theme repaint is still but not at rest).
+  //
+  // The loop's rules, all kamp's: 30 fps unless the spec says, with FRAME_MS - 1 of slack (rAF
+  // timestamps jitter, and a 30 fps cap without it runs at 20); only while the tab is visible; a
+  // still frame at once, so the canvas is never blank; under reduced motion nothing but stills; a
+  // resize clears the buffer, so a same-size one (a phone's URL bar, constantly) is skipped and a
+  // real one redrawn; destroy() calls WEBGL_lose_context, because browsers cap live contexts (~16).
+  // Canvas 2D engines (Sparks, AOTY-100) are not this.
+  const DEFAULT_FPS = 30, DEFAULT_RES_SCALE = 0.25, MAX_DPR = 1.5, MAX_STEP_S = 0.25;
+  const DEFAULT_BG = {r: 13, g: 12, b: 18};
+
+  function loseContext(gl) {
+    const lose = gl.getExtension && gl.getExtension("WEBGL_lose_context");
+    if (lose) lose.loseContext();
+  }
+
+  // Run spec on canvas. opts: {bg, accent, reducedMotion, onLost()}. Returns the engine contract's
+  // {setPalette, setColors, setStrength, destroy}, or null when WebGL isn't there (no context, a
+  // blocklisted GPU, a shader that won't compile).
+  function runShader(canvas, opts = {}, spec) {
+    const doc = root.document;
+    let gl = null;
+    try { gl = canvas.getContext("webgl", CONTEXT_ATTRS); } catch (_) { gl = null; }
+    if (!gl) return null;
+    const quad = createQuad(gl, spec.frag);
+    if (!quad) { loseContext(gl); return null; }
+    const reduced = !!opts.reducedMotion;
+    const scene = spec.scene({accent: opts.accent, reducedMotion: reduced});
+    const frameMs = 1000 / (spec.fps || DEFAULT_FPS), resScale = spec.resScale || DEFAULT_RES_SCALE;
+    let bg = hexToRgb(opts.bg) || DEFAULT_BG;
+    let running = false, destroyed = false, raf = 0, lastDraw = 0, elapsed = 0, w = 0, h = 0;
+
+    // Backing size = CSS size x dpr x resScale.
+    function resize() {
+      const dpr = Math.min(root.devicePixelRatio || 1, MAX_DPR);
+      const cw = Math.max(1, Math.round(canvas.clientWidth * dpr * resScale));
+      const ch = Math.max(1, Math.round(canvas.clientHeight * dpr * resScale));
+      if (cw === w && ch === h) return false;
+      w = canvas.width = cw;
+      h = canvas.height = ch;
+      gl.viewport(0, 0, cw, ch);
+      return true;
+    }
+
+    function draw(still, dt) {
+      quad.use();  // uniforms go to the bound program
+      gl.uniform2f(quad.u("uRes"), w, h);
+      gl.uniform1f(quad.u("uTime"), elapsed % 1000);
+      gl.uniform3f(quad.u("uBg"), bg.r / 255, bg.g / 255, bg.b / 255);
+      scene.draw(gl, quad, {w, h, elapsed, dt, still, atRest: still && reduced});
+      quad.draw();
+    }
+
+    function frame(now) {
+      raf = 0;
+      if (!running) return;
+      raf = root.requestAnimationFrame(frame);
+      if (lastDraw && now - lastDraw < frameMs - 1) return;
+      const dt = lastDraw ? (now - lastDraw) / 1000 : 0;
+      lastDraw = now;
+      elapsed += Math.min(dt, MAX_STEP_S);  // a stalled tab mustn't jump the animation
+      resize();
+      draw(false, dt);
+    }
+    function start() {
+      if (running || reduced || destroyed || (doc && doc.hidden)) return;
+      running = true;
+      lastDraw = 0;
+      if (scene.onStart) scene.onStart();  // nothing ticked while stopped: nothing stale may replay
+      raf = root.requestAnimationFrame(frame);
+    }
+    function stop() {
+      running = false;
+      if (raf) root.cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    function still() {
+      if (destroyed) return;
+      resize();
+      draw(true, 0);
+    }
+
+    const onVisibility = () => { if (doc.hidden) stop(); else if (reduced) still(); else start(); };
+    const onResize = () => { if (resize() && !running) still(); };
+    const onLost = e => {
+      if (e && e.preventDefault) e.preventDefault();
+      api.destroy();
+      if (opts.onLost) opts.onLost();
+    };
+    canvas.addEventListener("webglcontextlost", onLost);
+    if (doc) doc.addEventListener("visibilitychange", onVisibility);
+    if (root.addEventListener) root.addEventListener("resize", onResize);
+
+    const api = {
+      // A new palette from the covers: the scene animates it while running; stopped (reduced
+      // motion, a hidden tab), it lands, and the still shows it at once.
+      setPalette(colors) {
+        if (destroyed || !colors || !colors.length) return;
+        scene.setPalette(colors, running);
+        if (!running) still();
+      },
+      // The page's colours changed (an owner's theme, AOTY-65).
+      setColors({bg: nextBg, accent} = {}) {
+        if (destroyed) return;
+        bg = hexToRgb(nextBg) || bg;
+        if (scene.setColors) scene.setColors({accent}, running);
+        if (!running) still();
+      },
+      // 0..1 of the engine's own strength (AOTY-96): 1 on a first visit, less behind a built chart.
+      setStrength(s) {
+        if (destroyed || !Number.isFinite(s) || !scene.setStrength) return;
+        scene.setStrength(Math.max(0, Math.min(1, s)));
+        if (!running) still();
+      },
+      destroy() {
+        if (destroyed) return;
+        destroyed = true;
+        stop();
+        canvas.removeEventListener("webglcontextlost", onLost);
+        if (doc) doc.removeEventListener("visibilitychange", onVisibility);
+        if (root.removeEventListener) root.removeEventListener("resize", onResize);
+        try { quad.dispose(); } catch (_) { /* the context may already be gone */ }
+        loseContext(gl);
+      },
+    };
+
+    still();
+    start();
+    return api;
+  }
+
   // ---- the registry (AOTY-77, kamp's registry.ts) --------------------------------------------
   //
   // The engine contract. An engine file calls register(id, engine) when it loads, and
@@ -260,7 +403,7 @@
   }
 
   const api = {PALETTE_SIZE, extractPalette, accentPalette, paletteChanged, hexToRgb, PaletteCrossfade,
-               packPalette, CONTEXT_ATTRS, VERT, createQuad, register, registered, parseMap, readMap, ids, pick,
+               packPalette, CONTEXT_ATTRS, VERT, createQuad, runShader, register, registered, parseMap, readMap, ids, pick,
                load, NONE, pickerOrder, savePath};
   root.aotyBg = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
