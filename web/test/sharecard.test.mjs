@@ -76,20 +76,33 @@ test("the boxes sit inside each format's safe band, in order, without overlappin
   for (const [format, f] of Object.entries(FORMATS)) {
     const L = layout(format);
     assert.deepEqual([L.width, L.height], [f.width, f.height]);
-    const stack = [L.brand, L.caption, L.cover, L.title, L.url];
-    for (const b of stack) {
+    // A cover beside the text column (AOTY-95's landscape) sits left of it; any other cover is in
+    // the column's stack, between the caption and the title.
+    const beside = L.cover.x + L.cover.w <= L.col.x;
+    const stack = beside ? [L.brand, L.caption, L.title, L.url] : [L.brand, L.caption, L.cover, L.title, L.url];
+    for (const b of [...stack, L.cover]) {
       assert.ok(b.x >= 0 && b.y >= f.safe.top && b.x + b.w <= L.width && b.y + b.h <= L.height - f.safe.bottom,
                 format);
     }
     for (let i = 1; i < stack.length; i++) assert.ok(stack[i].y >= stack[i - 1].y + stack[i - 1].h, `${format} ${i}`);
+    // The column inside the pad.
+    assert.ok(L.col.x >= L.pad && L.col.x + L.col.w <= L.width - L.pad, format);
     // Every slot, not only #1's: its cover and its names' boxes (title, gap, artist) inside the band
-    // and the pad, and above the link.
+    // and the pad; names in the column, below the caption and above the link, and so is a cover in
+    // the stack. A cover beside the column fills the pad's height instead.
     assert.equal(L.slots.length, f.count, format);
     for (const s of L.slots) {
-      const names = s.title.h + s.artist.gap + s.artist.h;
-      for (const b of [s.cover, {x: s.title.x, y: s.title.y, w: s.title.w, h: names}]) {
-        assert.ok(b.x >= 64 && b.x + b.w <= L.width - 64 && b.y >= L.caption.y + L.caption.h
-                  && b.y + b.h <= L.url.y && b.y + b.h <= L.height - f.safe.bottom, `${format} #${s.rank}`);
+      const names = {x: s.title.x, y: s.title.y, w: s.title.w, h: s.title.h + s.artist.gap + s.artist.h};
+      if (s.bottom) assert.ok(s.bottom <= names.y + names.h + 0.01, `${format} #${s.rank} bottom`);
+      for (const b of [s.cover, names]) {
+        assert.ok(b.x >= L.pad && b.x + b.w <= L.width - L.pad && b.y + b.h <= L.height - f.safe.bottom,
+                  `${format} #${s.rank}`);
+        if (b === s.cover && beside) {
+          assert.ok(b.y >= L.pad - 1 && b.y + b.h <= L.height - L.pad + 1, `${format} #${s.rank} cover`);
+        } else {
+          assert.ok(b.y >= L.caption.y + L.caption.h && b.y + b.h <= L.url.y, `${format} #${s.rank}`);
+        }
+        if (b === names) assert.ok(b.x >= L.col.x && b.x + b.w <= L.col.x + L.col.w, `${format} #${s.rank} names`);
       }
     }
   }
@@ -115,7 +128,8 @@ test("every preset's text colours read at 4.5:1 on the card's background", () =>
       assert.ok(contrast(fg, t.bg) >= TEXT_MIN, `${id}: ${what} (${PALETTE[what]}) on bg`);
     }
     // And as drawn: every text op over bg or, on the tile, over its gradient's start and middle.
-    for (const [format, cover] of [["top1_square", true], ["top1_square", false], ["top1_story", false]]) {
+    for (const [format, cover] of [["top1_square", true], ["top1_square", false], ["top1_story", false],
+                                   ["top1_landscape", false]]) {
       for (const o of textOps(compose({format, texts: TEXTS, tokens: t, cover, measure}))) {
         const under = o.on === "tile" ? [t.tile, mix(t.tile, t.tileEnd, 0.5)] : [t.bg];
         for (const bg of under) assert.ok(contrast(o.color, bg) >= TEXT_MIN, `${id}: "${o.text}" on ${o.on}`);
@@ -371,10 +385,15 @@ test("no two texts and no text and cover overlap, at any length, in any format",
             assert.ok(!touch(ink(text[i]), box), `${format}: "${text[i].text}" on slot ${b.slot}`);
           }
         }
-        // Every slot's names stay inside the canvas's pad.
+        // Every text on the page colour stays inside the text column (the pad, on one-column
+        // formats), and every tile's text inside its tile.
+        const L = layout(format);
         for (const o of text) {
           const e = ink(o);
-          assert.ok(e.left >= 64 - 0.01 && e.right <= 1016 + 0.01, `${format}: "${o.text}"`);
+          const within = o.on === "tile" ? boxes.find(b => e.left >= b.x - 0.01 && e.right <= b.x + b.w + 0.01
+                                                          && o.y > b.y && o.y < b.y + b.h)
+            : o.on === "badge" || (e.left >= L.col.x - 0.01 && e.right <= L.col.x + L.col.w + 0.01);
+          assert.ok(within, `${format}: "${o.text}" (${o.on})`);
         }
       }
     }
@@ -481,9 +500,13 @@ test("each grid cover carries its rank on a page-colour badge, over the cover", 
 test("every cover is drawn before any title, so no shadow falls on one", () => {
   for (const format of Object.keys(FORMATS)) {
     const ops = compose({format, texts: TOP10, tokens: complete(THEMES.poster), covers: ALL, measure});
+    // The names are the texts after the caption (the brand and caption come first; on the
+    // landscape they sit level with the cover).
     const lastCover = Math.max(...ops.map((o, i) => (o.op === "cover" || o.op === "tile" ? i : -1)));
-    const firstName = ops.findIndex(o => o.op === "text" && o.on === "bg" && o.y > ops.find(c => c.op === "cover").y);
-    assert.ok(firstName > lastCover, format);
+    const caption = ops.findIndex(o => o.op === "text" && /albums? of/.test(o.text));
+    const firstName = ops.findIndex((o, i) => i > caption && o.op === "text" && o.on === "bg");
+    assert.ok(caption > 0 && firstName > lastCover, format);
+    assert.equal(ops[firstName].text, FORMATS[format].count > 1 ? `#1${NB}Album 1` : "Album 1", format);
   }
 });
 
@@ -526,4 +549,70 @@ test("file names are safe everywhere", () => {
   assert.equal(fileName("Alice", 2026, "top1_story"), "aoty-2026-Alice-story.png");
   assert.equal(fileName("東京", 2026, "top1_story"), "aoty-2026-story.png");
   assert.equal(fileName("Alice", 2026, "nope"), "aoty-2026-Alice.png");
+});
+
+// ---- the landscape link preview card (AOTY-95) --------------------------------------------------
+
+const WIDE = "top1_landscape";
+const wide = (texts, cover = true, id = "poster") => compose({format: WIDE, texts, tokens: complete(THEMES[id]), cover,
+                                                             measure});
+
+test("the landscape card is 1200x630 (1.91:1), with the cover on the left and every text right of it", () => {
+  assert.deepEqual([FORMATS[WIDE].width, FORMATS[WIDE].height], [1200, 630]);
+  assert.equal(fileName("Alice", 2026, WIDE), "aoty-2026-Alice-wide.png");
+  const L = layout(WIDE);
+  for (const texts of [TEXTS, GROUP, {...GROUP, name: "x".repeat(60)}]) {
+    for (const cover of [true, false]) {
+      const ops = wide(texts, cover);
+      const c = ops.find(o => o.op === "cover" || o.op === "tile");
+      assert.deepEqual([c.x, c.y, c.w, c.h], [56, 55, 520, 520]);
+      assert.ok(!("blur" in c), "the #1's shadow, as on the square");
+      for (const o of textOps(ops).filter(o => o.on === "bg")) {
+        const e = ink(o);
+        assert.ok(e.left >= c.x + c.w + 32 && e.right <= L.col.x + L.col.w + 0.01, `"${o.text}"`);
+      }
+    }
+  }
+});
+
+test("the landscape's link ends level with the cover, and the names sit just above it", () => {
+  for (const texts of [TEXTS, {...TEXTS, title: "Everything Everywhere All at Once and Then Some More"}]) {
+    const ops = wide(texts);
+    const cover = ops.find(o => o.op === "cover"), text = textOps(ops);
+    const url = text.at(-1), artist = text.at(-2);
+    assert.equal(url.text, "aoty.kamp.fm/alice");
+    assert.ok(url.y + 0.3 * sizeOf(url.font) <= cover.y + cover.h, texts.title);
+    // Anchored: the artist ends at the slot's bottom, whether the title takes one line or two.
+    assert.ok(Math.abs(artist.y + 0.28 * sizeOf(artist.font) - layout(WIDE).slots[0].bottom) < 0.01, texts.title);
+    assert.ok(!touch(ink(artist), ink(url)), texts.title);
+  }
+});
+
+test("the landscape caption keeps one line when it fits, and two when it must", () => {
+  const short = textOps(wide(TEXTS)).filter(o => o.color === complete(THEMES.poster).accent);
+  assert.deepEqual(short.map(o => o.text), ["alice's album of the year 2026"]);
+  const group = textOps(wide({...GROUP, name: "the extremely long-winded listening club"}));
+  const cap = group.filter(o => o.font.startsWith("600"));
+  assert.equal(cap.length, 2);
+  assert.ok(cap[1].text.endsWith("album of the year 2026"), cap.map(o => o.text).join(" / "));
+});
+
+test("on the landscape, long texts are fitted to the column and a long group name is cut, never the year", () => {
+  const L = layout(WIDE);
+  const long = {...TEXTS, title: "Everything Everywhere All at Once and Then Some More", artist: "A".repeat(80),
+                url: "https://kamp.fm/toys/aoty-staging/user/" + "x".repeat(40)};
+  for (const o of textOps(wide(long))) assert.ok(measure(o.text, o.font) <= L.col.w + 0.01, o.text);
+  for (const name of ["x".repeat(80), "東".repeat(60)]) {
+    const cap = textOps(wide({...GROUP, name})).filter(o => o.font.startsWith("600"));
+    assert.ok(cap.at(-1).text.endsWith("… · album of the year 2026"), cap.map(o => o.text).join(" / "));
+  }
+});
+
+test("the landscape's member count sits right of the brand, inside the column", () => {
+  const L = layout(WIDE);
+  for (const played of ["7 of 9 members", "a much longer count than any group would ever have"]) {
+    const [brand, count] = textOps(wide({...GROUP, played}));
+    assert.equal(count.x, L.col.x + L.col.w);
+    assert.ok(count.x - measure(count.text, count.font) >= brand.x + measure(brand.text, brand.font) + 32 - 0.01, played);
+  }
 });

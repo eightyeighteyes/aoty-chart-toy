@@ -7,7 +7,8 @@
 // The artist-name tile that stands in for a missing cover uses the page's tile tokens, as .noart.
 // Group pages (AOTY-71) use the same card with a group caption and a member count. top1_story
 // (AOTY-72) is the vertical 9:16 for Stories, Reels and TikTok; AOTY-73 and AOTY-74 add top 3 and
-// top 10 beside them.
+// top 10 beside them. top1_landscape (AOTY-95) is the 1200x630 link preview card the card Lambda
+// draws, with the text in a column beside the cover.
 (function (root) {
   "use strict";
 
@@ -23,6 +24,9 @@
     top3_story: {...STORY, count: 3, suffix: "top3-story"},
     top10_square: {...SQUARE, count: 10, suffix: "top10"},
     top10_story: {...STORY, count: 10, suffix: "top10-story"},
+    // The link preview card (AOTY-95): 1.91:1, which X, Facebook and LinkedIn show uncropped and
+    // Discord and iMessage show whole. Drawn by the card Lambda only; the page never offers it.
+    top1_landscape: {width: 1200, height: 630, safe: {top: 0, bottom: 0}, count: 1, suffix: "wide"},
   };
   const DEFAULT_FORMAT = "top1_square";
 
@@ -110,17 +114,30 @@
       small(2, coverBox(PAD, 1270, 180), PAD + 200, 1270, 260, 2),
       small(3, coverBox(556, 1270, 180), 756, 1270, 260, 2),
     ]},
+    // The cover on the left, flush with the pad top and bottom; everything else in a column on the
+    // right (AOTY-95). The caption may take two lines in the narrower column, preferring one. The
+    // names are anchored to the link (bottom): a one-line title sits low rather than leaving a gap
+    // above the link. title.y is the highest the names can start, so its box holds them all.
+    top1_landscape: {pad: 56, col: {x: 632, w: 512}, brand: 55, caption: 128, url: 534,
+                     captionBox: {lines: 2, sizes: [30, 26, 24, 22], prefer: 1}, slots: [{
+      rank: 1, cover: coverBox(56, 55, 520), bottom: 500,
+      title: {x: 632, y: 312, w: 512, h: 132, lines: 2, sizes: [56, 50, 44, 38, 34], leading: 1.15, align: "left"},
+      artist: {x: 632, gap: 12, w: 512, h: 44, lines: 1, sizes: [36, 32, 28, 24], align: "left"},
+    }]},
   };
+  // A text box's height at its largest size and all its lines, as line() in compose draws it.
+  const boxHeight = (lines, size, leading = 1.2) => Math.ceil(size * 0.92 + (lines - 1) * size * leading + size * 0.28);
   function layout(format = DEFAULT_FORMAT) {
     const {width, height, safe, count} = FORMATS[format], y = LAYOUTS[format];
-    const first = y.slots[0];
+    const first = y.slots[0], col = y.col || {x: PAD, w: INNER};
+    const cap = {lines: 1, sizes: [34, 30, 26, 22], ...y.captionBox};
     return {
-      width, height, pad: PAD, safe, count, slots: y.slots,
-      brand: {x: PAD, y: y.brand, w: INNER, h: 40, mark: 40},
-      caption: {x: PAD, y: y.caption, w: INNER, h: 44, lines: 1, sizes: [34, 30, 26, 22]},
+      width, height, pad: y.pad || PAD, col, safe, count, slots: y.slots,
+      brand: {x: col.x, y: y.brand, w: col.w, h: 40, mark: 40},
+      caption: {x: col.x, y: y.caption, w: col.w, h: cap.lines > 1 ? boxHeight(cap.lines, cap.sizes[0]) : 44, ...cap},
       // #1's boxes, as before slots.
       cover: first.cover, title: first.title, artist: first.artist,
-      url: {x: PAD, y: y.url, w: INNER, h: 40, lines: 1, sizes: [30, 26, 22, 20]},
+      url: {x: col.x, y: y.url, w: col.w, h: 40, lines: 1, sizes: [30, 26, 22, 20]},
     };
   }
   // A format id from anywhere (a saved choice, the page): a known one, else the square.
@@ -263,7 +280,7 @@
               x: brandX, y: brandY, align: "left", on: "bg"});
     // A group's member count, "7 of 9 members" (AOTY-71), right-aligned in what the brand leaves.
     if (texts.played && L.count === 1) {
-      const left = brandX + measure("a kamp toy", F.brand(28)) + 32, right = L.width - L.pad;
+      const left = brandX + measure("a kamp toy", F.brand(28)) + 32, right = L.col.x + L.col.w;
       const font = s => F.body(s, 500);
       const fit = fitText({text: texts.played, maxWidth: right - left, maxLines: 1, sizes: [28, 26, 24, 22], font,
                            measure});
@@ -271,14 +288,23 @@
                                        y: brandY, align: "right", on: "bg"}));
     }
 
+    // One text box's fit and the height it draws. A box with prefer: 1 takes one line at any of its
+    // sizes before it wraps (AOTY-95's caption).
+    const fitBox = (box, text, font) => {
+      const fit = (box.prefer === 1 && box.lines > 1
+        && [fitText({text, maxWidth: box.w, maxLines: 1, sizes: box.sizes, font, measure})].find(f => !f.cut))
+        || fitText({text, maxWidth: box.w, maxLines: box.lines, sizes: box.sizes, font, measure});
+      const step = fit.size * (box.leading || 1.2);
+      const height = fit.lines.length ? fit.size * 0.92 + (fit.lines.length - 1) * step + fit.size * 0.28 : 0;
+      return {fit, step, height};
+    };
     // One text box's lines, from its top y; returns the height drawn.
     const line = (box, text, font, color, y) => {
-      const fit = fitText({text, maxWidth: box.w, maxLines: box.lines, sizes: box.sizes, font, measure});
-      const step = fit.size * (box.leading || 1.2);
+      const {fit, step, height} = fitBox(box, text, font);
       const align = box.align || "center", x = align === "left" ? box.x : box.x + box.w / 2;
       fit.lines.forEach((t, i) => ops.push({op: "text", text: t, font: font(fit.size), color, x,
                                             y: y + fit.size * 0.92 + i * step, align, on: "bg"}));
-      return fit.lines.length ? fit.size * 0.92 + (fit.lines.length - 1) * step + fit.size * 0.28 : 0;
+      return height;
     };
 
     const capFont = s => F.body(s, 600);
@@ -319,8 +345,13 @@
       // fitText cuts the end, so the rank at the start always shows. A no-break space ties it to the
       // title's first word, so a title that breaks (CJK, one long word) keeps going after it.
       const title = L.count > 1 ? `#${s.rank}${NBSP}${a.title ?? ""}` : a.title;
-      const titleH = line(s.title, title, F.display, C.title, s.title.y);
-      line(s.artist, a.artist, q => F.body(q, 500), C.artist, s.title.y + titleH + s.artist.gap);
+      const artistFont = q => F.body(q, 500);
+      // Anchored names (AOTY-95) end at the slot's bottom; the rest start at the title's top.
+      const y = s.bottom
+        ? s.bottom - fitBox(s.title, title, F.display).height - s.artist.gap - fitBox(s.artist, a.artist, artistFont).height
+        : s.title.y;
+      const titleH = line(s.title, title, F.display, C.title, y);
+      line(s.artist, a.artist, artistFont, C.artist, y + titleH + s.artist.gap);
     });
     line(L.url, printedUrl(texts.url), s => F.body(s, 500), C.url, L.url.y);
     return ops;
