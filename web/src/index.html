@@ -110,34 +110,39 @@
         <select id="who"><option value="">everyone</option></select>
       </label>
     </div>
-    <!-- User pages (AOTY-65) and group pages (AOTY-76): the owner picks its colours; everyone sees them. -->
-    <div class="theme-tools" id="theme-tools" hidden>
-      <button type="button" class="pill" id="theme-toggle" aria-expanded="false" aria-controls="theme-row">theme</button>
-      <span class="tool-msg" id="theme-msg" role="status" aria-live="polite"></span>
-    </div>
-    <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
-    <!-- User and group pages (AOTY-84, AOTY-52): share for everyone; a member's view of a group
-         also offers the member's own page; edit for the group's owner only. The labels change to
-         "share" where the system share sheet is used (touch only). Both also offer the #1 as an
-         image (AOTY-70, AOTY-71), for every visitor once the ranking shown has one: the #1, the top 3
-         (AOTY-73) or the top 10 (AOTY-74), each offered only with that many on screen, square or
-         9:16 for stories (AOTY-72). -->
-    <div class="page-tools" id="page-tools" hidden>
-      <button type="button" class="pill" id="share">copy link</button>
-      <button type="button" class="pill" id="share-member" hidden></button>
-      <button type="button" class="pill" id="share-image" hidden>share image</button>
-      <div class="switch small" role="group" aria-label="Image" id="content-switch" hidden>
-        <button type="button" data-content="top1" aria-pressed="true">#1</button>
-        <button type="button" data-content="top3" aria-pressed="false">top 3</button>
-        <button type="button" data-content="top10" aria-pressed="false">top 10</button>
+    <!-- AOTY-98: display on the left, sharing on the right; on phones they stack, display first. The
+         theme row opens under the whole bar, or under its toggle on phones (app.css "order"). -->
+    <div class="tool-bar">
+      <!-- The page's look, the owner's alone: its theme (AOTY-65, groups AOTY-76), and the group
+           owner's edit panel (AOTY-52). Everyone sees the theme they pick. -->
+      <div class="display-tools">
+        <div class="theme-tools" id="theme-tools" hidden>
+          <button type="button" class="pill" id="theme-toggle" aria-expanded="false" aria-controls="theme-row">theme</button>
+          <span class="tool-msg" id="theme-msg" role="status" aria-live="polite"></span>
+        </div>
+        <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
       </div>
-      <div class="switch small" role="group" aria-label="Image format" id="shape-switch" hidden>
-        <button type="button" data-shape="square" aria-pressed="true">square</button>
-        <button type="button" data-shape="story" aria-pressed="false">story</button>
+      <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
+      <!-- User and group pages (AOTY-84): share the link, for everyone; a member's view of a group
+           also offers the member's own page. A tap opens the system share sheet on touch devices
+           and copies elsewhere. "share image" shares the ranking shown as an image, once it has a
+           #1 (AOTY-70, AOTY-71). -->
+      <div class="page-tools" id="page-tools" hidden>
+        <button type="button" class="pill" id="share">share link</button>
+        <button type="button" class="pill" id="share-member" hidden></button>
+        <button type="button" class="pill" id="share-image" hidden>share image</button>
+        <div class="switch small" role="group" aria-label="Image" id="content-switch" hidden>
+          <button type="button" data-content="top1" aria-pressed="true">#1</button>
+          <button type="button" data-content="top3" aria-pressed="false">top 3</button>
+          <button type="button" data-content="top10" aria-pressed="false">top 10</button>
+        </div>
+        <div class="switch small" role="group" aria-label="Image format" id="shape-switch" hidden>
+          <button type="button" data-shape="square" aria-pressed="true">square</button>
+          <button type="button" data-shape="story" aria-pressed="false">story</button>
+        </div>
+        <span class="share-url" id="share-url" hidden></span>
+        <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>
       </div>
-      <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
-      <span class="share-url" id="share-url" hidden></span>
-      <span class="tool-msg" id="share-msg" role="status" aria-live="polite"></span>
     </div>
     <section class="edit" id="edit" aria-labelledby="edit-title" hidden>
       <h2 class="edit-title" id="edit-title" tabindex="-1">edit group</h2>

@@ -63,10 +63,10 @@ test("the share title names the page, never the tab's queue number", () => {
 });
 
 test("labels: one button, or the group and the member in a member's view", () => {
-  assert.deepEqual(shareLabels(false, null), {main: "copy link", member: null});
-  assert.deepEqual(shareLabels(true, null), {main: "share", member: null});
-  assert.deepEqual(shareLabels(false, "bob"), {main: "copy group link", member: "copy bob's link"});
-  assert.deepEqual(shareLabels(true, "bob"), {main: "share group", member: "share bob"});
+  // AOTY-98: the same words whether a tap shares or copies.
+  assert.equal(shareLabels.length, 1);
+  assert.deepEqual(shareLabels(null), {main: "share link", member: null});
+  assert.deepEqual(shareLabels("bob"), {main: "share group link", member: "share bob's link"});
 });
 
 test("files go through the share sheet only where canShare confirms them (AOTY-70)", () => {

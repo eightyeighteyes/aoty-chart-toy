@@ -1558,10 +1558,10 @@
   const native = data => share.useNative(navigator, coarse(), data);
   const memberTarget = () => ({kind: "user", id: groupWho, name: groupWho});
 
-  // The labels say what a tap does: "share" opens the share sheet (touch only), else "copy link".
+  // A tap opens the share sheet (touch only) or copies; the labels say "share" either way (AOTY-98).
   function renderShare() {
     const member = shareTarget && shareTarget.kind === "group" && groupWho ? groupWho : null;
-    const labels = share.shareLabels(native({url: linkFor(shareTarget || {kind: "user", id: ""})}), member);
+    const labels = share.shareLabels(member);
     $("share").textContent = labels.main;
     $("share-member").hidden = !member;
     if (member) $("share-member").textContent = labels.member;

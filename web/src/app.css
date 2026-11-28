@@ -402,8 +402,13 @@ html.has-aurora .account {
   outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px;
 }
 
-/* User and group pages (AOTY-84, AOTY-52): share for everyone, the group owner's edit panel. */
-.page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+/* The tool bar (AOTY-98): the page's look on the left (theme, the group owner's edit), sharing on
+   the right (AOTY-84), the theme row under both. A visitor who owns nothing gets no left side. */
+.tool-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 16px; }
+.display-tools { order: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.display-tools:not(:has(> :not([hidden]))) { display: none; }
+.page-tools { order: 2; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.tool-bar .theme-row { order: 3; flex-basis: 100%; margin-top: 0; }
 .pill, .quiet {
   font: 600 13px "DM Sans", system-ui, sans-serif; color: var(--ink); cursor: pointer;
   background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
@@ -416,7 +421,7 @@ html.has-aurora .account {
 .tool-msg { color: var(--muted); font-size: 13px; }
 /* The owner's theme picker (AOTY-65): a row of pills, each with a dot of the theme's own colours
    (--sw-bg, --sw-a, --sw-b set per swatch; "album of the year" shows the #1 cover in its dot). */
-.theme-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+.theme-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .theme-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .swatch { display: inline-flex; align-items: center; gap: 8px; }
 .swatch[aria-pressed="true"] { border-color: var(--accent-2); }
@@ -578,4 +583,11 @@ li:hover > .row { background: color-mix(in srgb, var(--panel) 92%, var(--ink)); 
   .state { padding: 28px 20px; }
   .wall { --tile: 64px; --sway: 20px; gap: 6px; }
   .wall-row { gap: 6px; }
+}
+
+/* Phones (AOTY-98): the look, then its theme row right under the toggle, then sharing, all left. */
+@media (max-width: 560px) {
+  .tool-bar { flex-direction: column; align-items: flex-start; }
+  .tool-bar .theme-row { order: 2; flex-basis: auto; align-self: stretch; }
+  .page-tools { order: 3; margin-left: 0; }
 }

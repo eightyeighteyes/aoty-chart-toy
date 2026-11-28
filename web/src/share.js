@@ -39,13 +39,12 @@
     return kind === "group" ? `${name} · ${product} ${year}` : `${name}'s ${product} ${year}`;
   }
 
-  // The buttons' labels. A member's view of a group (?user=) offers the group and the member's
-  // own page (user decision 2026-11-27); member is that member's name, or null.
-  function shareLabels(native, member) {
-    if (!member) return {main: native ? "share" : "copy link", member: null};
-    return native
-      ? {main: "share group", member: `share ${member}`}
-      : {main: "copy group link", member: `copy ${member}'s link`};
+  // The link buttons' labels: "share" whether a tap opens the share sheet or copies (AOTY-98). A
+  // member's view of a group (?user=) offers the group and the member's own page (user decision
+  // 2026-11-27); member is that member's name, or null.
+  function shareLabels(member) {
+    if (!member) return {main: "share link", member: null};
+    return {main: "share group link", member: `share ${member}'s link`};
   }
 
   // A user chart's #1 (By Play, its one ranking), or null before it ranks anything.
