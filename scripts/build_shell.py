@@ -40,6 +40,7 @@ ASSETS = {
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",
   "theme.js": "THEME",
+  "backgrounds.js": "BACKGROUNDS",  # what every first-visit background shares (AOTY-77)
   "borealis.js": "BOREALIS",
   "favicon.svg": "ICON",
   "apple-touch-icon.png": "TOUCH",

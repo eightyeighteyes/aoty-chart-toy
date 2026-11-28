@@ -713,12 +713,13 @@
   // and html.has-aurora makes body's own background transparent so it shows. That class stays until
   // the fade-out ends: removed earlier, body's background would hide the canvas at once.
   const bo = globalThis.aotyBorealis;  // web/src/borealis.js, loaded first
+  const bgs = globalThis.aotyBg;  // web/src/backgrounds.js: the palette every background shares (AOTY-77)
   const AURORA_DELAY_MS = 1500, AURORA_FADE_MS = 600;
   let aurora = null, auroraCanvas = null, auroraTimer = 0, auroraFeed = 0;
   let auroraPixels = [], auroraSent = null;
 
   function startAurora() {
-    if (!bo || auroraCanvas || auroraTimer) return;
+    if (!bo || !bgs || auroraCanvas || auroraTimer) return;
     auroraTimer = setTimeout(mountAurora, AURORA_DELAY_MS);
   }
 
@@ -759,8 +760,8 @@
     const all = new Uint8ClampedArray(auroraPixels.reduce((n, p) => n + p.length, 0));
     let at = 0;
     for (const p of auroraPixels) { all.set(p, at); at += p.length; }
-    const {colors, source} = bo.extractPalette(all, pageColors().accent);
-    if (source !== "art" || !bo.paletteChanged(auroraSent, colors)) return;
+    const {colors, source} = bgs.extractPalette(all, pageColors().accent);
+    if (source !== "art" || !bgs.paletteChanged(auroraSent, colors)) return;
     auroraSent = colors;
     aurora.setPalette(colors);
   }
