@@ -816,5 +816,38 @@ def test_each_sign_in_request_emits_one_line_with_its_outcome(h, capsys):
   assert [x["auth"] for x in lines] == ["started", "signed_in", "anonymous"]
   assert [x["LastfmCalls"] for x in lines] == [0, 1, 0]
   assert all(
-    set(m["Name"] for m in x["_aws"]["CloudWatchMetrics"][0]["Metrics"]) == {"LastfmCalls"} for x in lines
+    set(m["Name"] for m in x["_aws"]["CloudWatchMetrics"][0]["Metrics"]) == {"LastfmCalls", "AuthFailures"}
+    for x in lines
   )
+  assert [x["AuthFailures"] for x in lines] == [0, 0, 0]
+
+
+def _callback(h, d, query):
+  state, nonce, _ = start(h, d)
+  return auth_call(h, d, "GET", f"auth/callback/{nonce}", cookies={session.STATE_COOKIE: state}, query=query)
+
+
+@pytest.mark.parametrize(
+  ("error", "counted"),
+  [(lastfm.LastfmError(4, "bad token"), 0), (lastfm.LastfmError(14, "not authorized"), 0),
+   (lastfm.LastfmError(15, "expired"), 0), (lastfm.LastfmError(11, "service offline"), 1),
+   (TimeoutError("slow"), 1)],
+)  # fmt: skip
+def test_auth_failures_count_only_failures_of_ours(h, capsys, error, counted):
+  _callback(h, auth_deps(h, fm=AuthLastfm(error=error)), {"token": "T"})
+  assert [x["AuthFailures"] for x in _emf(capsys)] == [0, counted]
+
+
+def test_visitor_made_auth_failures_never_count(h, capsys):
+  d = auth_deps(h)
+  _callback(h, d, None)  # no token
+  auth_call(h, d, "GET", "auth/callback/forged", query={"token": "T"})  # no state cookie
+  auth_call(h, d, "GET", "auth/callback/forged", cookies={session.STATE_COOKIE: "junk"}, query={"token": "T"})
+  assert sum(x["AuthFailures"] for x in _emf(capsys)) == 0
+
+
+def test_unreadable_sign_in_keys_count_as_auth_failures(h, capsys):
+  d = auth_deps(h, auth={})
+  auth_call(h, d, "GET", "auth/start")
+  auth_call(h, d, "GET", "me")
+  assert [x["AuthFailures"] for x in _emf(capsys)] == [1, 1]

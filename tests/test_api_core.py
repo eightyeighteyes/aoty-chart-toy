@@ -386,3 +386,14 @@ def test_status_carries_the_wall_and_drops_malformed_entries():
 @pytest.mark.parametrize("raw", ["", "not json", "[1, 2]", '{"wall": "x"}', '{"wall": []}'])
 def test_a_bad_or_empty_preview_means_no_wall(raw):
   assert "wall" not in core.status({"state": "syncing", "sync_started_at": NOW, "preview": raw}, NOW, COOL)
+
+
+@pytest.mark.parametrize(
+  ("outcome", "code", "ours"),
+  [("unavailable", None, True), ("bad_name", None, True), ("lastfm_failed", None, True),
+   ("lastfm_failed", 11, True), ("lastfm_failed", 4, False), ("lastfm_failed", 14, False),
+   ("lastfm_failed", 15, False), ("bad_state", None, False), ("no_state", None, False),
+   ("no_token", None, False), ("signed_in", None, False), ("anonymous", None, False), (None, None, False)],
+)  # fmt: skip
+def test_auth_failure_is_only_ours(outcome, code, ours):
+  assert core.auth_failure(outcome, code) is ours

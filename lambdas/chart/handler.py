@@ -120,9 +120,11 @@ def handler(event, context, deps=None):
       _guarded(deps, group_id, totals, lambda: _count(totals, restyle_group(deps, group_id)))
     else:
       requested_at = int(event.get("requested_at") or 0)
-      _guarded(
-        deps, group_id, totals, lambda: _count(totals, build_group(deps, group_id, requested_at=requested_at))
-      )
+
+      def build():
+        _count(totals, build_group(deps, group_id, requested_at=requested_at, totals=totals))
+
+      _guarded(deps, group_id, totals, build)
   elif event.get("pending"):
     rebuilt = []
     for row in _pending_users(deps):
@@ -130,7 +132,7 @@ def handler(event, context, deps=None):
       _guarded(deps, row["username"], totals, lambda r=row: _rebuild_if_resolved(deps, r, totals, rebuilt))
     # Albums the mb lane just dated reach the groups too, each group once per run (AOTY-50).
     for group_id in _groups_with(deps, *rebuilt):
-      _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g)))
+      _guarded(deps, group_id, totals, lambda g=group_id: _count(totals, build_group(deps, g, totals=totals)))
   else:
     username = str(event.get("username") or "").strip().lower()
     if not USERNAME_RE.match(username):
@@ -172,7 +174,7 @@ def _build_requested(deps, username, year, requested_at, totals):
   finished = int(row.get("sync_finished_at") or 0)
   for group_id in _groups_with(deps, username):
     _guarded(deps, group_id, totals,
-             lambda g=group_id: _count(totals, build_group(deps, g, member_finished_at=finished)))  # fmt: skip
+             lambda g=group_id: _count(totals, build_group(deps, g, member_finished_at=finished, totals=totals)))  # fmt: skip
 
 
 def _rebuild_if_resolved(deps, row, totals, rebuilt=None):
@@ -312,7 +314,7 @@ def _restyle_published(deps, key, theme):
   return chart
 
 
-def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finished_at=0):
+def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finished_at=0, totals=None):
   """One group's chart from its ready members' stores (group_core). False for no such group, or
   when its chart already covers requested_at, or (for a member's build) member_finished_at.
 
@@ -328,7 +330,12 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finishe
 
   chart_built_at is stamped with the chart_requested_at read before the build, not the time it
   ends: a member change made while a 25-member build runs must not count as built.
+
+  totals, if given, gets the run's group counts for its metric line (AOTY-53): groups_built,
+  groups_coalesced (skipped because a build already covers the request or the member's sync), and
+  the biggest build's group_seconds_max and group_members_max.
   """
+  totals = {} if totals is None else totals
   if not grp.SLUG_RE.match(group_id):
     log.warning("invalid group id in event; dropped")
     return False
@@ -336,12 +343,15 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finishe
   if meta is None:
     return False
   if requested_at and (meta.get("chart_built_at") or 0) >= requested_at:
+    _bump(totals, "groups_coalesced")
     return False
   # sync_finished_at is whole seconds: the finish was somewhere in that second, so only a read from
   # the next second on is sure to be after it.
   if member_finished_at and (meta.get("chart_read_at") or 0) >= (member_finished_at + 1) * 1000:
     log.info("group %s: already has this member's sync", group_id)
+    _bump(totals, "groups_coalesced")
     return False
+  started = deps.mono()
   read_at = int(deps.clock() * 1000)
   stores, waiting, unavailable, images = {}, 0, 0, {}
   for member in members:
@@ -370,6 +380,10 @@ def build_group(deps, group_id, year=TARGET_YEAR, requested_at=0, member_finishe
   )  # fmt: skip
   _put_preview(deps, group_og_key(deps.env.get("SITE_PREFIX", ""), group_id), og.group_page, chart)
   _stamp_group(deps, group_id, meta.get("chart_requested_at"), read_at)
+  _bump(totals, "groups_built")
+  seconds = round(deps.mono() - started, 2)
+  if seconds >= totals.get("group_seconds_max", 0):
+    totals["group_seconds_max"], totals["group_members_max"] = seconds, len(members)
   log.info(
     "group %s: %d ready, %d waiting, %d albums shown", group_id, len(stores), waiting, len(chart["albums"])
   )
@@ -682,8 +696,14 @@ def _emit(deps, totals, elapsed, lastfm_calls=0):
     "pending_checked": totals["checked"],
     "og_failed": totals.get("og_failed", 0),  # preview pages not written (AOTY-85); not a metric
     "card_failed": totals.get("card_failed", 0),  # preview cards not drawn, by failure (AOTY-91)
+    # Group builds (AOTY-53): plain fields, not metrics (user decision 2026-11-27). A run's
+    # coalesced builds are the ones AOTY-55's chart_read_at check (or chart_built_at) saved.
+    **{k: totals.get(k, 0) for k in GROUP_FIELDS},
   }
   print(json.dumps(line, separators=(",", ":")))
+
+
+GROUP_FIELDS = ("groups_built", "groups_coalesced", "group_seconds_max", "group_members_max")
 
 
 def _tag(username):

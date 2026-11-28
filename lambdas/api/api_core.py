@@ -29,6 +29,7 @@ import re
 from urllib.parse import parse_qsl, unquote, urlencode
 
 from common import themes
+from common.lastfm import TOKEN_CODES
 from common.username import USERNAME_RE  # noqa: F401 (re-exported: api/handler.py, tools/preview_groups.py)
 
 ACTIVE = frozenset({"queued", "syncing", "retrying"})
@@ -198,6 +199,20 @@ def sync_outcome(status, body, new=False):
   return str(body.get("reason") or body.get("error") or status)
 
 
+# Sign-in outcomes that only a fault on our side can cause (AOTY-53's AuthFailures, which is alarmed):
+# the keys or secret unreadable, Last.fm failing for a reason that isn't the token, a name we refuse.
+# Anyone can send the callback a bad state, no token or a made-up one, so those never count.
+_OUR_AUTH_FAILURES = frozenset({"unavailable", "bad_name"})
+
+
+def auth_failure(outcome, code=None):
+  """True when a sign-in request's outcome (info["auth"]) is a failure of ours, not the visitor's.
+  code: the Last.fm error code of a lastfm_failed, or None (a timeout, a network error)."""
+  if outcome in _OUR_AUTH_FAILURES:
+    return True
+  return outcome == "lastfm_failed" and code not in TOKEN_CODES
+
+
 def client_ip(headers, source_ip, trusted):
   """The viewer's IP for the per-IP limit.
 
@@ -228,6 +243,12 @@ def ip_limit_key(ip, hour):
   except ValueError:
     bucket = ip
   return f"ip#{hashlib.sha256(bucket.encode()).hexdigest()[:16]}#{hour}"
+
+
+def owner_adds_key(owner, hour):
+  """The guard table key counting one group owner's member adds in one hour (AOTY-53). Hashed, as
+  the per-IP key: the guard table never stores a username."""
+  return f"adds#{name_tag(owner)}#{hour}"
 
 
 def name_tag(name):

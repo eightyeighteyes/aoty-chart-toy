@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from common.groups import SLUG_RE
+from common.username import USERNAME_RE
+
 TOOL = Path(__file__).resolve().parent.parent / "tools" / "load_test.py"
 
 
@@ -55,3 +58,36 @@ def test_summary_and_report(lt):
 
 def test_an_empty_run_still_summarizes(lt):
   assert lt.summarize({})["peak_lastfm_per_s"] == 0
+
+
+# ---- groups (AOTY-53) ---------------------------------------------------------------------
+
+
+def test_the_group_plan_uses_names_the_fake_knows_one_group_per_owner(lt):
+  plan = lt.group_plan(10, 25)
+  assert len(plan) == 10 and len({owner for _, owner, _ in plan}) == 10
+  slug, owner, members = plan[0]
+  assert (slug, owner) == ("loadtest-g01", "loadtest-owner-01")
+  assert len(members) == 25 and members[0] == "loadtest-g01-m01" and members[-1] == "loadtest-g01-m25"
+  every = [owner for _, owner, _ in plan] + [m for _, _, ms in plan for m in ms]
+  assert all(n.startswith("loadtest-") for n in every)  # common/fakelastfm.py only knows these
+  assert all(USERNAME_RE.match(n) for n in every) and all(SLUG_RE.match(s) for s, _, _ in plan)
+
+
+def test_the_group_summary_shows_coalescing(lt):
+  t = dt.datetime(2026, 11, 27, 12, 0, tzinfo=dt.UTC)
+  minutes = {t: {"chart_duration_ms": 200_000, "card_duration_ms": 30_000}}
+  builds = {"charts_built": "290", "groups_built": "40", "groups_coalesced": "210", "slowest_s": "6.5",
+            "biggest": "25"}  # fmt: skip
+  s = lt.group_summary({"create": {201: 10}, "add": {201: 250}}, builds, minutes)
+  assert (s["group_builds"], s["coalesced"], s["coalesced_pct"], s["member_builds"]) == (40, 210, 84, 250)
+  assert (s["slowest_group_s"], s["biggest_group"], s["chart_gb_s"], s["card_gb_s"]) == (6.5, 25, 100.0, 30.0)
+  text = lt.group_report(SimpleNamespace(groups=10, members=25), s)
+  assert "| Group builds / coalesced | 40 / 210 (84% saved) |" in text
+  assert "| Member add answers | 201: 250 |" in text
+  assert lt.group_report(SimpleNamespace(groups=0, members=25), s) == ""
+
+
+def test_a_group_summary_with_no_logs_yet_is_zeros(lt):
+  s = lt.group_summary({}, {}, {})
+  assert (s["group_builds"], s["coalesced_pct"], s["chart_gb_s"]) == (0, 0, 0)

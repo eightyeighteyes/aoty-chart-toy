@@ -2,6 +2,7 @@
 
   .venv/bin/python tools/load_test.py --users 300            # about 15 min with the default rates
   .venv/bin/python tools/load_test.py --users 20 --watch 5   # a quick dry run
+  .venv/bin/python tools/load_test.py --users 0 --groups 10 --members 25   # groups (AOTY-53)
   .venv/bin/python scripts/sandbox_reset.py --yes --keep-albums   # afterwards
 
 What it checks: the queue grows while sync concurrency, Last.fm's request rate and spend stay flat.
@@ -17,6 +18,13 @@ What it checks: the queue grows while sync concurrency, Last.fm's request rate a
      count, all functions), sync invocations and duration, chart throttles, the oldest message's
      age. Writes data/load_test/run-<ts>/report.md.
   6. Always (in `finally`) removes LASTFM_FAKE and puts the SSM values back as they were.
+
+With --groups (AOTY-53), after the users: synthetic owners loadtest-owner-NN each create one group
+loadtest-gNN and add --members members loadtest-gNN-mMM, at --rate requests per second. The owners
+are signed in with cookies minted here from sandbox's own session_key (read from SSM with the same
+admin credentials and sandbox guard), so no deployed code has a fake sign-in. The report adds the
+group answers, and from the chart builder's EMF fields (Logs Insights) its builds of groups against
+the ones coalesced (AOTY-55), the slowest and biggest group build, and the chart and card GB-s.
 
 Needs admin credentials (aws CLI) and an initialised infra/envs/sandbox. Run nothing else
 against sandbox meanwhile: the mb lane looks up the fake's 30 made-up albums once.
@@ -34,12 +42,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "lambdas"))
 
+from common import session  # noqa: E402
 from scripts import sandbox_reset as sb  # noqa: E402
 
 FAKED = ("api", "sync", "chart", "mb")
 RAISED = {"new_users_per_ip_hour": "100000", "max_queue_for_new": "100000"}
 SAMPLE_S = 30
+MEMORY_GB = {"sync": 0.5, "chart": 0.5, "card": 1.0}  # infra/modules/stack/functions.tf
+LOGS_WAIT_S = 120
 
 
 # ---- pure parts (tests/test_load_test.py) -------------------------------------------------
@@ -55,6 +67,58 @@ def with_fake(variables, on):
 
 def usernames(n, prefix="loadtest-"):
   return [f"{prefix}{i:04d}" for i in range(1, n + 1)]
+
+
+def group_plan(groups, members):
+  """[(slug, owner, [members])] for the synthetic groups (AOTY-53): names the fake Last.fm knows
+  (loadtest-*), each owner with one group, so no per-owner limit is touched."""
+  return [(f"loadtest-g{g:02d}", f"loadtest-owner-{g:02d}", [f"loadtest-g{g:02d}-m{m:02d}" for m in range(1, members + 1)])
+          for g in range(1, groups + 1)]  # fmt: skip
+
+
+def group_summary(answers, builds, minutes):
+  """Headline group numbers. answers: {"create": {status: n}, "add": {status: n}}; builds: the
+  chart log query's one row of sums ({} if none); minutes as summarize's."""
+  def col(name):
+    return sum(row.get(name) or 0 for row in minutes.values())
+
+  built, coalesced = int(builds.get("groups_built") or 0), int(builds.get("groups_coalesced") or 0)
+  return {
+    "creates": answers.get("create", {}),
+    "adds": answers.get("add", {}),
+    "group_builds": built,
+    "coalesced": coalesced,
+    # Of the group builds members' syncs asked for, the share that coalescing saved.
+    "coalesced_pct": round(100 * coalesced / (built + coalesced)) if built + coalesced else 0,
+    "member_builds": max(0, int(builds.get("charts_built") or 0) - built),
+    "slowest_group_s": float(builds.get("slowest_s") or 0),
+    "biggest_group": int(builds.get("biggest") or 0),
+    "chart_gb_s": round(col("chart_duration_ms") / 1000 * MEMORY_GB["chart"], 1),
+    "card_gb_s": round(col("card_duration_ms") / 1000 * MEMORY_GB["card"], 1),
+  }
+
+
+def group_report(args, summary):
+  """The report's groups section (AOTY-53), or "" for a run without groups."""
+  if not args.groups:
+    return ""
+  fmt = lambda d: ", ".join(f"{k}: {v}" for k, v in sorted(d.items())) or "none"  # noqa: E731
+  s = summary
+  return "\n".join([
+    "## Groups",
+    "",
+    f"{args.groups} groups of {args.members}, one owner each.",
+    "",
+    "| | |",
+    "|---|---|",
+    f"| Create answers | {fmt(s['creates'])} |",
+    f"| Member add answers | {fmt(s['adds'])} |",
+    f"| Member chart builds | {s['member_builds']} |",
+    f"| Group builds / coalesced | {s['group_builds']} / {s['coalesced']} ({s['coalesced_pct']}% saved) |",
+    f"| Slowest group build | {s['slowest_group_s']} s ({s['biggest_group']} members) |",
+    f"| Chart builder, card GB-s | {s['chart_gb_s']}, {s['card_gb_s']} |",
+    "",
+  ])
 
 
 def summarize(minutes):
@@ -153,9 +217,11 @@ def write_params(stack, pairs):
       print(f"{name}: {e}")
 
 
-def http(method, url, body=None):
-  req = urllib.request.Request(url, method=method, data=body,
-                               headers={"content-type": "application/json", "user-agent": "aoty-load-test/1"})
+def http(method, url, body=None, cookie=None):
+  headers = {"content-type": "application/json", "user-agent": "aoty-load-test/1"}
+  if cookie:
+    headers["cookie"] = cookie
+  req = urllib.request.Request(url, method=method, data=body, headers=headers)
   try:
     with urllib.request.urlopen(req, timeout=30) as r:
       return r.status, json.loads(r.read() or b"{}")
@@ -188,6 +254,8 @@ def metrics(stack, started, ended):
     q("chart_throttles", "AWS/Lambda", "Throttles", {"FunctionName": fns["chart"]}, "Sum"),
     q("oldest_age_s", "AWS/SQS", "ApproximateAgeOfOldestMessage", {"QueueName": sync_q}, "Maximum"),
     q("lastfm_calls", "kamp-aoty", "FakeLastfmCalls", {"Environment": stack["environment"]}, "Sum"),
+    q("chart_duration_ms", "AWS/Lambda", "Duration", {"FunctionName": fns["chart"]}, "Sum"),
+    q("card_duration_ms", "AWS/Lambda", "Duration", {"FunctionName": fns["card"]}, "Sum"),
   ]
   out = sb.run_aws(["cloudwatch", "get-metric-data", "--metric-data-queries", json.dumps(queries),
                     "--start-time", started.isoformat(), "--end-time", (ended + dt.timedelta(minutes=2)).isoformat()])
@@ -197,6 +265,53 @@ def metrics(stack, started, ended):
       minute = dt.datetime.fromisoformat(t).astimezone(dt.UTC).replace(second=0, microsecond=0)
       minutes.setdefault(minute, {})[r["Id"]] = int(v)
   return minutes
+
+
+def session_cookie(stack, username):
+  """A session cookie for username, signed with sandbox's own key: only after sb.guard passed."""
+  name = ssm_name(stack, "session_key")
+  out = sb.run_aws(["ssm", "get-parameter", "--name", name, "--with-decryption"])
+  token = session.new_session(username, out["Parameter"]["Value"], int(time.time()))
+  return f"{session.SESSION_COOKIE}={token}"
+
+
+def run_groups(stack, args, answers):
+  """Create the synthetic groups and add their members, counting answers by status."""
+  api = f"{stack['api_endpoint']}{stack['base_path']}api/"
+  plan = group_plan(args.groups, args.members)
+  print(f"creating {len(plan)} groups of {args.members}")
+  for slug, owner, members in plan:
+    cookie = session_cookie(stack, owner)
+    code, _ = http("POST", f"{api}groups", json.dumps({"name": slug.replace("-", " "), "slug": slug}).encode(), cookie)
+    answers.setdefault("create", {})[code] = answers["create"].get(code, 0) + 1
+    time.sleep(1 / args.rate)
+    for m in members:
+      code, _ = http("POST", f"{api}groups/{slug}/members", json.dumps({"username": m}).encode(), cookie)
+      answers.setdefault("add", {})[code] = answers["add"].get(code, 0) + 1
+      time.sleep(1 / args.rate)
+    print(f"  {slug}: adds so far {answers['add']}")
+
+
+def logs_query(log_group, query, started, ended, sleep=time.sleep):
+  """One Logs Insights query's rows as [{field: value}]."""
+  qid = sb.run_aws(["logs", "start-query", "--log-group-name", log_group, "--query-string", query,
+                    "--start-time", str(int(started.timestamp())), "--end-time", str(int(ended.timestamp()) + 300)])["queryId"]
+  for _ in range(60):
+    out = sb.run_aws(["logs", "get-query-results", "--query-id", qid])
+    if out.get("status") in ("Complete", "Failed", "Cancelled", "Timeout"):
+      return [{c["field"]: c["value"] for c in row} for row in out.get("results", [])]
+    sleep(2)
+  return []
+
+
+def group_builds(stack, started, ended):
+  rows = logs_query(
+    f"/aws/lambda/{stack['function_names']['chart']}",
+    "filter ispresent(ChartsBuilt) | stats sum(ChartsBuilt) as charts_built, sum(groups_built) as groups_built, "
+    "sum(groups_coalesced) as groups_coalesced, max(group_seconds_max) as slowest_s, max(group_members_max) as biggest",
+    started, ended,
+  )  # fmt: skip
+  return rows[0] if rows else {}
 
 
 # ---- the run ------------------------------------------------------------------------------
@@ -209,7 +324,9 @@ def run(args):
   api = f"{stack['api_endpoint']}{stack['base_path']}api/users/"
   names = usernames(args.users)
   watched = random.Random(26).sample(names, min(5, len(names)))
-  posts, depths, places = {}, [], []
+  posts, depths, places, answers = {}, [], [], {}
+  if args.groups:
+    session_cookie(stack, "loadtest-owner-01")  # sign-in set up in sandbox? Fail before changing anything.
   previous = read_params(stack)
   started = dt.datetime.now(dt.UTC)
   try:
@@ -221,6 +338,8 @@ def run(args):
       time.sleep(1 / args.rate)
       if i % 50 == 49:
         print(f"  {i + 1} posted; answers so far {sorted(set(posts.values()))}")
+    if args.groups:
+      run_groups(stack, args, answers)
     deadline = time.time() + args.watch * 60
     while time.time() < deadline:
       now = dt.datetime.now(dt.UTC)
@@ -244,8 +363,11 @@ def run(args):
   time.sleep(180)
   out = REPO / "data" / "load_test" / f"run-{started:%Y%m%dT%H%M%S}"
   out.mkdir(parents=True, exist_ok=True)
-  (out / "report.md").write_text(report(stack, args, posts, depths, places, metrics(stack, started, ended),
-                                        started, ended))
+  minutes = metrics(stack, started, ended)
+  text = report(stack, args, posts, depths, places, minutes, started, ended)
+  if args.groups:
+    text += "\n" + group_report(args, group_summary(answers, group_builds(stack, started, ended), minutes))
+  (out / "report.md").write_text(text)
   print(f"wrote {out / 'report.md'}")
 
 
@@ -254,7 +376,12 @@ def main():
   ap.add_argument("--users", type=int, default=300)
   ap.add_argument("--rate", type=float, default=1.5, help="POSTs per second (the POST route allows 2)")
   ap.add_argument("--watch", type=float, default=30, help="minutes to watch the queue drain")
-  run(ap.parse_args())
+  ap.add_argument("--groups", type=int, default=0, help="synthetic groups to create (AOTY-53)")
+  ap.add_argument("--members", type=int, default=25, help="members per group (25 at most)")
+  args = ap.parse_args()
+  if not 1 <= args.members <= 25 or not 0 <= args.groups <= 99:
+    ap.error("--members is 1-25 (the group cap) and --groups 0-99")
+  run(args)
 
 
 if __name__ == "__main__":

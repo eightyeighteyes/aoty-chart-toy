@@ -108,3 +108,15 @@ test("an owner removing themselves is told they keep the group", () => {
   assert.match(removeText("alice", "alice")[1], /still own/);
   assert.equal(removeText("bob", "alice")[0], "remove bob?");
 });
+
+test("each group guardrail has a friendly refusal (AOTY-53)", () => {
+  assert.equal(answer("create", 503, {error: "groups_paused"}).message, MSG.groupsPaused);
+  assert.equal(answer("add", 503, {error: "groups_paused"}).message, MSG.groupsPaused);
+  assert.equal(answer("create", 409, {error: "too_many_groups", max: 10}).message,
+               "you can have up to 10 groups. delete one to start another.");
+  assert.equal(answer("create", 409, {error: "too_many_groups"}).message,
+               "you can have only so many groups. delete one to start another.");
+  assert.equal(answer("add", 429, {error: "too_many_adds", max: 50}).message, MSG.tooManyAdds);
+  // API Gateway's own throttle has no error word: still the throttled message.
+  assert.equal(answer("add", 429, {message: "Too Many Requests"}).message, MSG.throttled);
+});

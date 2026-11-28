@@ -7,6 +7,12 @@
   /kamp-aoty/<env>/max_queue_for_new      int > 0     new users are refused while the sync queue is deeper
   /kamp-aoty/<env>/group_sync_cooldown_seconds
                                           int > 0     a group page's visit syncs its members at most this often
+  /kamp-aoty/<env>/max_groups_per_owner   int > 0     groups one person may own (AOTY-53; soft: counted before
+                                                      a create, so two racing creates can make one more)
+  /kamp-aoty/<env>/max_group_member_adds_per_hour
+                                          int > 0     member adds one owner may try per hour, across their groups
+  /kamp-aoty/<env>/pause_groups           true|false  no group creates or member adds; group pages, renames,
+                                                      removals, leaving and visit syncs carry on
 
 Values are set by hand (`aws ssm put-parameter --type String --overwrite`); Terraform only knows the
 names, as for the other parameters (infra/modules/stack/ssm.tf). A missing parameter means its
@@ -17,8 +23,8 @@ Failure rules:
 - A malformed value is ignored: the last good value (else the default) stays, with an error log and
   a GuardrailBadValue metric, so a typo can't silently un-pause anything.
 - If SSM can't be read, the last good settings stay. A container that has never read them treats
-  new users as paused (Settings.new_users_paused): during a surge, a cold start mustn't ignore an
-  active pause.
+  new users and group writes as paused (Settings.new_users_paused, groups_paused): during a surge, a
+  cold start mustn't ignore an active pause.
 """
 
 import hmac
@@ -43,11 +49,18 @@ class Settings:
   new_users_per_ip_hour: int = 10
   max_queue_for_new: int = 500
   group_sync_cooldown_seconds: int = 3600  # AOTY-55
+  max_groups_per_owner: int = 10  # AOTY-53
+  max_group_member_adds_per_hour: int = 50
+  pause_groups: bool = False
   loaded: bool = True  # False until a read of SSM has succeeded once
 
   @property
   def new_users_paused(self):
     return self.pause_new_users or self.pause_syncs or not self.loaded
+
+  @property
+  def groups_paused(self):
+    return self.pause_groups or not self.loaded
 
 
 DEFAULTS = Settings()
@@ -58,6 +71,9 @@ NAMES = (
   "new_users_per_ip_hour",
   "max_queue_for_new",
   "group_sync_cooldown_seconds",
+  "max_groups_per_owner",
+  "max_group_member_adds_per_hour",
+  "pause_groups",
 )
 
 
