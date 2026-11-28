@@ -3,17 +3,15 @@
 // It sets globalThis.kampConsent before kampstats.js runs; the pure rules are exported for
 // node --test (web/test/consent.test.mjs).
 //
-// User decisions (2026-11-27): one choice for all of kamp.fm; only EU/UK/EEA visitors are asked;
-// gtag.js isn't loaded at all until a yes (Consent Mode's basic setup), and a yes turns analytics on
-// without a reload.
+// User decisions (2026-11-27): one choice for all of kamp.fm; gtag.js isn't loaded at all until a
+// yes (Consent Mode's basic setup), and a yes turns analytics on without a reload. Revised
+// 2026-11-28: **every visitor is asked**, wherever they are. kamp-site's CloudFront function still
+// sets a kamp_ask region cookie (1 in the EU27, the EEA, the UK and CH); this file ignores it.
 //
-// The contract between the two sites is two first-party cookies on kamp.fm (Path=/):
-//   kamp_ask      1 | 0     set by kamp-site's viewer-response CloudFront function from
-//                           CloudFront-Viewer-Country: 1 in the EU27, the EEA, the UK and CH. No
-//                           cookie (a local preview, the function missing) means ask: fail closed.
+// The contract between the two sites is one first-party cookie on kamp.fm (Path=/):
 //   kamp_consent  granted | denied   the visitor's choice, for CONSENT_MAX_AGE_S (about 6 months,
 //                           then they're asked again)
-// Nothing else is stored, and neither cookie names anyone.
+// Nothing else is stored, and the cookie names no one.
 //
 // The banner styles itself from the page's colour tokens: the toy's names first (--panel, --ink,
 // --line, --accent, --on-accent), then kamp.fm's (--surface, --text, --border), then fixed fallbacks.
@@ -23,7 +21,6 @@
 (function (root) {
   "use strict";
 
-  const ASK = "kamp_ask";
   const CONSENT = "kamp_consent";
   const CONSENT_MAX_AGE_S = 180 * 24 * 3600;
   const TEXT = {
@@ -46,16 +43,12 @@
     return out;
   }
 
-  // granted | denied | ask, from the cookies. A choice wins; with none, only a visitor kamp-site
-  // marked as outside the asked regions (kamp_ask=0) is granted without asking.
+  // granted | denied | ask, from the cookies: a choice wins, and with none we ask, wherever the
+  // visitor is (kamp_ask is ignored).
   function decide(cookies) {
     const choice = cookies[CONSENT];
-    if (choice === "granted" || choice === "denied") return choice;
-    return cookies[ASK] === "0" ? "granted" : "ask";
+    return choice === "granted" || choice === "denied" ? choice : "ask";
   }
-
-  // Whether this visitor is one we ask (so the footer offers to change the choice).
-  const asked = cookies => cookies[ASK] !== "0";
 
   function consentCookie(granted, secure) {
     return `${CONSENT}=${granted ? "granted" : "denied"}; Path=/; Max-Age=${CONSENT_MAX_AGE_S}; SameSite=Lax` +
@@ -144,7 +137,6 @@
     const api = {
       enabled,
       state: () => current,
-      asked: () => asked(read()),
       // fn(state) now, and again on every change.
       onChange(fn) {
         listeners.push(fn);
@@ -167,8 +159,8 @@
     return api;
   }
 
-  const exported = {ASK, CONSENT, CONSENT_MAX_AGE_S, TEXT, parseCookies, decide, asked, consentCookie,
-                    expireGaCookies, create};
+  const exported = {CONSENT, CONSENT_MAX_AGE_S, TEXT, parseCookies, decide, consentCookie, expireGaCookies,
+                    create};
   if (typeof module !== "undefined" && module.exports) module.exports = exported;
 
   if (typeof document !== "undefined") {
