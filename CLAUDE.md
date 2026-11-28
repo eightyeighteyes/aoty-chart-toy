@@ -58,7 +58,7 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
 | `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
-| `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
+| `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`; AOTY-53's `pause_groups`, `max_groups_per_owner`, `max_group_member_adds_per_hour`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
 | `lambdas/uptime/` | Hourly uptime check (AOTY-27). `uptime_core.py` is pure (URLs, what counts as up); `handler.py` fetches `kamp.fm<base>`, `api/health` and the SSM `uptime_user`'s chart.json, and emits `UptimeChecks`/`UptimeFailures` even on a crash. |
@@ -543,6 +543,40 @@ stop through `pause_syncs` at the api, plus disabling the sync mapping as the ha
   equal values let a stray direct invoke throttle the mapping into the DLQ.
 - Last.fm is also called by the chart builder (covers) and the mb lane (track counts), so
   `sync_concurrency` caps the sync worker's rate only. The fake is wired into all four functions.
+
+## Group guardrails (AOTY-53, 2026-11-27)
+
+Runbook: `infra/README.md`, "Guardrails" and "Alarms". User decisions:
+- **New metric names only where an alarm needs one.** `AuthFailures` is the only new metric. Group
+  creates and adds are the api line's `outcome` (`created`, `added`), and group builds are plain
+  fields on the chart line (`groups_built`, `groups_coalesced`, `group_seconds_max`,
+  `group_members_max`), shown by two free Logs Insights tables on the dashboard.
+- **`max_groups_per_owner` (10) is soft:** `by_owner` is counted before a create, so two racing
+  creates can make an 11th.
+- **`pause_groups` stops creates and member adds only** (503 `groups_paused`). Renames, deletes,
+  themes, removals, leaving and visit syncs carry on. A container that never read SSM counts as
+  paused (`Settings.groups_paused`), as for new users.
+- One PR.
+
+Notes:
+- **`max_group_member_adds_per_hour` (50) counts distinct names per owner**, across their groups,
+  in guard items `adds#<name_tag(owner)>#<hour>`: the per-IP limit's set pattern
+  (`_allow_in_window`), so a retry of the same name is free. It's checked after the cheap refusals
+  (missing, forbidden, member, full) and before any Last.fm call or IP slot.
+- **`AuthFailures` counts only failures of ours** (`api_core.auth_failure`): `unavailable`,
+  `bad_name`, and `lastfm_failed` unless the code is a token error (`lastfm.TOKEN_CODES`, 4/14/15).
+  A forged callback, a missing state or token, or a made-up token never counts, so a stranger can't
+  trip `auth-failures`. Every auth line carries it, 0 or 1, `api/me` included.
+- **`chart-failures` alarms on `ChartFailures`**: `_guarded` catches each user or group build's
+  exception, so the `chart-errors` Lambda alarm never sees one.
+- **GetParameters takes at most 10 names**, and `guardrails.NAMES` has 9 (a test checks). The next
+  knob means splitting the read.
+- **The load test's owners are signed in with cookies minted locally** from sandbox's
+  `session_key` (admin credentials, after `sb.guard`). No deployed code gained a fake sign-in.
+  `--users 0 --groups 10 --members 25`; the report's coalescing comes from the chart line's fields.
+- New members from a group already went through the new-user checks (`check_new_user`,
+  `max_queue_for_new`), and coalescing was AOTY-55's: this story only measures it.
+- Preview: create a group named `too many…` or `paused group…`; add `adds-max1` or `paused-adds1`.
 
 ## Usernames (AOTY-80, 2026-11-27)
 

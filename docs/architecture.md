@@ -34,7 +34,7 @@ flowchart LR
     siteb[("site bucket<br/>shell, data/users/*/chart.json")]
     storeb[("store bucket<br/>users/*/YEAR/weeks.json.gz")]
     users[("users table<br/>sync state, progress")]
-    guard[("guard table<br/>per-IP counts, queue tickets")]
+    guard[("guard table<br/>per-IP and per-owner counts, queue tickets")]
     groupst[("groups table<br/>meta + member items,<br/>by_member, by_owner")]
     albums[("albums table<br/>year, type, tracks per album")]
     syncq[["sync queue (FIFO,<br/>group = username)"]]
@@ -428,7 +428,7 @@ and the next day's run starts over.
 | store bucket `index/current.json`, `index/DUMP/*.json.gz` | index build | mb lane |
 | store bucket `code/index.zip` | CD | index build (at start) |
 | `albums` table | **mb lane only** | sync (what to queue), index build (re-check scan), chart builder |
-| `guard` table | api (`ip#` new-name sets, the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
+| `guard` table | api (`ip#` new-name sets, `adds#` per-owner member-add sets (AOTY-53), the `queue` item's `joined` and burnt `started`), sync (`started`, `first_syncs`, `first_sync_seconds`) | api (limit, queue position, wait) |
 | `users` table | api (`queued`, `sync_requested_at`, `queue_ticket`, `not_found` rows with `expires_at`, the owner's `theme` and `theme_set_at` (AOTY-65)), sync (state, progress, `preview`, `sync_finished_at`, `display_name`; removes `queue_ticket`), chart builder (`chart_built_at`, `chart_pending`, `chart_plays`, `chart_albums`, `chart_hits`; removes `preview` once a chart ranks anything); `block_group_adds` is AOTY-49's | api (status, cooldown, a group's ready count, blocked adds), chart builder |
 | `groups` table (AOTY-48) | api (meta and member items, in transactions; a visit's `sync_requested_at`; the owner's `theme` and `theme_set_at` on meta, AOTY-76), chart builder (`chart_built_at`, `chart_read_at` only), `tools/beta_group.py` | api (reads, `by_owner`), chart builder (members, `by_member`) |
 | site bucket `data/users/*/chart.json` | chart builder (builds, and theme restyles) | browsers, through CloudFront; chart builder (a restyle reads it, AOTY-65) |
