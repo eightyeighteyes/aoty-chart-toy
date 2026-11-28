@@ -72,7 +72,7 @@ test("render refuses a bad key, an empty chart and uncovered text without drawin
   assert.deepEqual(await card.render({chart: cjk, key: "toys/aoty/data/users/alice/og.png"}, deps), {ok: false, reason: "glyphs"});
 });
 
-test("a real render: a 1080x1080 PNG, the cover drawn, or its tile when the cover fails", {skip: !CANVAS && "npm ci --prefix lambdas/card"}, async () => {
+test("a real render: a 1200x630 PNG (AOTY-95), the cover drawn, or its tile when the cover fails", {skip: !CANVAS && "npm ci --prefix lambdas/card"}, async () => {
   // A 300x300 cover, made on the spot, served by a stand-in fetch.
   const c = canvas.createCanvas(300, 300), x = c.getContext("2d");
   x.fillStyle = "#c03030";
@@ -92,6 +92,6 @@ test("a real render: a 1080x1080 PNG, the cover drawn, or its tile when the cove
     const png = puts[0].body;
     assert.deepEqual([...png.subarray(1, 4)].map(b => String.fromCharCode(b)).join(""), "PNG");
     const img = await canvas.loadImage(png);
-    assert.deepEqual([img.width, img.height], [1080, 1080]);
+    assert.deepEqual([img.width, img.height], [1200, 630]);
   }
 });

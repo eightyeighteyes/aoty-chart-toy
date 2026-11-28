@@ -134,10 +134,10 @@ CARD = "https://kamp.fm/toys/aoty/data/users/alice/og.png?v=1795000000"
 
 
 def test_a_rendered_card_is_the_image_drawn_large(og):
-  # AOTY-91: the share card, 1080 square, as summary_large_image.
+  # AOTY-91: the share card as summary_large_image; 1200x630 since AOTY-95, so nobody crops it.
   t = tags(og.user_page(user_chart(), ORIGIN, BASE, card=CARD))
   assert t.meta["og:image"] == CARD and t.meta["og:image:type"] == "image/png"
-  assert (t.meta["og:image:width"], t.meta["og:image:height"]) == ("1080", "1080")
+  assert (t.meta["og:image:width"], t.meta["og:image:height"]) == ("1200", "630")
   assert t.meta["twitter:card"] == "summary_large_image"
   g = tags(og.group_page(group_chart(), ORIGIN, BASE, card=CARD))
   assert g.meta["og:image"] == CARD and g.meta["twitter:card"] == "summary_large_image"

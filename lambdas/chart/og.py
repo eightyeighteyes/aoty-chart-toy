@@ -30,7 +30,7 @@ DESCRIPTION_MAX = 200
 GROUP_MODES = ("listener", "album")  # a group's #1: By Listener, else By Play (charts before AOTY-63)
 
 
-CARD_SIZE = 1080  # the card Lambda's top1_square (AOTY-91)
+CARD_WIDTH, CARD_HEIGHT = 1200, 630  # the card Lambda's top1_landscape (AOTY-95)
 
 
 # card: the rendered preview card's URL (AOTY-91, lambdas/card), or None for the #1's bare cover.
@@ -91,10 +91,10 @@ def _page(title, description, url, top, card=None):
     ("og:url", url),
   ]
   if card and card.startswith("https://"):
-    # The share card, drawn large (user decision 2026-11-27: X, Facebook and LinkedIn crop a square
-    # to about 1.91:1, accepted; Discord and iMessage show it whole).
-    tags += [("og:image", card), ("og:image:type", "image/png"), ("og:image:width", CARD_SIZE),
-             ("og:image:height", CARD_SIZE)]  # fmt: skip
+    # The share card, drawn large: 1.91:1, which X, Facebook and LinkedIn show uncropped and Discord
+    # and iMessage whole (AOTY-95; AOTY-91's square was cropped).
+    tags += [("og:image", card), ("og:image:type", "image/png"), ("og:image:width", CARD_WIDTH),
+             ("og:image:height", CARD_HEIGHT)]  # fmt: skip
   elif art.startswith("https://"):
     tags.append(("og:image", art))
   twitter = "summary_large_image" if card and card.startswith("https://") else "summary"
