@@ -57,7 +57,9 @@ Remote: GitHub `eightyeighteyes/aoty-chart-toy`. Commits use Conventional Commit
 | `docs/architecture.md` | M1 infrastructure and per-actor sequence diagrams (Mermaid): built vs planned, who reads and writes what. Keep it current when a story adds a component. |
 | `lambdas/api/` | API (AOTY-22). `api_core.py` is pure (routing, `decide_sync`, status stages, the users-row field list in its docstring); `handler.py` serves health, `POST api/users/<name>/sync`, `GET .../status` and sign-in (AOTY-47) behind an injectable `Deps`. JSON-only POSTs, `no-store` on everything. |
 | `lambdas/chart/` | Chart builder (AOTY-21). `chart_core.py` is pure (year filter, By Play, covers, pending; the chart.json format in its docstring); `handler.py` handles the sync and mb events, the `requested_at` skip and the pending pass behind an injectable `Deps`. Reads the year from the `albums` table at build time, never the index. |
-| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `consent.js` (the shared analytics choice, AOTY-28: see "Consent"), `borealis.js` (the first visit's aurora, ported from kamp, AOTY-67: see "Borealis") and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
+| `web/src/` | The page shell: `index.html` template, `app.css`, `app.js` (the chart page, AOTY-21/22, ported from `build_page.py`; on group pages also Weighted, listener dots and the member filter), `intro.js` (the intro page's pure rules, AOTY-23), `lastfm.js` (Last.fm album URLs, AOTY-43: see "Last.fm links"), `share.js` (share links and the share button's rules, AOTY-84: see "Sharing"), `sharecard.js` (the share image's layout, text fitting and colours as draw operations, AOTY-70: see "Share images"), `firstvisit.js` (the banner's and first visit's rules, AOTY-24), `group.js` (the group page's member re-rank, AOTY-51), `groupedit.js` (group editing's answers-to-messages map, name check, owner rule and rebuild-watch rule, AOTY-52), `theme.js` (page themes, AOTY-65: see "User themes"), `consent.js` (the shared analytics choice, AOTY-28: see "Consent"), `backgrounds.js` (the first visit's background registry and what the backgrounds share, AOTY-77:
+see "Background registry"), `borealis.js` (the first aurora, ported from kamp, AOTY-67: see
+"Borealis"; loaded only when picked) and `kampstats.js` (analytics, AOTY-38: see "Analytics"), all tested by `node --test web/test/*.test.mjs` in CI. Routes client-side: `<base>user/<name>` is a chart, `<base>group/<id>` a group chart (`?user=` picks a member), anything else the intro. kamp.fm's CSP allows no inline script or handlers: keep code in the JS files, use `addEventListener`. `scripts/build_shell.py --base <base> [--ga-id G-…] [--short-host aoty.kamp.fm]` fills `{{NAME}}`/`{{TITLE}}`/`{{YEAR}}`/`{{GA}}`/`{{SHORT}}` and hashes the assets (and fails on inline script); `tools/serve_shell.py` previews it with kamp.fm's routing and CSP (`--sample alice`, or `--proxy sandbox|staging|prod`; fake sign-in and groups from `tools/preview_groups.py`, or `--proxy sandbox --sign-in-as <name>`). |
 | `lambdas/common/guardrails.py` | AOTY-26 runtime knobs from SSM (`pause_new_users`, `pause_syncs`, `sync_cooldown_seconds`, `new_users_per_ip_hour`, `max_queue_for_new`; AOTY-53's `pause_groups`, `max_groups_per_owner`, `max_group_member_adds_per_hour`), cached ~30 s, and the kamp.fm origin-secret check. Runbook: `infra/README.md`, "Guardrails". |
 | `lambdas/common/session.py` | AOTY-47 sign-in, pure: signed session (`v1`) and state (`s1`) tokens, cookie parsing and `Set-Cookie` values. The api's `auth/start`, `auth/callback/<nonce>`, `me`, `auth/signout` are in `api/handler.py`; `handler.session_user` is what AOTY-48's writes call. Runbook: `infra/README.md`, "Sign-in". |
 | `lambdas/common/fakelastfm.py`, `tools/load_test.py` | AOTY-26 load test: a stand-in Last.fm `urlopen` (only when `LASTFM_FAKE=1` and `AOTY_ENV=sandbox`) and the driver that switches it on in sandbox, POSTs `loadtest-*` users and writes `data/load_test/run-<ts>/report.md`. Admin credentials; restores everything after. |
@@ -860,9 +862,10 @@ Notes:
   - Ported: the flow, the 1 s palette crossfade, and the **surge band** when a new cover shifts
     the palette. Not kamp's cursor lean, rare flicker or title mask.
   - **The repo is GPLv3**, as kamp is (`LICENSE`). Every ported file has the same single author.
-  - More backgrounds, picked at random, are AOTY-77.
+  - More backgrounds, picked at random, are AOTY-77 (see "Background registry").
 - **`web/src/borealis.js`** is the port. Its header lists the kamp files and commit, and the pure
-  parts are node-tested.
+  parts are node-tested. Its palette code and program setup moved to `backgrounds.js` (AOTY-77);
+  the shader, its timing and its loop stayed.
   - The engine is WebGL 1, low-power, `failIfMajorPerformanceCaveat`. It runs at a quarter of the
     resolution with DPR capped at 1.5, and at 30 fps.
   - **There's no GLSL compiler in CI.** `web/test/borealis.test.mjs` checks statically that every
@@ -886,6 +889,42 @@ Notes:
   - A theme change repaints its background (`applyTheme` → `auroraColors`).
   - Text gets a halo in the page colour. A panel would shift the layout when the aurora mounts.
 - Preview: `tools/serve_shell.py --port 8001`, then a fresh `user/newbieN`.
+
+## Background registry (AOTY-77, 2026-11-28)
+
+- User decisions (sprint 1419):
+  - kamp's chapel, bokeh, halation, sparks and wintermute are ported, each its own story (AOTY-99
+    to AOTY-103).
+  - **The random pick is per page, not per visitor**, stored by AOTY-96. Until then a first visit
+    picks afresh each time. "Random" is never a choice in a picker.
+- **`web/src/backgrounds.js`** is loaded on every page, before app.js. It holds:
+  - the shared palette code and `createQuad(gl, frag)`;
+  - the **engine contract**, documented there: `mount(canvas, {bg, accent, reducedMotion, onLost})`
+    returns `{setPalette, setColors, destroy}` or null;
+  - `register`, `pick`, `load`.
+- **One list:** `build_shell.BACKGROUNDS` (id → file).
+  - Each engine is a hashed asset that no `<script src>` names.
+  - The page gets their URLs in the `#aoty-backgrounds` JSON block (`{{BGMAP}}`), and its ids are
+    that map's keys.
+  - **A new background is one entry there plus its file**, which calls
+    `aotyBg.register("<id>", …)`. `test_build_shell` checks each file names its id.
+- **`load(id)` adds the `<script src>` once** and resolves with what the file registered. It gives
+  null for an unknown id, a failed load, or a file that registers nothing, and never retries in that
+  page session. The CSP's `script-src 'self'` allows it.
+- **On the page:**
+  - Loading starts with the first visit. The mount waits for both the 1.5 s delay and the file,
+    whichever is later.
+  - `stopAurora` bumps `auroraGen` first, before its early return, so a file that arrives after
+    the visit has moved on never mounts.
+  - `?bg=<id>` previews one, and is read once at boot (routing rewrites the address).
+- **Not extracted yet:** Borealis's rAF / visibility / resize loop. It has subtle rules (`surge.cancel()`
+  on start, the `FRAME_MS - 1` slack, the dt clamp, resize-only-on-change), so the second WebGL
+  engine (AOTY-99) extracts it, with two users.
+- **No WebGL is final for now:** `mount` → null means no background. A canvas fallback waits for a
+  Canvas 2D engine (AOTY-100).
+- **The CSS keeps `canvas.aurora` / `html.has-aurora`**, whatever the engine. AOTY-96, which takes
+  backgrounds onto charts, can rename them with a selector test.
+- Preview: `tools/serve_shell.py --port 8001`, then `user/newbieN?bg=borealis`.
 
 ## Chart builder and user page (AOTY-21, 2026-11-22)
 
