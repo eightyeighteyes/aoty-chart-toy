@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.10.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.9.0...v1.10.0) (2026-11-28)
+
+
+### Features
+
+* **api:** group limits and pause_groups (AOTY-53) ([4215f44](https://github.com/eightyeighteyes/aoty-chart-toy/commit/4215f449762d68c1d3c9ba97deafdacec60330bc))
+* **api:** members can leave a group and block future adds (AOTY-49) ([09cc661](https://github.com/eightyeighteyes/aoty-chart-toy/commit/09cc661e20a78b21b6dc460aca12ef47c472f2b4))
+* **card:** a Node Lambda that renders the preview card (AOTY-91) ([652f687](https://github.com/eightyeighteyes/aoty-chart-toy/commit/652f6875b506e81f106ec8c6d476e096a969fbb6))
+* **card:** link previews use the landscape card (AOTY-95) ([05a5024](https://github.com/eightyeighteyes/aoty-chart-toy/commit/05a50249ed209669a5365843cf7a11abc3015f89))
+* **chart:** a link preview page beside every chart (AOTY-85) ([961397e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/961397e1bdb433df0f85883412d2e50154a9fe7b))
+* **chart:** use the rendered card in link previews (AOTY-91) ([995d376](https://github.com/eightyeighteyes/aoty-chart-toy/commit/995d376bee2171d18bf75957ca3298261b7760cf))
+* consent before analytics (AOTY-28) ([9e06325](https://github.com/eightyeighteyes/aoty-chart-toy/commit/9e063253d2eddaf11d817357cbfb88dcdf007512))
+* guardrails and alarms for groups (AOTY-53) ([bbd0b8b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bbd0b8b3b068a42584a345fe967eab63833c55ad))
+* **guardrails:** group knobs (AOTY-53) ([281b027](https://github.com/eightyeighteyes/aoty-chart-toy/commit/281b02751d24cdc0b9ece88c9f1cb35eebf6d2ce))
+* **infra:** alarm on dropped recursive invocations (AOTY-58) ([0d872a7](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0d872a74f5dffc693210e287c00168d6e1f4f753))
+* **infra:** alarms for sign-in and chart failures (AOTY-53) ([6f51487](https://github.com/eightyeighteyes/aoty-chart-toy/commit/6f51487e6f5d55c32ca885450c156d687a6d288b))
+* **infra:** the api may batch-read group metas (AOTY-49) ([670905e](https://github.com/eightyeighteyes/aoty-chart-toy/commit/670905e6c46c09caff80912f4d967c01e10eba59))
+* **infra:** the card Lambda (AOTY-91) ([a06d4f8](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a06d4f834db8c909701f341a5c99d1bcab37d38d))
+* **infra:** visits by page type on the dashboard (AOTY-64) ([1d30da1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1d30da1b4b7d702c7da488791222ad7185138052))
+* **infra:** visits by page type on the dashboard (AOTY-64) ([3a50cbe](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3a50cbe8f5f118740b1def8e48099ad8b0be91e4))
+* landscape 1200x630 link preview card (AOTY-95) ([327a6e1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/327a6e1a39ed79aad84539c933d6618c1ee23ccf))
+* leave groups and block future adds (AOTY-49) ([73d29a6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/73d29a6cbe8c12a9c89e3e775c144f8fc94032bf))
+* link previews show the chart's [#1](https://github.com/eightyeighteyes/aoty-chart-toy/issues/1) (AOTY-85) ([d48c360](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d48c3600f5be4454359054c8b901e61ea3a6107e))
+* metrics for sign-in failures and group builds (AOTY-53) ([378bdc6](https://github.com/eightyeighteyes/aoty-chart-toy/commit/378bdc6cab8cf3c588dcf0b7e70af78074ea658d))
+* rendered share cards in link previews (AOTY-91) ([e046a0d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/e046a0d00f1fd4d01cb37f327b0cef282efc8e55))
+* **tools:** load test with groups (AOTY-53) ([41aab77](https://github.com/eightyeighteyes/aoty-chart-toy/commit/41aab77b412dcf6a778969e9095f638c2e96fe85))
+* **web:** a landscape 1200x630 share card layout (AOTY-95) ([41b10d4](https://github.com/eightyeighteyes/aoty-chart-toy/commit/41b10d4275d0fea67ef824ec5dddcc5b36eea073))
+* **web:** a shared consent choice and banner (AOTY-28) ([7d33a5f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7d33a5f25ed09543ade0a1e82b8055e15713bf3a))
+* **web:** a stalled first visit keeps watching (AOTY-79) ([bd94a07](https://github.com/eightyeighteyes/aoty-chart-toy/commit/bd94a07bb09f3b378c4b3ab34f89416c2ef9ae3d))
+* **web:** generic preview tags in the shell (AOTY-85) ([0e024ea](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0e024ea37edfdfc0e08c60cadff7cd480cb39289))
+* **web:** leave groups and block adds from "your groups" (AOTY-49) ([45df5a1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/45df5a17f40d61295126f23d1c87d3ebbae681b2))
+* **web:** load analytics only after consent (AOTY-28) ([87d6f9f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/87d6f9fdfe72555cf63425a94725d1ba8e090eb0))
+* **web:** short share links for names that start with an underscore (AOTY-89) ([7855b1c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7855b1cc0cd0ddca7fa524f3426dd5828a91eefc))
+* **web:** short share links for underscore names (AOTY-89) ([5bede4f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/5bede4f37d20d1e3eed4d09e4e4e115a9c5edc18))
+* **web:** the consent banner reads kamp.fm's colour tokens too (AOTY-28) ([7ccc6b1](https://github.com/eightyeighteyes/aoty-chart-toy/commit/7ccc6b1f1cdf8c47605a2d3db24b40f2b2230c11))
+* **web:** wait_abandoned and the events audit (AOTY-28) ([1392a47](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1392a476031898a36be2ae7453764fe87b1a27d1))
+
+
+### Bug Fixes
+
+* accept Last.fm usernames that start with an underscore (AOTY-80) ([80922cf](https://github.com/eightyeighteyes/aoty-chart-toy/commit/80922cfd3c04f00749bb553510a7d96517e071cb))
+* accept Last.fm usernames that start with an underscore (AOTY-80) ([99cb73b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/99cb73bb52b6879536a8709471250efa755ed9eb))
+* **infra:** start the mb lane every 5 minutes (AOTY-58) ([033f626](https://github.com/eightyeighteyes/aoty-chart-toy/commit/033f626dcb8007ea744046cb036ffdfffa4171a4))
+* **mb:** stop invoking itself; the schedule starts the next run (AOTY-58) ([cd5d174](https://github.com/eightyeighteyes/aoty-chart-toy/commit/cd5d1740ea93e7d732522076ee398667d27d1170))
+* **mb:** stop the self-invoke chain; start runs from a 5-minute schedule (AOTY-58) ([a805a03](https://github.com/eightyeighteyes/aoty-chart-toy/commit/a805a03a3da72899f58f2e025a13ca3952675b5b))
+* never tell waiting people to close the tab (AOTY-79) ([d38bb4b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d38bb4be91333d45f471cd33741db3352c92756d))
+* **web:** give the intro its own main landmark (AOTY-45) ([96cf1a2](https://github.com/eightyeighteyes/aoty-chart-toy/commit/96cf1a227221115f73d98757749def659ee6614a))
+* **web:** give the intro its own main landmark (AOTY-45) ([b6c871c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/b6c871cf55eaf29429ce251184c38220a57f4dd2))
+* **web:** the landscape card's caption and link line up with its names (AOTY-95) ([46c9940](https://github.com/eightyeighteyes/aoty-chart-toy/commit/46c9940c58d7130a434401b5f972b2e489de6ce9))
+* **web:** the queue line keeps people on the page (AOTY-79) ([0c559f7](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0c559f7ec76f59d3753bf309b22055629d265164))
+
 ## [1.9.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.8.0...v1.9.0) (2026-11-27)
 
 
