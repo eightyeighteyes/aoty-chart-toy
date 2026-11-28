@@ -432,7 +432,7 @@ def _bump(totals, name):
 def _card(deps, chart, key, totals=None):
   """The link preview card's public URL (AOTY-91), or None for og.html's bare cover.
 
-  The card Lambda (lambdas/card) draws Everyone's #1 square from the chart and writes og.png at
+  The card Lambda (lambdas/card) draws Everyone's #1, 1200x630 (AOTY-95), from the chart and writes og.png at
   key. It's called synchronously, and this Lambda runs one build at a time, so og.html and og.png
   are always written in order and can't race. No card when the Lambda isn't configured (tests, the
   placeholder code before its first deploy), when nothing ranks yet or the text needs glyphs its

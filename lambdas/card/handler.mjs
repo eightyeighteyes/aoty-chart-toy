@@ -11,8 +11,9 @@
 //
 // It runs the page's own modules (web/src/share.js, group.js, theme.js, sharecard.js, carddraw.js)
 // unchanged, so the card can't drift from the page's share image. User decisions (2026-11-27): Node +
-// @napi-rs/canvas; the #1 square (top1_square); Latin fonts only, so a card whose text needs other
-// glyphs isn't drawn (reason "glyphs") and the bare cover stays.
+// @napi-rs/canvas; Latin fonts only, so a card whose text needs other glyphs isn't drawn (reason
+// "glyphs") and the bare cover stays. The card is the 1200x630 #1 (top1_landscape, AOTY-95), not
+// AOTY-91's square, which X, Facebook and LinkedIn cropped to 1.91:1.
 
 import {existsSync, readFileSync} from "node:fs";
 import {createRequire} from "node:module";
@@ -28,7 +29,7 @@ const th = require(`${WEB}theme.js`);
 const sc = require(`${WEB}sharecard.js`);
 const cd = require(`${WEB}carddraw.js`);
 
-const FORMAT = "top1_square";
+const FORMAT = "top1_landscape";
 const COVER_WAIT_MS = 5000;
 const FONTS_DIR = `${HERE}fonts/`;
 // Each file registers under its own family name, which is the one sharecard.js asks for; the weight
