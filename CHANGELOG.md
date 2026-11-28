@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.11.0](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.10.1...v1.11.0) (2026-11-28)
+
+
+### Features
+
+* **api:** page backgrounds: stored, random for new pages, owner-set (AOTY-96) ([3faec6d](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3faec6d929e73edd8264f05c3e65434363ee036e))
+* bokeh is a page background, a pick and a random start (AOTY-102) ([0f4c362](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0f4c3626c9a2fa6774439c42751caec481c34d2a))
+* chapel is a page background, a pick and a random start (AOTY-103) ([1b65640](https://github.com/eightyeighteyes/aoty-chart-toy/commit/1b656401ef5b2607b2e2de12a58cc11d51543172))
+* **chart:** charts carry the page's background (AOTY-96) ([522f8d7](https://github.com/eightyeighteyes/aoty-chart-toy/commit/522f8d703a3ef73a6059f35fb89f834639d80741))
+* page backgrounds, stored per page and set by the owner (AOTY-96) ([24f3033](https://github.com/eightyeighteyes/aoty-chart-toy/commit/24f3033ed7fe30d1380a879228d46662c958c8d1))
+* **web:** background registry, loaded on demand (AOTY-77) ([3d6eb24](https://github.com/eightyeighteyes/aoty-chart-toy/commit/3d6eb242faa79338cefab25c4db441e2a7e0c3a7))
+* **web:** Bokeh background, on a new Canvas 2D base (AOTY-102) ([774a437](https://github.com/eightyeighteyes/aoty-chart-toy/commit/774a437b56104d53bf8e873541a49f8907a921e2))
+* **web:** Bokeh, kamp's soft drifting orbs, on runCanvas (AOTY-102) ([d6936df](https://github.com/eightyeighteyes/aoty-chart-toy/commit/d6936df323e45386c734241bdfeca8de1c768817))
+* **web:** Chapel background, on a shared WebGL loop (AOTY-103) ([c623c01](https://github.com/eightyeighteyes/aoty-chart-toy/commit/c623c01faddd19022556b8185b50daa30d6b7d3e))
+* **web:** Chapel, kamp's breathing colour fields, on runShader (AOTY-103) ([5d0986f](https://github.com/eightyeighteyes/aoty-chart-toy/commit/5d0986f7d17b1ec21ecc7ab196fc1aae8c3ebfef))
+* **web:** load backgrounds on demand from a registry (AOTY-77) ([636ec6b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/636ec6bf92849ae724aecc38c257262d1dec5eb9))
+* **web:** share layout and image preview (AOTY-98) ([0c5267a](https://github.com/eightyeighteyes/aoty-chart-toy/commit/0c5267aa68679eb54450709402a5a20740001cbe))
+* **web:** the owner's background picker (AOTY-96) ([223163b](https://github.com/eightyeighteyes/aoty-chart-toy/commit/223163b294d8ab409c7f80b8ac163e17b25452b6))
+* **web:** the page's background on first visits and charts (AOTY-96) ([f273e37](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f273e3727500d2664f629484610db6f6fd32a02e))
+
+
+### Bug Fixes
+
+* **web:** the share image preview uses a data: URL (AOTY-106) ([80813b4](https://github.com/eightyeighteyes/aoty-chart-toy/commit/80813b47689c9de2a6e5759b383fc0dec69fcd7a))
+* **web:** the share image preview uses a data: URL (AOTY-106) ([f424b4c](https://github.com/eightyeighteyes/aoty-chart-toy/commit/f424b4cc898390036d45af31fcd01ad93ca280a5))
+
 ## [1.10.1](https://github.com/eightyeighteyes/aoty-chart-toy/compare/v1.10.0...v1.10.1) (2026-11-28)
 
 
