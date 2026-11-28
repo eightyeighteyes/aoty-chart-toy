@@ -887,6 +887,7 @@
     }
     if (pickedBackground || savedBackground) pageBackdrop(pickedBackground || savedBackground);
     if (built) chartBackdropPalette(chart);
+    markBackgroundPills();
   }
 
   // The status API (a user) or GET api/groups/<id> (a group) carries the stored background too:
@@ -898,6 +899,7 @@
     savedBackground = id;
     rememberBackground(bgTarget, id);
     pageBackdrop(id);
+    markBackgroundPills();
   }
 
   // Off a page (the intro, a user or group that doesn't exist): no background.
@@ -2199,6 +2201,12 @@
           themeTarget = {kind: "group", id: out.id};
           rememberTheme(themeTarget, savedTheme);
         }
+        // So did its background (AOTY-96): the same way, keeping a pick not yet saved.
+        if (bgTarget && bgTarget.kind === "group") {
+          rememberBackground(bgTarget, "none");
+          bgTarget = {kind: "group", id: out.id};
+          if (savedBackground) rememberBackground(bgTarget, savedBackground);
+        }
         const url = new URL(location.href);
         url.pathname = `${BASE}group/${encodeURIComponent(out.id)}`;
         try { history.replaceState(null, "", url); } catch (_) {}
@@ -2379,6 +2387,7 @@
       && th.ownsTheme(themeTarget, me.username, themeTarget.kind === "group" && groupInfo ? groupInfo.owner : null);
 
   function renderThemeTools() {
+    renderBackgroundTools();  // the page's other style, for the same owner (AOTY-96)
     const owner = isThemeOwner();
     $("theme-tools").hidden = !owner;
     if (!owner) {
@@ -2426,12 +2435,8 @@
     }
   }
 
-  $("theme-toggle").addEventListener("click", () => {
-    const row = $("theme-row");
-    row.hidden = !row.hidden;
-    $("theme-toggle").setAttribute("aria-expanded", String(!row.hidden));
-    if (!row.hidden) (row.querySelector('[aria-pressed="true"]') || row.querySelector(".swatch")).focus();
-  });
+  $("theme-toggle").addEventListener("click", () =>
+    toggleStyleRow($("theme-row"), $("theme-toggle"), $("background-row"), $("background-toggle")));
 
   function pickTheme(id) {
     if (!isThemeOwner()) return;
@@ -2477,6 +2482,102 @@
     const word = r.body && typeof r.body.error === "string" ? r.body.error : "";
     $("theme-msg").textContent = (Object.hasOwn(THEME_ERRORS, word) && THEME_ERRORS[word])
         || "couldn't save your theme. try again in a minute.";
+    if (word === "signed_out") { me = null; renderAccount(); }
+  }
+
+  // ---- the owner's background picker (AOTY-96) --------------------------------------------------
+  //
+  // Beside "theme" (user decision 2026-11-28: the page's two style options), for the same owner:
+  // "none" first, then every background alphabetically (backgrounds.pickerOrder). A pick shows at
+  // once (a 0.6 s fade, a cut under reduced motion) and saves THEME_SAVE_MS later, as a theme does;
+  // until that save lands, the pick wins over polls and chart.json (backgroundFromStatus).
+  let bgSaveTimer = 0, bgPillsBuilt = false;
+
+  function renderBackgroundTools() {
+    const owner = isThemeOwner() && !!bgs && bgs.ids().length > 0;
+    $("background-tools").hidden = !owner;
+    if (!owner) {
+      $("background-row").hidden = true;
+      $("background-toggle").setAttribute("aria-expanded", "false");
+      return;
+    }
+    if (!bgPillsBuilt) {
+      bgPillsBuilt = true;
+      for (const id of bgs.pickerOrder(bgs.ids())) {
+        const b = $("background-row").appendChild(document.createElement("button"));
+        b.type = "button";
+        b.className = "pill swatch";
+        b.dataset.background = id;
+        b.textContent = id;
+        b.addEventListener("click", () => pickBackground(id));
+      }
+    }
+    markBackgroundPills();
+  }
+
+  function markBackgroundPills() {
+    const shown = pickedBackground || savedBackground || "none";
+    for (const b of $("background-row").querySelectorAll("[data-background]")) {
+      b.setAttribute("aria-pressed", String(b.dataset.background === shown));
+    }
+  }
+
+  // One row open at a time: theme's or background's.
+  function toggleStyleRow(row, toggle, other, otherToggle) {
+    row.hidden = !row.hidden;
+    toggle.setAttribute("aria-expanded", String(!row.hidden));
+    if (!row.hidden) {
+      other.hidden = true;
+      otherToggle.setAttribute("aria-expanded", "false");
+      (row.querySelector('[aria-pressed="true"]') || row.querySelector(".swatch")).focus();
+    }
+  }
+  $("background-toggle").addEventListener("click", () =>
+    toggleStyleRow($("background-row"), $("background-toggle"), $("theme-row"), $("theme-toggle")));
+
+  function pickBackground(id) {
+    if (!isThemeOwner() || !bgTarget) return;
+    pickedBackground = id;
+    $("background-msg").textContent = "";
+    pageBackdrop(id);
+    markBackgroundPills();
+    clearTimeout(bgSaveTimer);
+    // The target is read when the timer fires: a group renamed in between has moved its slug.
+    bgSaveTimer = setTimeout(() => saveBackground(id), THEME_SAVE_MS);
+  }
+
+  const BACKGROUND_ERRORS = {
+    signed_out: "you're signed out. sign in again to change the background.",
+    not_owner: "only this page's owner can change its background.",
+    no_chart: "one moment: your page is still being set up. try again in a few seconds.",
+    writes_off: "background changes are switched off for now. the page keeps its background.",
+    "not your group": "only this group's owner can change its background.",
+    "no such group": "this group isn't here any more.",
+    groups_unavailable: "background changes are switched off for now. the group keeps its background.",
+  };
+  async function saveBackground(id) {
+    const target = bgTarget;
+    if (!target || id !== pickedBackground) return;
+    const r = await apiCall("POST", bgs.savePath(target), {background: id});
+    // The page or the pick moved on (a rename keeps the page: same kind, new slug).
+    const moved = !bgTarget || bgTarget.kind !== target.kind || (target.kind === "user" && bgTarget.id !== target.id);
+    if (moved || id !== pickedBackground) return;
+    if (r.status === 200) {
+      // The pick stays the page's for this session, as a theme's does: a chart.json fetched before
+      // the restyle lands still names the old one.
+      savedBackground = id;
+      rememberBackground(bgTarget, id);
+      $("background-msg").textContent = "saved. everyone sees it now.";
+      track("event", "background_set", {background: id});
+      markBackgroundPills();
+      return;
+    }
+    pickedBackground = null;
+    pageBackdrop(savedBackground || "none");
+    markBackgroundPills();
+    const word = r.body && typeof r.body.error === "string" ? r.body.error : "";
+    $("background-msg").textContent = (Object.hasOwn(BACKGROUND_ERRORS, word) && BACKGROUND_ERRORS[word])
+        || "couldn't save the background. try again in a minute.";
     if (word === "signed_out") { me = null; renderAccount(); }
   }
 

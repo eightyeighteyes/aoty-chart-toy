@@ -236,6 +236,8 @@
   // The owner's picker (AOTY-96, user decision 2026-11-28): "none" first, as in kamp, then every
   // background alphabetically. Each label is its id, lowercase like kamp's.
   const pickerOrder = from => [NONE, ...[...(from || [])].filter(id => id !== NONE).sort()];
+  // Where the owner's pick is saved: the api's POST users/<name>/background or groups/<id>/background.
+  const savePath = target => `${target.kind === "group" ? "groups" : "users"}/${target.id}/background`;
 
   // The engine for id: at once if its file has run, else after adding its <script src> (once; the
   // CSP allows same-origin scripts). Null for an id the map doesn't have, or a script that fails
@@ -259,7 +261,7 @@
 
   const api = {PALETTE_SIZE, extractPalette, accentPalette, paletteChanged, hexToRgb, PaletteCrossfade,
                packPalette, CONTEXT_ATTRS, VERT, createQuad, register, registered, parseMap, readMap, ids, pick,
-               load, NONE, pickerOrder};
+               load, NONE, pickerOrder, savePath};
   root.aotyBg = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

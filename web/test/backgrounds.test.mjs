@@ -101,6 +101,11 @@ test("the picker: none first, then every background alphabetically", () => {
   assert.deepEqual(bg.pickerOrder(["none", "sparks"]), ["none", "sparks"]);  // never twice
 });
 
+test("the owner's pick is saved to the api's user or group background route", () => {
+  assert.equal(bg.savePath({kind: "user", id: "alice"}), "users/alice/background");
+  assert.equal(bg.savePath({kind: "group", id: "full-house"}), "groups/full-house/background");
+});
+
 // A stand-in document: one #aoty-backgrounds block, and scripts that load (registering as they
 // would) or fail when appended.
 function fakeDoc(map, onScript) {

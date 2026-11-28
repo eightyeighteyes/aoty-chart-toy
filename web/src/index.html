@@ -116,16 +116,21 @@
     <!-- AOTY-98: display on the left, sharing on the right; on phones they stack, display first. The
          theme row opens under the whole bar, or under its toggle on phones (app.css "order"). -->
     <div class="tool-bar">
-      <!-- The page's look, the owner's alone: its theme (AOTY-65, groups AOTY-76), and the group
-           owner's edit panel (AOTY-52). Everyone sees the theme they pick. -->
+      <!-- The page's look, the owner's alone: its theme (AOTY-65, groups AOTY-76), its background
+           (AOTY-96), and the group owner's edit panel (AOTY-52). Everyone sees what they pick. -->
       <div class="display-tools">
         <div class="theme-tools" id="theme-tools" hidden>
           <button type="button" class="pill" id="theme-toggle" aria-expanded="false" aria-controls="theme-row">theme</button>
           <span class="tool-msg" id="theme-msg" role="status" aria-live="polite"></span>
         </div>
+        <div class="theme-tools" id="background-tools" hidden>
+          <button type="button" class="pill" id="background-toggle" aria-expanded="false" aria-controls="background-row">background</button>
+          <span class="tool-msg" id="background-msg" role="status" aria-live="polite"></span>
+        </div>
         <button type="button" class="pill" id="edit-toggle" aria-expanded="false" aria-controls="edit" hidden>edit group</button>
       </div>
       <div class="theme-row" id="theme-row" role="group" aria-label="Theme" hidden></div>
+      <div class="theme-row" id="background-row" role="group" aria-label="Background" hidden></div>
       <!-- User and group pages (AOTY-84): share the link, for everyone; a member's view of a group
            also offers the member's own page. A tap opens the system share sheet on touch devices
            and copies elsewhere. "share image" opens the image's preview (#preview), once the
