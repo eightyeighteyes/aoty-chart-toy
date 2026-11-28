@@ -120,3 +120,29 @@ test("each group guardrail has a friendly refusal (AOTY-53)", () => {
   // API Gateway's own throttle has no error word: still the throttled message.
   assert.equal(answer("add", 429, {message: "Too Many Requests"}).message, MSG.throttled);
 });
+
+test("leaving says what happens and how to stop being added back (AOTY-49)", () => {
+  const [title, text, yes] = ge.leaveText("Full House");
+  assert.equal(title, "leave Full House?");
+  assert.match(text, /add you back/);
+  assert.equal(yes, "leave");
+  assert.deepEqual(ge.leaveAllText(3).map(s => s.slice(0, 15)), ["leave all 3 gro", "your plays leav", "leave all"]);
+});
+
+test("the line after leaving counts what went through", () => {
+  assert.equal(ge.leftLine(1, 1, "Full House"), "you left Full House.");
+  assert.equal(ge.leftLine(3, 3, null), "you left 3 groups.");
+  assert.equal(ge.leftLine(2, 3, null), "left 2 of 3. try again?");
+});
+
+test("a settings write's refusals use the shared messages", () => {
+  assert.deepEqual(answer("settings", 200, {block_group_adds: true}), {ok: true});
+  assert.equal(answer("settings", 503, {error: "groups_unavailable"}).message, MSG.groupsOff);
+  assert.equal(answer("settings", 401, {error: "signed_out"}).signedOut, true);
+  assert.equal(answer("settings", 0, null).message, MSG.generic);
+});
+
+test("a member leaving uses the remove answers: a gone group counts as left", () => {
+  assert.deepEqual(answer("remove", 204, null), {ok: true});
+  assert.equal(answer("remove", 404, {error: "no such group"}).gone, true);
+});

@@ -75,6 +75,11 @@ test("events keep only listed params and values", () => {
   // AOTY-43: an album link's click says nothing about which album, or whose page.
   assert.deepEqual(EVENTS.album_click, {});
   assert.deepEqual(clean("album_click", {album: "1989", artist: "Taylor Swift", user: "alice"}), {});
+  // AOTY-49: leaving never says which group; blocking says only its new state.
+  assert.deepEqual(clean("group_leave", {group_id: "full-house", user: "alice"}), {});
+  assert.deepEqual(clean("group_leave_all", {count: 3}), {});
+  assert.deepEqual(clean("block_adds", {on: "1", user: "alice"}), {on: "1"});
+  assert.deepEqual(clean("block_adds", {on: true}), {});
 });
 
 test("theme_set sends only a theme id the page knows (AOTY-65)", () => {

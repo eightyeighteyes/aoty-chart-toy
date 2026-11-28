@@ -188,6 +188,19 @@
     </div>
     <p class="lookup-msg" id="create-msg" role="status" aria-live="polite"></p>
   </form>
+  <!-- Opting out (AOTY-49): groups someone else owns that you're in, and the block on adds. -->
+  <section class="optout" id="optout" aria-labelledby="memberof-title" hidden>
+    <h3 class="members-title" id="memberof-title" tabindex="-1">groups you're in</h3>
+    <ul class="members" id="memberof-list"></ul>
+    <p class="members-empty" id="memberof-empty" hidden>you're not in anyone else's groups.</p>
+    <p class="optout-all"><button type="button" class="quiet danger" id="leave-all" hidden>leave all</button></p>
+    <label class="optout-block">
+      <input type="checkbox" id="block-adds" aria-describedby="block-hint">
+      <span>don't let others add me to groups</span>
+    </label>
+    <p class="optout-hint" id="block-hint">groups you own aren't affected, and you stay in the ones you're in.</p>
+  </section>
+  <p class="lookup-msg" id="optout-msg" role="status" aria-live="polite"></p>
   <div class="sheet-actions"><button type="button" class="quiet" id="mygroups-close">close</button></div>
 </dialog>
 <!-- Confirmations (remove a member, delete the group): never window.confirm. -->
