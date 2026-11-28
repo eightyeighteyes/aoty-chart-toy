@@ -138,12 +138,13 @@
   }
 
   // The request line's words for a place in line. url is the page's own address, shown without
-  // its scheme (kamp.fm/toys/aoty/user/alice).
+  // its scheme (kamp.fm/toys/aoty/user/alice), exactly once: app.js splits the line on it. Never
+  // invite people to leave (user, 2026-11-25: "they'll never come back"; AOTY-79).
   function queueLines(position, url, waitSeconds) {
     return {
       caller: `you're caller #${num(position)}. the dj is spinning other people's years first.`,
-      link: `this page is yours: ${String(url).replace(/^https?:\/\//, "")}. close the tab and come back. `
-          + "it'll be pressed and waiting.",
+      link: `this page is yours: ${String(url).replace(/^https?:\/\//, "")}. `
+          + "stay put: it starts pressing the moment you're up.",
       wait: waitText(waitSeconds),
     };
   }
@@ -198,7 +199,8 @@
     return timedOut ? "stalled" : null;
   }
 
-  // [title, text] for a firstVisitEnd kind. year is the chart's year.
+  // [title, text] for a firstVisitEnd kind. year is the chart's year. "stalled" keeps the page
+  // watching (app.js, AOTY-79), so its text says the page catches up rather than "come back".
   function endMessage(kind, year, s) {
     if (kind === "none") {
       const plays = (s && s.scrobbles) || 0;
@@ -207,7 +209,7 @@
               + "play a few of this year's records and your chart fills in on your next visit."];
     }
     return ["still checking release years",
-            "this one's taking longer than usual. come back in a few minutes: your chart keeps pressing while you're away."];
+            "this one's taking longer than usual. it keeps pressing, and this page will catch up on its own."];
   }
 
   // The cover wall's sources (AOTY-66): for each wall entry with art, the URLs to try in order (its
