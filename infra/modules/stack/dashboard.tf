@@ -180,6 +180,38 @@ locals {
         query  = "SOURCE '${aws_cloudwatch_log_group.fn["api"].name}' | filter source = \"api\" | stats count(*) as requests by outcome | sort requests desc"
       }
     },
+    # Groups and sign-in (AOTY-53): EMF fields, not metrics, so these cost nothing. Group creates
+    # and adds are the "created" and "added" outcomes; auth_failures is the alarmed metric.
+    {
+      type = "log", width = 12, height = 6
+      properties = {
+        title  = "Group writes and sign-ins (api)"
+        region = local.region
+        view   = "table"
+        query = join(" ", [
+          "SOURCE '${aws_cloudwatch_log_group.fn["api"].name}'",
+          "| filter source = \"api\" and ispresent(action) and action != \"sync\"",
+          "| fields coalesce(outcome, auth) as result",
+          "| stats count(*) as requests, sum(AuthFailures) as auth_failures by action, result",
+          "| sort requests desc",
+        ])
+      }
+    },
+    {
+      type = "log", width = 12, height = 6
+      properties = {
+        title  = "Group builds per hour (chart)"
+        region = local.region
+        view   = "table"
+        query = join(" ", [
+          "SOURCE '${aws_cloudwatch_log_group.fn["chart"].name}'",
+          "| filter ispresent(groups_built)",
+          "| stats sum(groups_built) as built, sum(groups_coalesced) as coalesced,",
+          "max(group_seconds_max) as slowest_s, max(group_members_max) as biggest by bin(1h) as hour",
+          "| sort hour desc",
+        ])
+      }
+    },
 
     # Cookie-free visit counts (AOTY-64): every user and group page load POSTs its sync, and the
     # API access log has the method, path and status, so ad blockers can't hide these the way they

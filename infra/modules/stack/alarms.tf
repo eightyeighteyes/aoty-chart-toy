@@ -165,6 +165,36 @@ locals {
         threshold = 0
         missing   = "notBreaching"
       }
+      # AOTY-53. AuthFailures counts only failures of ours (api_core.auth_failure): a forged
+      # callback or a made-up token can't trip it.
+      auth-failures = {
+        summary   = "Sign-in failed 5 or more times in 15 minutes for reasons on our side (keys, Last.fm)."
+        anchor    = "auth-failures"
+        namespace = "kamp-aoty"
+        metric    = "AuthFailures"
+        dims      = tomap({ Environment = var.environment })
+        stat      = "Sum"
+        period    = 900
+        evals     = 1
+        op        = "GreaterThanOrEqualToThreshold"
+        threshold = 5
+        missing   = "notBreaching"
+      }
+      # A failed user or group build is caught and counted, never a Lambda error, so chart-errors
+      # can't see it (AOTY-53).
+      chart-failures = {
+        summary   = "3 or more chart builds (users' or groups') failed in an hour."
+        anchor    = "chart-failures"
+        namespace = "kamp-aoty"
+        metric    = "ChartFailures"
+        dims      = tomap({ Environment = var.environment })
+        stat      = "Sum"
+        period    = 3600
+        evals     = 1
+        op        = "GreaterThanOrEqualToThreshold"
+        threshold = 3
+        missing   = "notBreaching"
+      }
       chart-event-age = {
         summary   = "Chart builds are waiting over 30 minutes to start; past an hour they're dropped."
         anchor    = "chart-backlog"

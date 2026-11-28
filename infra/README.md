@@ -531,6 +531,9 @@ default.
 | `new_users_per_ip_hour` | `10` | Distinct new usernames one IP may try per hour (429 `too_many_new`). |
 | `max_queue_for_new` | `500` | New users get 503 `busy` while the sync queue is deeper. |
 | `group_sync_cooldown_seconds` | `3600` | How often a group page's visit may sync its members (AOTY-55); within it, a visit queues nothing. |
+| `pause_groups` | `false` | No group creates or member adds (503 `groups_paused`, AOTY-53). Group pages keep serving; renames, deletes, themes, removals, leaving and visit syncs carry on. |
+| `max_groups_per_owner` | `10` | Groups one person may own (409 `too_many_groups`). Soft: counted before a create, so two racing creates can make one more. |
+| `max_group_member_adds_per_hour` | `50` | Distinct names one owner may add per hour, across their groups (429 `too_many_adds`), counted before any Last.fm call. Retrying a name is free. Guard table items `adds#<owner hash>#<hour>`. |
 
 A group page's visit (`POST api/groups/<id>/sync`) needs no sign-in and anyone can send it for
 any slug, and slugs are guessable. What bounds the Last.fm calls it can cause is each member's own
@@ -543,8 +546,13 @@ aws ssm delete-parameter --name /kamp-aoty/prod/pause_new_users      # back to t
 ```
 
 A malformed value is ignored (the last good one stays) with an error log and a
-`GuardrailBadValue` metric. An api container that can't read SSM at all treats new users as
-paused until it can.
+`GuardrailBadValue` metric. An api container that can't read SSM at all treats new users and group
+writes as paused until it can.
+
+New members added to a group go through the same new-user checks as visitors: the per-IP limit,
+the new-user pause and `max_queue_for_new` (`member_add` → `check_new_user`). A group's builds are
+coalesced (AOTY-55): a burst of member syncs makes a build or two, not one each; the dashboard's
+"Group builds per hour" shows built against coalesced.
 
 **Hard stop for syncs** (immediate, unlike `pause_syncs`): disable the sync mapping. Terraform
 ignores `enabled`, so an apply won't turn it back on. Messages wait in the queue meanwhile.
@@ -593,6 +601,12 @@ any other env), raises the per-IP and queue limits, POSTs synthetic `loadtest-*`
 writes `data/load_test/run-<ts>/report.md` (queue depth, sync concurrency, Last.fm calls per
 minute, GB-s). It puts the settings back when it ends, even on an error. Then
 `scripts/sandbox_reset.py --yes --keep-albums`.
+
+With groups (AOTY-53): `tools/load_test.py --users 0 --groups 10 --members 25` signs in synthetic
+owners (it reads sandbox's `session_key` and mints their cookies locally, so no deployed code has a
+fake sign-in), creates `loadtest-gNN` groups, adds 25 `loadtest-gNN-mMM` members to each, then
+visits each group page. The report adds group answers, group builds against coalesced ones from
+the chart builder's EMF fields, the slowest and biggest build, and the chart builder's GB-s.
 
 ## Sign-in (AOTY-47)
 
@@ -673,7 +687,7 @@ Every alarm emails the `kamp-aoty-alerts` topic (`global/alerts.tf`) on ALARM an
 The alarm names say which env it is (`kamp-aoty-<env>-<alarm>`). `modules/stack/alarms.tf` has
 the set, and its description links here. `alarms` per env: prod `full`, staging `basic` (the DLQs
 and the uptime check), sandbox `none` (its deploy role can't write alarms: any branch can use it).
-About 22 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
+About 24 alarms in prod and 5 in staging; the first 10 in the account are free, the rest about
 $0.10 each a month.
 
 ```sh
@@ -779,6 +793,24 @@ fix it with `put-parameter --overwrite` or delete it (back to the default). See 
 was dropped). The chart builder runs one at a time, so a crowd of syncs piles up builds. A
 dropped build is redone at the user's next sync, or by hand ("Charts"). If it keeps happening,
 slow the syncs down (`pause_new_users`) until the line clears.
+
+### `auth-failures`
+
+Sign-in failed 5+ times in 15 minutes for a reason on our side (`AuthFailures`, AOTY-53): the
+session keys or `lastfm_api_secret` unreadable (`auth: unavailable`, also on `api/me`), Last.fm's
+`auth.getSession` failing with anything but a token error (`lastfm_failed`), or Last.fm naming a
+user we'd refuse (`bad_name`). Forged callbacks and made-up tokens never count, so a stranger
+can't trip it. The dashboard's "Group writes and sign-ins" table shows which. For `unavailable`,
+check `/kamp-aoty/<env>/session_key` and `lastfm_api_secret` exist ("Sign-in"); for
+`lastfm_failed`, the api log's "auth.getSession failed" line has the code (see `lastfm-errors`).
+
+### `chart-failures`
+
+3+ chart builds failed in an hour (`ChartFailures`, users' or groups'). The chart builder catches
+each failure so the others still build, so `chart-errors` doesn't see these. Its log
+(`/aws/lambda/kamp-aoty-<env>-chart`, "chart build failed for") has the trace, named by a user's
+hash or a group's slug. A user's chart is rebuilt at their next sync, a group's at its next change
+or member sync; rebuild by hand with `tools/rebuild_charts.py` once fixed.
 
 ### `recursion-dropped`
 
