@@ -192,6 +192,10 @@ def card_zip(lambdas_dir, web_dir, dist_dir, modules, build=None):
   if not (card_dir / "handler.mjs").is_file():
     raise SystemExit(f"{card_dir}/handler.mjs is missing: it's the entry point")
   web = {f"web/{name}": (web_dir / name).read_bytes() for name in CARD_WEB}
+  # The page's files are scripts that handler.mjs require()s. Packed, the nearest package.json would
+  # be the card's own ("type": "module"), which makes Node load them as ES modules: Lambda's Node 22
+  # refuses the require (ERR_REQUIRE_ESM), newer Node gets modules with no exports (AOTY-104).
+  web["web/package.json"] = b'{"type": "commonjs"}\n'
   extra = {**web, **({BUILD_FILE: build_json(build)} if build is not None else {})}
   roots = [(modules, "node_modules/", True), (card_dir, "")]
   return write_zip(dist_dir / f"{CARD}.zip", roots, extra)

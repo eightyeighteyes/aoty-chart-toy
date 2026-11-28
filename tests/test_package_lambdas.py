@@ -1,6 +1,7 @@
 """Lambda packaging (scripts/package_lambdas.py): what goes in each zip, and reproducibility."""
 
 import json
+import shutil
 import subprocess
 import zipfile
 
@@ -226,6 +227,42 @@ def test_the_card_zip_holds_the_handler_fonts_page_modules_and_the_linux_install
   assert "node_modules/@napi-rs/canvas-linux-arm64-gnu/index.js" in got
   assert "node_modules/@napi-rs/canvas/node_modules/dep/a.js" in got
   assert not any("darwin" in n for n in got)  # the developer's own install never ships
+
+
+def test_the_card_zips_page_modules_are_commonjs_whatever_the_cards_package_says(card_tree, tmp_path):
+  # AOTY-104: the card's package.json is "type": "module", and in the zip it's the nearest one to
+  # web/*.js, which made Node load the page's scripts as ES modules.
+  tree, web, modules = card_tree
+  out = pkg.card_zip(tree, web, tmp_path / "dist", modules)
+  with zipfile.ZipFile(out) as z:
+    assert json.loads(z.read("web/package.json")) == {"type": "commonjs"}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_the_packed_card_handler_runs_the_page_modules(tmp_path):
+  # AOTY-104: the real handler and page modules, unpacked as Lambda sees them in /var/task, must
+  # load and work. In the repo the handler reads web/src/, which no "type": "module" covers, so
+  # web/test/card.test.mjs never saw the packed layout. Canvas is imported lazily, so none is needed.
+  modules = tmp_path / "node_modules"
+  modules.mkdir()
+  out = pkg.card_zip(pkg.REPO / "lambdas", pkg.REPO / "web" / "src", tmp_path / "dist", modules)
+  task = tmp_path / "task"
+  with zipfile.ZipFile(out) as z:
+    z.extractall(task)
+  script = (
+    "import {pathToFileURL} from 'node:url';"
+    "const card = await import(pathToFileURL(process.argv[1]).href);"
+    "const chart = {username: 'alice', display_name: 'alice', year: 2026, generated_at: 1,"
+    " albums: [{album: 'Blue Lines', artist: 'Massive Attack', art: ''}], rankings: {album: [[0, 1]]}};"
+    "const input = card.cardInput(chart, {origin: 'https://kamp.fm', base: '/toys/aoty/', short: ''});"
+    "console.log(JSON.stringify(input.texts));"
+  )
+  run = subprocess.run(["node", "--input-type=module", "-e", script, str(task / "handler.mjs")],
+                       capture_output=True, text=True, timeout=60)  # fmt: skip
+  assert run.returncode == 0, run.stderr
+  texts = json.loads(run.stdout)
+  assert texts["albums"] == [{"title": "Blue Lines", "artist": "Massive Attack"}]
+  assert texts["url"] == "https://kamp.fm/toys/aoty/user/alice"
 
 
 def test_the_card_zip_is_reproducible(card_tree, tmp_path):
