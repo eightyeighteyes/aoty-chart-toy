@@ -33,7 +33,10 @@
 <script src="{{GROUP}}" defer></script>
 <script src="{{GROUPEDIT}}" defer></script>
 <script src="{{THEME}}" defer></script>
-<script src="{{BOREALIS}}" defer></script>
+<!-- The first visit's backgrounds (AOTY-77): id -> URL, filled by build_shell. Each loads only when
+     picked (backgrounds.js load()); backgrounds.js itself is what they share. -->
+<script type="application/json" id="aoty-backgrounds">{{BGMAP}}</script>
+<script src="{{BACKGROUNDS}}" defer></script>
 <script src="{{JS}}" defer></script>
 </head>
 <body>

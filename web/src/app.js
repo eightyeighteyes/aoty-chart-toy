@@ -712,14 +712,42 @@
   // The canvas sits at z-index -1, under body's in-flow content but over the root's background,
   // and html.has-aurora makes body's own background transparent so it shows. That class stays until
   // the fade-out ends: removed earlier, body's background would hide the canvas at once.
-  const bo = globalThis.aotyBorealis;  // web/src/borealis.js, loaded first
+  //
+  // Which background is one of several since AOTY-77: backgrounds.js picks (a preview's ?bg=, else
+  // at random until AOTY-96 stores the page's own) and loads only that engine's file. Loading
+  // starts with the first visit; the mount waits for the delay and for the file, whichever is
+  // later. auroraGen is bumped by every stop, so a file that arrives after the visit has moved on
+  // (the chart, the intro, a group) never mounts over it.
+  const bgs = globalThis.aotyBg;  // web/src/backgrounds.js, loaded first
   const AURORA_DELAY_MS = 1500, AURORA_FADE_MS = 600;
+  // Read once at boot: routing rewrites the address, and not always keeping its query.
+  const BG_OVERRIDE = (() => { try { return new URLSearchParams(location.search).get("bg") || ""; } catch (_) { return ""; } })();
   let aurora = null, auroraCanvas = null, auroraTimer = 0, auroraFeed = 0;
-  let auroraPixels = [], auroraSent = null;
+  let auroraPixels = [], auroraSent = null, auroraPending = false, auroraGen = 0;
 
   function startAurora() {
-    if (!bo || auroraCanvas || auroraTimer) return;
-    auroraTimer = setTimeout(mountAurora, AURORA_DELAY_MS);
+    if (!bgs || auroraCanvas || auroraPending) return;
+    const id = bgs.pick({ids: bgs.ids(), override: BG_OVERRIDE});
+    if (!id) return;
+    auroraPending = true;
+    const gen = ++auroraGen;
+    let engine = null, due = false;
+    const go = () => {
+      if (gen !== auroraGen) return;
+      auroraPending = false;
+      mountAurora(engine);
+    };
+    bgs.load(id).then(e => {
+      if (gen !== auroraGen) return;
+      if (!e) { auroraPending = false; return; }  // the file failed: no background, as without WebGL
+      engine = e;
+      if (due) go();
+    });
+    auroraTimer = setTimeout(() => {
+      auroraTimer = 0;
+      due = true;
+      if (engine) go();
+    }, AURORA_DELAY_MS);
   }
 
   function pageColors() {
@@ -727,15 +755,14 @@
     return {bg: css.getPropertyValue("--bg").trim(), accent: css.getPropertyValue("--accent").trim()};
   }
 
-  function mountAurora() {
-    auroraTimer = 0;
+  function mountAurora(engine) {
     if (auroraCanvas || !firstView || !firstView.box.isConnected) return;
     const canvas = document.createElement("canvas");
     canvas.className = "aurora";
     canvas.setAttribute("aria-hidden", "true");
     document.body.prepend(canvas);
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const a = bo.mount(canvas, {...pageColors(), reducedMotion, onLost: () => stopAurora(true)});
+    const a = engine.mount(canvas, {...pageColors(), reducedMotion, onLost: () => stopAurora(true)});
     if (!a) { canvas.remove(); return; }  // no WebGL: the page stays as it always was
     aurora = a;
     auroraCanvas = canvas;
@@ -745,7 +772,7 @@
   }
 
   // A wall cover's pixels: the palette is recomputed once per burst of arrivals, and changes only
-  // when it really does (borealis.paletteChanged), so a warm cache's six covers make one surge.
+  // when it really does (backgrounds.paletteChanged), so a warm cache's six covers make one surge.
   function auroraCover(px) {
     if (!firstView || !firstView.box.isConnected) return;
     auroraPixels.push(px);
@@ -759,8 +786,8 @@
     const all = new Uint8ClampedArray(auroraPixels.reduce((n, p) => n + p.length, 0));
     let at = 0;
     for (const p of auroraPixels) { all.set(p, at); at += p.length; }
-    const {colors, source} = bo.extractPalette(all, pageColors().accent);
-    if (source !== "art" || !bo.paletteChanged(auroraSent, colors)) return;
+    const {colors, source} = bgs.extractPalette(all, pageColors().accent);
+    if (source !== "art" || !bgs.paletteChanged(auroraSent, colors)) return;
     auroraSent = colors;
     aurora.setPalette(colors);
   }
@@ -772,6 +799,10 @@
 
   // Fade out, then take it down (and its WebGL context). lost: the context is gone already.
   function stopAurora(lost = false) {
+    // First, before any early return: while a file is still loading nothing is mounted yet, and
+    // its late arrival must not mount (AOTY-77).
+    auroraGen++;
+    auroraPending = false;
     clearTimeout(auroraTimer);
     clearTimeout(auroraFeed);
     auroraTimer = auroraFeed = 0;

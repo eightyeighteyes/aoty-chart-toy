@@ -1,5 +1,6 @@
 """The static shell build (scripts/build_shell.py): hashed assets, absolute URLs, CSP checks."""
 
+import json
 import re
 from html.parser import HTMLParser
 
@@ -14,7 +15,7 @@ BASE = "/toys/aoty-test/"
 def src(tmp_path):
   d = tmp_path / "src"
   d.mkdir()
-  for name in bs.ASSETS:
+  for name in [*bs.ASSETS, *bs.BACKGROUNDS.values()]:
     (d / name).write_bytes((bs.SRC / name).read_bytes())
   (d / "index.html").write_text((bs.SRC / "index.html").read_text())
   return d
@@ -45,7 +46,7 @@ def test_a_rebuild_leaves_no_stale_assets(src, tmp_path):
   bs.build(BASE, src=src, out=out)
   (src / "app.css").write_text("body{}")
   bs.build(BASE, src=src, out=out)
-  assert len(list((out / "assets").iterdir())) == len(bs.ASSETS)
+  assert len(list((out / "assets").iterdir())) == len(bs.ASSETS) + len(bs.BACKGROUNDS)
 
 
 @pytest.mark.parametrize("base", ["toys/aoty/", "/toys/aoty", ""])
@@ -114,9 +115,26 @@ def test_placeholders_name_year_title_and_icon_are_filled(tmp_path):
   # intro.js and firstvisit.js load before app.js, which reads their globals.
   assert html.index(published["intro.js"]) < html.index(published["app.js"])
   assert html.index(published["firstvisit.js"]) < html.index(published["app.js"])
-  assert html.index(published["borealis.js"]) < html.index(published["app.js"])  # AOTY-67
+  assert html.index(published["backgrounds.js"]) < html.index(published["app.js"])  # AOTY-77
   assert html.index(published["lastfm.js"]) < html.index(published["app.js"])  # AOTY-43
   assert f'<meta name="aoty-year" content="{bs.TARGET_YEAR}">' in html
+
+
+def test_backgrounds_are_published_but_loaded_only_from_the_map(tmp_path):
+  # AOTY-77: each background is a hashed asset that no <script src> names; the page loads the one
+  # it picks from the #aoty-backgrounds JSON block, whose keys are build_shell.BACKGROUNDS'.
+  published = bs.build(BASE, out=tmp_path / "web")
+  html = (tmp_path / "web" / "index.html").read_text()
+  block = re.search(r'<script type="application/json" id="aoty-backgrounds">(.*?)</script>', html, re.DOTALL)
+  assert block, "the backgrounds map is missing"
+  urls = json.loads(block.group(1))
+  assert set(urls) == set(bs.BACKGROUNDS)
+  for bg_id, name in bs.BACKGROUNDS.items():
+    assert urls[bg_id] == f"{BASE}{published[name]}"
+    assert (tmp_path / "web" / published[name]).is_file()
+    assert f'<script src="{BASE}{published[name]}"' not in html  # never loaded up front
+    # The file registers the id the map gives it, or load() would resolve null.
+    assert f'register("{bg_id}"' in (bs.SRC / name).read_text()
 
 
 def test_analytics_is_off_unless_a_measurement_id_is_given(tmp_path):

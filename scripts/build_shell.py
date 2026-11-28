@@ -12,11 +12,13 @@ index.html has either (a JSON data block, type="application/json", is fine).
 
 index.html placeholders: {{BASE}}, {{NAME}} (the placeholder product name), {{TITLE}}, {{YEAR}},
 {{GA}} (the GA4 measurement id, --ga-id, empty unless prod: AOTY-38), {{SHORT}} (the share links'
-short host, --short-host, empty unless prod: AOTY-84), and one per asset in ASSETS. They're filled here, not by JavaScript, so nothing flashes.
+short host, --short-host, empty unless prod: AOTY-84), {{BGMAP}} (the backgrounds' URLs as JSON,
+AOTY-77), and one per asset in ASSETS. They're filled here, not by JavaScript, so nothing flashes.
 """
 
 import argparse
 import hashlib
+import json
 import re
 import shutil
 from pathlib import Path
@@ -40,10 +42,14 @@ ASSETS = {
   "group.js": "GROUP",
   "groupedit.js": "GROUPEDIT",
   "theme.js": "THEME",
-  "borealis.js": "BOREALIS",
+  "backgrounds.js": "BACKGROUNDS",  # what every first-visit background shares (AOTY-77)
   "favicon.svg": "ICON",
   "apple-touch-icon.png": "TOUCH",
 }
+# The first visit's backgrounds (AOTY-77): id -> file, the one list of them. Each is hashed and
+# published like ASSETS but loaded only when picked: index.html's {{BGMAP}} block carries their URLs
+# (backgrounds.js load()), and the page's ids are that map's keys. Each file registers its own id.
+BACKGROUNDS = {"borealis": "borealis.js"}
 HASH_LEN = 12
 # The product name is undecided (AOTY-23, user 2026-11-21): a plain description, not a brand.
 # Avoid "AOTY" alone (albumoftheyear.org) and "Wrapped".
@@ -116,6 +122,15 @@ def build(base, src=SRC, out=OUT, ga_id="", short_host=""):
     (out / "assets" / hashed).write_bytes(data)
     published[name] = f"assets/{hashed}"
     values[placeholder] = f"{base}{published[name]}"
+  backgrounds = {}
+  for bg_id, name in BACKGROUNDS.items():
+    data = (src / name).read_bytes()
+    hashed = hashed_name(name, data)
+    (out / "assets" / hashed).write_bytes(data)
+    published[name] = f"assets/{hashed}"
+    backgrounds[bg_id] = f"{base}{published[name]}"
+  # Inside a <script type="application/json">: "</" could close the element, so it's escaped.
+  values["BGMAP"] = json.dumps(backgrounds, sort_keys=True).replace("</", "<\\/")
   html = (src / "index.html").read_text(encoding="utf-8")
   for key, value in values.items():
     html = html.replace(f"{{{{{key}}}}}", value)

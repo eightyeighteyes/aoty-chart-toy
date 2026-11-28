@@ -4,19 +4,25 @@
 // Ported from kamp (github.com/eightyeighteyes/kamp, commit dfd8033) by its author, as plain JS
 // with no build step:
 //   kamp_ui/src/renderer/src/components/nowplaying/borealis/borealisSpec.ts   the shader
-//   kamp_ui/src/renderer/src/components/nowplaying/webgl/glsl.ts, glQuad.ts    header, noise, quad
+//   kamp_ui/src/renderer/src/components/nowplaying/webgl/glsl.ts               header, noise
 //   kamp_ui/src/renderer/src/components/nowplaying/webgl/shaderEngine.ts      the engine (trimmed)
-//   kamp_ui/src/renderer/src/components/nowplaying/palette.ts                 extractPalette
-//   kamp_ui/src/shared/{borealisTiming,paletteCrossfade,paletteUniforms,rareSchedule}.ts
+//   kamp_ui/src/shared/{borealisTiming,rareSchedule}.ts
+// The palette code and the program setup it shares with the other backgrounds are in
+// web/src/backgrounds.js (AOTY-77).
 // What came across (user decision 2026-11-25): the flow, the palette crossfade, and the surge band,
 // which here rolls across when a new wall cover shifts the palette. Not kamp's cursor lean, rare
 // edge flicker, title mask or art-shown layout: there's no art pane, so the curtains always sit
 // low and tall, as kamp draws them with the art hidden.
 //
-// The pure parts (timing, palette) are tested by node (web/test/borealis.test.mjs); mount() is the
+// The pure parts (timing) are tested by node (web/test/borealis.test.mjs); mount() is the
 // browser half. Nothing here may jump or strobe: every value moves on a bounded slope, as in kamp.
 (root => {
   "use strict";
+
+  // web/src/backgrounds.js: loaded first in a page; required in node (its tests).
+  const shared = root.aotyBg || (typeof require === "function" ? require("./backgrounds.js") : null);
+  if (!shared) return;
+  const {PALETTE_SIZE, PaletteCrossfade, accentPalette, hexToRgb, packPalette, createQuad, CONTEXT_ATTRS} = shared;
 
   const TAU = Math.PI * 2;
   const clampDt = (dt, max) => Math.min(Math.max(0, dt), max);
@@ -78,122 +84,6 @@
       b.from = b.value;
       b.envAge = 0;
     }
-  }
-
-  // ---- palette (palette.ts) -------------------------------------------------------------------
-  const PALETTE_SIZE = 5, SAT_FLOOR = 0.45, LIGHT_MIN = 0.45, LIGHT_MAX = 0.68, HUE_BINS = 16;
-  const MONO_SAT_THRESHOLD = 0.12;
-
-  function rgbToHsl({r, g, b}) {
-    const rn = r / 255, gn = g / 255, bn = b / 255;
-    const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn), l = (max + min) / 2, d = max - min;
-    if (d === 0) return {h: 0, s: 0, l};
-    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    const h = max === rn ? ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60
-        : max === gn ? ((bn - rn) / d + 2) * 60 : ((rn - gn) / d + 4) * 60;
-    return {h, s, l};
-  }
-  function hslToRgb({h, s, l}) {
-    const c = (1 - Math.abs(2 * l - 1)) * s, hp = (((h % 360) + 360) % 360) / 60;
-    const x = c * (1 - Math.abs((hp % 2) - 1));
-    const [r, g, b] = hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x]
-        : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x];
-    const m = l - c / 2;
-    return {r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255)};
-  }
-  function hexToRgb(hex) {
-    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
-    if (!m) return null;
-    const n = parseInt(m[1], 16);
-    return {r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255};
-  }
-  // Keep the cover's hue; fix its tone into a pleasant band.
-  function clampSwatch(rgb) {
-    const hsl = rgbToHsl(rgb);
-    return hslToRgb({h: hsl.h, s: Math.max(SAT_FLOOR, hsl.s), l: Math.min(LIGHT_MAX, Math.max(LIGHT_MIN, hsl.l))});
-  }
-  // Pad to a fixed length by hue-rotating the swatches, so the shader never branches on length.
-  function padPalette(colors) {
-    if (!colors.length) return [];
-    const out = colors.slice(0, PALETTE_SIZE), rotations = [30, -30, 60, -60, 90];
-    for (let i = 0; out.length < PALETTE_SIZE; i++) {
-      const base = rgbToHsl(colors[i % colors.length]);
-      out.push(hslToRgb({...base, h: base.h + rotations[i % rotations.length]}));
-    }
-    return out;
-  }
-  // The page accent's palette: for a grey cover, no covers yet, or a failed read.
-  function accentPalette(accentHex) {
-    const hsl = rgbToHsl(hexToRgb(accentHex) || {r: 255, g: 107, b: 74});
-    const colors = [0, 28, -28, 56, -56].map(dh => clampSwatch(hslToRgb({...hsl, h: hsl.h + dh})));
-    return {colors, source: "accent"};
-  }
-  // A small, clamped palette from RGBA pixels: binned by hue, weighted by saturation x mid-lightness,
-  // so a mostly black cover surfaces its one neon accent rather than the black.
-  function extractPalette(data, accentHex) {
-    const w8 = new Float64Array(HUE_BINS), rs = new Float64Array(HUE_BINS);
-    const gs = new Float64Array(HUE_BINS), bs = new Float64Array(HUE_BINS);
-    for (let i = 0; i + 3 < data.length; i += 4) {
-      if (data[i + 3] < 128) continue;
-      const rgb = {r: data[i], g: data[i + 1], b: data[i + 2]};
-      const {h, s, l} = rgbToHsl(rgb);
-      const w = s * (1 - Math.abs(l - 0.5) * 2);
-      if (w <= 0) continue;
-      const bin = Math.min(HUE_BINS - 1, Math.floor((h / 360) * HUE_BINS));
-      w8[bin] += w; rs[bin] += rgb.r * w; gs[bin] += rgb.g * w; bs[bin] += rgb.b * w;
-    }
-    const ranked = [...Array(HUE_BINS).keys()].filter(i => w8[i] > 0).sort((a, b) => w8[b] - w8[a]);
-    if (!ranked.length) return accentPalette(accentHex);
-    const avgs = ranked.map(i => ({r: Math.round(rs[i] / w8[i]), g: Math.round(gs[i] / w8[i]),
-                                   b: Math.round(bs[i] / w8[i])}));
-    if (rgbToHsl(avgs[0]).s < MONO_SAT_THRESHOLD) return accentPalette(accentHex);  // effectively grey
-    return {colors: padPalette(avgs.slice(0, PALETTE_SIZE).map(clampSwatch)), source: "art"};
-  }
-
-  // Whether two palettes differ enough to be worth a crossfade and a surge: near-identical ones
-  // (another cover of the same colours) change nothing on screen.
-  const CHANGE_MIN = 36;  // summed RGB distance in one slot, 0..765
-  function paletteChanged(a, b) {
-    if (!a || !b || a.length !== b.length) return true;
-    return a.some((c, i) => Math.abs(c.r - b[i].r) + Math.abs(c.g - b[i].g) + Math.abs(c.b - b[i].b) > CHANGE_MIN);
-  }
-
-  // ---- the crossfade (paletteCrossfade.ts) ---------------------------------------------------
-  // kamp's one rule (KAMP-779): with no loop running nothing advances the fade, so a change must
-  // land directly, or a reduced-motion still keeps the old colours for good.
-  class PaletteCrossfade {
-    constructor(initial, durationMs = 1000) {
-      this.durationMs = durationMs;
-      this.from = this.to = initial;
-      this.t = 1;
-    }
-    get settled() { return this.t >= 1; }
-    set(next, animate) {
-      this.from = this.current();
-      this.to = next;
-      this.t = animate && this.durationMs > 0 ? 0 : 1;
-    }
-    tick(dtMs) {
-      if (this.t < 1) this.t = Math.min(1, this.t + dtMs / this.durationMs);
-    }
-    current() {
-      if (this.t >= 1) return this.to;
-      const k = smoothstep(this.t), lerp = (a, b) => a + (b - a) * k;
-      return this.to.map((c, i) => {
-        const f = this.from[i] || c;
-        return {r: lerp(f.r, c.r), g: lerp(f.g, c.g), b: lerp(f.b, c.b)};
-      });
-    }
-  }
-
-  // The vec3[5] uniform (paletteUniforms.ts): short palettes repeat, an empty one is a neutral grey.
-  function packPalette(colors, out = new Float32Array(PALETTE_SIZE * 3)) {
-    const src = colors && colors.length ? colors : [{r: 64, g: 64, b: 72}];
-    for (let i = 0; i < PALETTE_SIZE; i++) {
-      const c = src[i % src.length];
-      out[i * 3] = c.r / 255; out[i * 3 + 1] = c.g / 255; out[i * 3 + 2] = c.b / 255;
-    }
-    return out;
   }
 
   // ---- the shader (glsl.ts + borealisSpec.ts) ------------------------------------------------
@@ -305,61 +195,13 @@ void main() {
   // Every uniform FRAG declares, all set by draw() (web/test/borealis.test.mjs checks both).
   const UNIFORMS = ["uRes", "uTime", "uPalette", "uBg", "uFlow", "uSurgeA", "uSurgeB", "uDim"];
 
-  const VERT = "attribute vec2 aPos;\nvoid main() { gl_Position = vec4(aPos, 0.0, 1.0); }\n";
-
   // ---- the engine (glQuad.ts, shaderEngine.ts, trimmed) --------------------------------------
-  const CONTEXT_ATTRS = {alpha: false, antialias: false, depth: false, stencil: false,
-                         preserveDrawingBuffer: false, powerPreference: "low-power",
-                         failIfMajorPerformanceCaveat: true};
   const RES_SCALE = 0.25;  // soft curtains survive the quarter-resolution upscale (kamp's budget)
   const MAX_DPR = 1.5;
   const FRAME_MS = 1000 / 30;
   const STILL_PHASE = [1.9, 4.4];  // the reduced-motion still's curtains
   const CROSSFADE_MS = 1000;
   const DIM = 0.85;  // a little under kamp's strength: text sits over these curtains (AOTY-67)
-
-  // One program and one fullscreen triangle, or null on any failure (the caller falls back).
-  function createQuad(gl) {
-    const compile = (type, src) => {
-      const sh = gl.createShader(type);
-      if (!sh) return null;
-      gl.shaderSource(sh, src);
-      gl.compileShader(sh);
-      if (gl.getShaderParameter(sh, gl.COMPILE_STATUS)) return sh;
-      gl.deleteShader(sh);
-      return null;
-    };
-    const vs = compile(gl.VERTEX_SHADER, VERT), fs = compile(gl.FRAGMENT_SHADER, FRAG);
-    const program = vs && fs ? gl.createProgram() : null;
-    if (!program) { gl.deleteShader(vs); gl.deleteShader(fs); return null; }
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.bindAttribLocation(program, 0, "aPos");
-    gl.linkProgram(program);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { gl.deleteProgram(program); return null; }
-    const buf = gl.createBuffer();
-    if (!buf) { gl.deleteProgram(program); return null; }
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const locs = new Map();
-    return {
-      u(name) {
-        if (!locs.has(name)) locs.set(name, gl.getUniformLocation(program, name));
-        return locs.get(name);
-      },
-      use() { gl.useProgram(program); },  // before setting uniforms: they go to the bound program
-      draw() {
-        gl.useProgram(program);
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-      },
-      dispose() { gl.deleteBuffer(buf); gl.deleteProgram(program); },
-    };
-  }
 
   // Run Borealis on canvas. opts: {reducedMotion, bg, accent (hex), onLost()}. Returns
   // {setPalette(colors), setColors({bg, accent}), destroy()}, or null when WebGL isn't there (no
@@ -369,7 +211,7 @@ void main() {
     let gl = null;
     try { gl = canvas.getContext("webgl", CONTEXT_ATTRS); } catch (_) { gl = null; }
     if (!gl) return null;
-    const quad = createQuad(gl);
+    const quad = createQuad(gl, FRAG);
     if (!quad) {
       const lose = gl.getExtension("WEBGL_lose_context");
       if (lose) lose.loseContext();
@@ -491,8 +333,8 @@ void main() {
     return api;
   }
 
-  const api = {FLOW_PERIODS_S, flowPhase, SurgeEnvelope, PaletteCrossfade, extractPalette, accentPalette,
-               packPalette, paletteChanged, hexToRgb, PALETTE_SIZE, FRAG, UNIFORMS, mount, STILL_PHASE};
+  const api = {FLOW_PERIODS_S, flowPhase, SurgeEnvelope, FRAG, UNIFORMS, mount, STILL_PHASE};
   root.aotyBorealis = api;
+  shared.register("borealis", api);  // loaded on demand: the page's load("borealis") waits for this
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
