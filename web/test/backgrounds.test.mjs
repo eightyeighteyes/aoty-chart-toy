@@ -68,6 +68,87 @@ test("only a real change of palette is worth a crossfade and a surge", () => {
   assert.equal(bg.paletteChanged(null, a), true);
 });
 
+// ---- the registry (AOTY-77) ----------------------------------------------------------------
+
+test("the map keeps same-origin paths and nothing else, and never throws", () => {
+  assert.deepEqual(bg.parseMap('{"borealis": "/toys/aoty/assets/borealis.abc.js"}'),
+                   {borealis: "/toys/aoty/assets/borealis.abc.js"});
+  for (const bad of ["", "not json", "[]", "null", '"x"']) assert.deepEqual(bg.parseMap(bad), {});
+  assert.deepEqual(bg.parseMap('{"a": "https://evil.example/x.js", "b": "//evil.example/x.js", "c": 3, "d": "/ok.js"}'),
+                   {d: "/ok.js"});
+  assert.deepEqual(bg.readMap(null), {});
+  assert.deepEqual(bg.readMap({getElementById: () => null}), {});
+  assert.deepEqual(bg.ids({wintermute: "/w.js", borealis: "/b.js"}), ["borealis", "wintermute"]);
+});
+
+test("the pick: a preview's ?bg= when it names one, then the page's own, else at random", () => {
+  const ids = ["bokeh", "borealis", "sparks"];
+  assert.equal(bg.pick({ids, override: "sparks", saved: "bokeh"}), "sparks");
+  assert.equal(bg.pick({ids, override: "nonsense", saved: "bokeh"}), "bokeh");
+  assert.equal(bg.pick({ids, override: "", saved: "gone", random: () => 0}), "bokeh");
+  assert.equal(bg.pick({ids, random: () => 0.999999}), "sparks");
+  assert.equal(bg.pick({ids, random: () => 1}), "sparks");  // never past the end
+  assert.equal(bg.pick({ids: [], override: "borealis"}), null);
+  assert.equal(bg.pick({}), null);
+});
+
+// A stand-in document: one #aoty-backgrounds block, and scripts that load (registering as they
+// would) or fail when appended.
+function fakeDoc(map, onScript) {
+  const added = [];
+  return {
+    added,
+    getElementById: id => (id === "aoty-backgrounds" ? {textContent: JSON.stringify(map)} : null),
+    createElement: () => {
+      const handlers = {};
+      return {addEventListener: (type, fn) => { handlers[type] = fn; }, handlers};
+    },
+    head: {appendChild(s) { added.push(s); queueMicrotask(() => onScript(s)); }},
+  };
+}
+
+test("load adds an engine's script once and resolves with what it registered", async () => {
+  const engine = {mount: () => null};
+  const doc = fakeDoc({"test-load": "/assets/t.js"}, s => {
+    bg.register("test-load", engine);
+    s.handlers.load();
+  });
+  const [a, b] = await Promise.all([bg.load("test-load", doc), bg.load("test-load", doc)]);
+  assert.equal(a, engine);
+  assert.equal(b, engine);
+  assert.equal(doc.added.length, 1);
+  assert.equal(doc.added[0].src, "/assets/t.js");
+  assert.equal(await bg.load("test-load", doc), engine);  // registered: no second script
+  assert.equal(doc.added.length, 1);
+});
+
+test("load gives null for an unknown id, a failed script, or one that registers nothing", async () => {
+  const failing = fakeDoc({"test-fail": "/assets/f.js"}, s => s.handlers.error());
+  assert.equal(await bg.load("test-unknown", failing), null);
+  assert.equal(failing.added.length, 0);
+  assert.equal(await bg.load("test-fail", failing), null);
+  const silent = fakeDoc({"test-silent": "/assets/s.js"}, s => s.handlers.load());
+  assert.equal(await bg.load("test-silent", silent), null);
+  assert.equal(await bg.load("anything", null), null);
+});
+
+test("register keeps only engines with a mount", () => {
+  bg.register("test-bad", {});
+  bg.register("test-bad2", null);
+  assert.equal(bg.registered("test-bad"), null);
+  assert.equal(bg.registered("test-bad2"), null);
+});
+
+test("every engine file registers itself with the contract's mount", async () => {
+  // build_shell.BACKGROUNDS is the list; tests/test_build_shell.py checks each file names its id.
+  const {createRequire: cr} = await import("node:module");
+  cr(import.meta.url)("../src/borealis.js");
+  const engine = bg.registered("borealis");
+  assert.ok(engine, "borealis.js didn't register");
+  assert.equal(typeof engine.mount, "function");
+  assert.equal(engine.mount({getContext: () => null, addEventListener() {}}), null);  // no WebGL: null
+});
+
 test("the palette uniform is always five full colours", () => {
   for (const colors of [[], [{r: 255, g: 0, b: 0}], bg.accentPalette("#ff6b4a").colors]) {
     const packed = bg.packPalette(colors);

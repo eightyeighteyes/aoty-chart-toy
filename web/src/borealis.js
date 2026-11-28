@@ -335,5 +335,6 @@ void main() {
 
   const api = {FLOW_PERIODS_S, flowPhase, SurgeEnvelope, FRAG, UNIFORMS, mount, STILL_PHASE};
   root.aotyBorealis = api;
+  shared.register("borealis", api);  // loaded on demand: the page's load("borealis") waits for this
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

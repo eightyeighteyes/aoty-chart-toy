@@ -182,8 +182,76 @@
     };
   }
 
+  // ---- the registry (AOTY-77, kamp's registry.ts) --------------------------------------------
+  //
+  // The engine contract. An engine file calls register(id, engine) when it loads, and
+  //   engine.mount(canvas, {bg, accent, reducedMotion, onLost})
+  // returns {setPalette(colors), setColors({bg, accent}), destroy()}, or null when it can't run
+  // here (no WebGL, a blocklisted GPU): the page then stays as it was. bg and accent are the page's
+  // --bg and --accent (hex); colors is extractPalette's. While mounted, the engine owns its loop:
+  // it runs only while the tab is visible, draws a still frame under reduced motion, paints every
+  // pixel itself (its canvas is opaque, starting with --bg), and calls onLost if its context goes.
+  // destroy() frees everything, WebGL contexts included (browsers cap them at about 16).
+  //
+  // The ids come from build_shell.BACKGROUNDS, through the page's #aoty-backgrounds JSON block
+  // ({id: hashed URL}), so a new background is one entry there and its file.
+  const engines = new Map(), loads = new Map();
+
+  function register(id, engine) {
+    if (typeof id === "string" && engine && typeof engine.mount === "function") engines.set(id, engine);
+  }
+  const registered = id => engines.get(id) || null;
+
+  // The map's text, parsed: {id: same-origin path}. Anything else (missing, garbled, a full URL)
+  // is left out, never thrown.
+  function parseMap(text) {
+    let m = null;
+    try { m = JSON.parse(text); } catch (_) { return {}; }
+    if (!m || typeof m !== "object" || Array.isArray(m)) return {};
+    const out = {};
+    for (const [id, url] of Object.entries(m)) {
+      if (typeof url === "string" && url.startsWith("/") && !url.startsWith("//")) out[id] = url;
+    }
+    return out;
+  }
+  function readMap(doc = root.document) {
+    const el = doc && doc.getElementById && doc.getElementById("aoty-backgrounds");
+    return el ? parseMap(el.textContent) : {};
+  }
+  const ids = (map = readMap()) => Object.keys(map).sort();
+
+  // Which background a first visit shows: a preview's ?bg= when it names one, then the page's own
+  // (AOTY-96 stores it), else one at random. Null with none to pick from.
+  function pick({ids: from, override, saved, random = Math.random}) {
+    if (!from || !from.length) return null;
+    if (from.includes(override)) return override;
+    if (from.includes(saved)) return saved;
+    return from[Math.min(from.length - 1, Math.floor(random() * from.length))];
+  }
+
+  // The engine for id: at once if its file has run, else after adding its <script src> (once; the
+  // CSP allows same-origin scripts). Null for an id the map doesn't have, or a script that fails
+  // to load or registers nothing; a failure isn't retried in this page session.
+  function load(id, doc = root.document) {
+    if (engines.has(id)) return Promise.resolve(engines.get(id));
+    if (loads.has(id)) return loads.get(id);
+    const url = readMap(doc)[id];
+    if (!url || !doc || !doc.createElement) return Promise.resolve(null);
+    const p = new Promise(resolve => {
+      const s = doc.createElement("script");
+      s.src = url;
+      s.async = true;
+      s.addEventListener("load", () => resolve(registered(id)));
+      s.addEventListener("error", () => resolve(null));
+      doc.head.appendChild(s);
+    });
+    loads.set(id, p);
+    return p;
+  }
+
   const api = {PALETTE_SIZE, extractPalette, accentPalette, paletteChanged, hexToRgb, PaletteCrossfade,
-               packPalette, CONTEXT_ATTRS, VERT, createQuad};
+               packPalette, CONTEXT_ATTRS, VERT, createQuad, register, registered, parseMap, readMap, ids, pick,
+               load};
   root.aotyBg = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
